@@ -217,13 +217,13 @@ async fn run_app(
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     if let Some(current_stats) = filtered_stats.get(*selected_tab) {
-                        let total_rows = current_stats.daily_stats.len();
+                        let total_rows = current_stats.daily_stats.len() + 2; // +2 for separator and totals rows
                         if let Some(table_state) = table_states.get_mut(*selected_tab)
                             && let Some(selected) = table_state.selected()
-                            && selected < total_rows.saturating_add(1)
+                            && selected < total_rows.saturating_sub(1)
                         {
-                            table_state.select(Some(if selected == total_rows.saturating_sub(1) {
-                                selected + 2
+                            table_state.select(Some(if selected == current_stats.daily_stats.len().saturating_sub(1) {
+                                selected + 2 // Skip separator row
                             } else {
                                 selected + 1
                             }));
@@ -239,7 +239,7 @@ async fn run_app(
                     {
                         table_state.select(Some(selected.saturating_sub(
                             if selected == current_stats.daily_stats.len() + 1 {
-                                2
+                                2 // Skip separator row
                             } else {
                                 1
                             },

@@ -10,11 +10,11 @@ pub mod roo_code;
 pub use claude_code::ClaudeCodeAnalyzer;
 pub use cline::ClineAnalyzer;
 pub use codex_cli::CodexCliAnalyzer;
-pub use copilot::CopilotAnalyzer;
+// pub use copilot::CopilotAnalyzer; // Temporarily disabled
 pub use gemini_cli::GeminiCliAnalyzer;
 pub use kilo_code::KiloCodeAnalyzer;
 pub use qwen_code::QwenCodeAnalyzer;
-pub use roo_code::RooCodeAnalyzer;
+// pub use roo_code::RooCodeAnalyzer; // Temporarily disabled
 
 #[cfg(test)]
 pub mod tests;

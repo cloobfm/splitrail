@@ -61,7 +61,9 @@ struct KiloCodeApiRequest {
 
 // Helper function to extract project ID from Kilo Code file path and hash it
 fn extract_and_hash_project_id_kilo_code(file_path: &Path) -> String {
-    // Kilo Code path format: ~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks/{UUID}/
+    // Kilo Code path formats:
+    // - VS Code extension: ~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks/{UUID}/
+    // - CLI: ~/.kilocode/cli/global/tasks/{UUID}/
     // We'll use the parent directory of tasks as the project identifier (global storage path)
 
     let path_components: Vec<_> = file_path.components().collect();
@@ -244,6 +246,9 @@ impl Analyzer for KiloCodeAnalyzer {
 
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
+
+            // Kilo Code CLI path
+            patterns.push(format!("{home_str}/.kilocode/cli/global/tasks/*/ui_messages.json"));
 
             // Linux paths for all VSCode GUI forks
             for fork in &vscode_gui_forks {
