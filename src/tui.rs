@@ -207,37 +207,30 @@ async fn run_app(
             let key = match event::read()? {
                 Event::Key(key) if key.is_press() => key,
                 Event::Mouse(mouse_event) => {
+                    // For now, globally handle mouse scrolling for CLI panels in summary view
+                    // In a full implementation, we would check mouse coordinates
+                    // but that would require passing frame info to this function
                     match mouse_event.kind {
                         crossterm::event::MouseEventKind::ScrollUp => {
-                            // In Summary view, scroll up through CLIs instead of days
+                            // In Summary view, scroll up through CLIs in Live Activity
                             if *selected_tab == 0 && *cli_scroll_offset > 0 {
                                 *cli_scroll_offset -= 1;
                                 needs_redraw = true;
                             }
-                            continue;
+                            continue; // Consume the event to prevent other components from processing it
                         }
                         crossterm::event::MouseEventKind::ScrollDown => {
-                            // In Summary view, scroll down through CLIs instead of days
+                            // In Summary view, scroll down through CLIs in Live Activity
                             if *selected_tab == 0 {
-                                // Calculate max scroll based on dynamic message display logic
-                                let total_clis = filtered_stats.len();
-                                let messages_per_cli = if total_clis <= 3 {
-                                    5 // Show 5 messages for few CLIs
-                                } else if total_clis <= 6 {
-                                    3 // Show 3 messages for medium number of CLIs
-                                } else {
-                                    2 // Show 2 messages for many CLIs
-                                };
-                                // Estimate how many CLIs we can show at once to determine max scroll position
-                                let lines_per_cli = 1 + messages_per_cli; // 1 for header + messages
-                                let visible_cli_count = 10 / lines_per_cli.max(1); // Use area height of ~10 as estimate
+                                // Use more accurate calculation for how many CLIs fit in visual panel area
+                                let visible_cli_count = 6; // Use a reasonable default
                                 let max_scroll = filtered_stats.len().saturating_sub(visible_cli_count.max(1)); // At least 1
                                 if *cli_scroll_offset < max_scroll {
                                     *cli_scroll_offset += 1;
                                     needs_redraw = true;
                                 }
                             }
-                            continue;
+                            continue; // Consume the event to prevent other components from processing it
                         }
                         _ => continue,
                     }
