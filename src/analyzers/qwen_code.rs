@@ -205,7 +205,7 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
             QwenCodeMessage::User {
                 id: _,
                 timestamp,
-                content: _,
+                content,
             } => {
                 entries.push(ConversationMessage {
                     date: timestamp,
@@ -221,12 +221,13 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                     model: None,
                     stats: Stats::default(),
                     role: MessageRole::User,
-            content: None,                });
+                    content: Some(content),
+                });
             }
             QwenCodeMessage::Qwen {
                 id: _,
                 timestamp,
-                content: _,
+                content,
                 model,
                 thoughts: _,
                 tokens: Some(tokens),
@@ -257,9 +258,90 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                     conversation_hash: hash_text(&file_path.to_string_lossy()),
                     stats,
                     role: MessageRole::Assistant,
-            content: None,                });
+                    content: Some(content),
+                });
             }
-            _ => {}
+            QwenCodeMessage::Qwen {
+                id: _,
+                timestamp,
+                content,
+                model,
+                thoughts: _,
+                tokens: None,
+                tool_calls,
+            } => {
+                let mut stats = extract_tool_stats(&tool_calls);
+
+                // No token information available, use default values
+                stats.input_tokens = 0;
+                stats.output_tokens = 0;
+                stats.cache_creation_tokens = 0;
+                stats.cache_read_tokens = 0;
+                stats.cached_tokens = 0;
+                stats.cost = 0.0;
+                stats.tool_calls = tool_calls.len() as u32;
+
+                entries.push(ConversationMessage {
+                    application: Application::QwenCode,
+                    model: Some(model),
+                    local_hash: None,
+                    global_hash: hash_text(&format!(
+                        "{}_{}",
+                        file_path_str,
+                        timestamp.to_rfc3339()
+                    )),
+                    date: timestamp,
+                    project_hash: project_hash.clone(),
+                    conversation_hash: hash_text(&file_path.to_string_lossy()),
+                    stats,
+                    role: MessageRole::Assistant,
+                    content: Some(content),
+                });
+            }
+            QwenCodeMessage::System {
+                id: _,
+                timestamp,
+                content,
+            } => {
+                entries.push(ConversationMessage {
+                    date: timestamp,
+                    application: Application::QwenCode,
+                    project_hash: project_hash.clone(),
+                    local_hash: None,
+                    global_hash: hash_text(&format!(
+                        "{}_{}",
+                        file_path_str,
+                        timestamp.to_rfc3339()
+                    )),
+                    conversation_hash: hash_text(&file_path.to_string_lossy()),
+                    model: None,
+                    stats: Stats::default(),
+                    role: MessageRole::Assistant, // System messages are from the assistant
+                    content: Some(content),
+                });
+            }
+            QwenCodeMessage::Error {
+                id: _,
+                timestamp,
+                content,
+            } => {
+                entries.push(ConversationMessage {
+                    date: timestamp,
+                    application: Application::QwenCode,
+                    project_hash: project_hash.clone(),
+                    local_hash: None,
+                    global_hash: hash_text(&format!(
+                        "{}_{}",
+                        file_path_str,
+                        timestamp.to_rfc3339()
+                    )),
+                    conversation_hash: hash_text(&file_path.to_string_lossy()),
+                    model: None,
+                    stats: Stats::default(),
+                    role: MessageRole::Assistant, // Error messages are from the assistant
+                    content: Some(content),
+                });
+            }
         }
     }
 
