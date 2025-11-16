@@ -16,7 +16,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs};
 use ratatui::{Frame, Terminal};
 use std::io::{Write, stdout};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -1763,15 +1763,15 @@ fn create_percentage_bar(value: u64, total: u64, width: usize, color: Color) -> 
 fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> String {
     let now = chrono::Utc::now();
 
-    // Create 60 buckets (1-minute intervals for last hour)
-    let mut buckets = vec![0u32; 60];
+    // Create 80 buckets (45-second intervals for last hour)
+    let mut buckets = vec![0u32; 80];
 
     for msg in &stats.messages {
         let age = now.signed_duration_since(msg.date);
         if age.num_seconds() < 3600 && age.num_seconds() >= 0 {
-            let bucket_idx = (age.num_seconds() / 60) as usize; // 60 sec = 1 min
-            if bucket_idx < 60 {
-                buckets[59 - bucket_idx] += 1;
+            let bucket_idx = (age.num_seconds() / 45) as usize; // 45 sec intervals
+            if bucket_idx < 80 {
+                buckets[79 - bucket_idx] += 1;
             }
         }
     }
@@ -1896,6 +1896,13 @@ fn draw_visual_cli_panels(
             Span::styled(_idle.clone(), Style::default().fg(Color::DarkGray)),
         ]));
 
+        // Add separator line below the sparkline graph (to end of content)
+        // CLI name (12) + space + sparkline (80) + spacing + status + timestamp = ~109
+        let line_width = 109;
+        lines.push(Line::from(
+            Span::styled("─".repeat(line_width), Style::default().fg(Color::DarkGray))
+        ));
+
         // Show messages, each limited to first line only
         let preview_width = area.width.saturating_sub(15) as usize;
 
@@ -1916,6 +1923,7 @@ fn draw_visual_cli_panels(
         // Add blank line for spacing between CLI entries
         lines.push(Line::from(""));
     }
+
 
     let paragraph = Paragraph::new(lines)
         .block(
