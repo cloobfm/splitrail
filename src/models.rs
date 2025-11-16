@@ -234,6 +234,15 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             cached_input_per_1m: 0.025,
         },
     },
+    "gpt-5.1-codex" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.25,
+            output_per_1m: 10.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.125,
+        },
+    },
 
     // Anthropic Models
     "claude-opus-4-1" => ModelInfo {
@@ -541,6 +550,15 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             ],
         },
     },
+
+    // Qwen Models
+    "coder-model" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.40,
+            output_per_1m: 1.20,
+        },
+        caching: CachingSupport::None,
+    },
 };
 
 static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
@@ -648,6 +666,8 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "gemini-1.5-pro-002" => "gemini-1.5-pro",
     "gemini-1.5-pro-exp-0827" => "gemini-1.5-pro",
     "gemini-1.5-pro-exp-0801" => "gemini-1.5-pro",
+
+    // Qwen aliases
 };
 
 /// Get model info by any valid name (canonical or alias)
