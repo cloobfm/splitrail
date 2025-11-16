@@ -1,3 +1,4 @@
+pub mod amazon_q;
 pub mod claude_code;
 pub mod cline;
 pub mod codex_cli;
@@ -7,6 +8,7 @@ pub mod kilo_code;
 pub mod qwen_code;
 pub mod roo_code;
 
+pub use amazon_q::AmazonQAnalyzer;
 pub use claude_code::ClaudeCodeAnalyzer;
 pub use cline::ClineAnalyzer;
 pub use codex_cli::CodexCliAnalyzer;
