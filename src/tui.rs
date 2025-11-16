@@ -6,7 +6,10 @@ use chrono::{Duration as ChronoDuration, Local};
 use crossterm::event::{self, Event, KeyCode, EnableMouseCapture, DisableMouseCapture};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    EnterAlternateScreen,
+    LeaveAlternateScreen,
+    disable_raw_mode,
+    enable_raw_mode,
 };
 use crossterm::{ExecutableCommand, execute};
 use ratatui::backend::CrosstermBackend;
@@ -20,6 +23,22 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UiLayout {
+    pub today_by_cli_rect: Option<Rect>,
+    pub live_activity_rect: Option<Rect>,
+}
+
+#[derive(Debug, Default)]
+pub struct TuiState {
+    pub selected_tab: usize,
+    pub scroll_offset: usize,
+    pub summary_day_offset: usize,
+    pub cli_scroll_offset: usize,
+    pub cli_table_scroll_offset: usize, // For horizontal scroll
+    pub layout: UiLayout,
+}
 
 #[derive(Debug, Clone)]
 pub enum UploadStatus {
@@ -59,21 +78,14 @@ pub fn run_tui(
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut selected_tab = 0;
-    let mut scroll_offset = 0;
-    let mut summary_day_offset = 0; // 0 = today, 1 = yesterday, 2 = 2 days ago, etc.
-    let mut cli_scroll_offset = 0; // For scrolling through CLIs in Live Activity
+    let mut tui_state = TuiState::default();
 
-    let mut cli_scroll_offset = 0; // For scrolling through CLIs in Live Activity
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(run_app(
             &mut terminal,
             stats_receiver,
             format_options,
-            &mut selected_tab,
-            &mut scroll_offset,
-            &mut summary_day_offset,
-            &mut cli_scroll_offset,
+            &mut tui_state,
             upload_status,
             file_watcher,
             &mut stats_manager,
@@ -93,10 +105,7 @@ async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     mut stats_receiver: watch::Receiver<MultiAnalyzerStats>,
     format_options: &NumberFormatOptions,
-    selected_tab: &mut usize,
-    scroll_offset: &mut usize,
-    summary_day_offset: &mut usize,
-    cli_scroll_offset: &mut usize,
+    tui_state: &mut TuiState,
     upload_status: Arc<Mutex<UploadStatus>>,
     file_watcher: FileWatcher,
     stats_manager: &mut RealtimeStatsManager,
@@ -105,7 +114,7 @@ async fn run_app(
     let mut current_stats = stats_receiver.borrow().clone();
 
     // Initialize table states for current stats
-    update_table_states(&mut table_states, &current_stats, selected_tab);
+    update_table_states(&mut table_states, &current_stats, &mut tui_state.selected_tab);
 
     let mut needs_redraw = true;
     let mut last_upload_status = {
@@ -123,13 +132,13 @@ async fn run_app(
 
     // Cache summary data to avoid recalculating on every redraw
     let mut cached_summary_data: Option<SummaryData> =
-        Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
+        Some(calculate_summary_data(&filtered_stats, tui_state.summary_day_offset));
 
     loop {
         // Check for stats updates
         if stats_receiver.has_changed()? {
             current_stats = stats_receiver.borrow_and_update().clone();
-            update_table_states(&mut table_states, &current_stats, selected_tab);
+            update_table_states(&mut table_states, &current_stats, &mut tui_state.selected_tab);
             // Recalculate filtered stats only when stats change
             filtered_stats = current_stats
                 .analyzer_stats
@@ -138,7 +147,7 @@ async fn run_app(
                 .collect();
             // Recalculate summary data when stats change
             cached_summary_data =
-                Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
+                Some(calculate_summary_data(&filtered_stats, tui_state.summary_day_offset));
             needs_redraw = true;
         }
 
@@ -159,8 +168,8 @@ async fn run_app(
             let mut status = upload_status.lock().unwrap();
             // Advance dots animation for uploading status every 500ms (5 frames at 100ms)
             if let UploadStatus::Uploading {
-                current: _,
-                total: _,
+                current: _, 
+                total: _, 
                 dots,
             } = &mut *status
             {
@@ -190,9 +199,7 @@ async fn run_app(
                     &filtered_stats,
                     format_options,
                     &mut table_states,
-                    *scroll_offset,
-                    *selected_tab,
-                    *cli_scroll_offset,
+                    tui_state,
                     upload_status.clone(),
                     &cached_summary_data,
                 );
@@ -221,34 +228,34 @@ async fn run_app(
 
                     match key.code {
                         KeyCode::Left | KeyCode::Char('h') => {
-                            if *selected_tab > 0 {
-                                *selected_tab -= 1;
+                            if tui_state.selected_tab > 0 {
+                                tui_state.selected_tab -= 1;
                                 needs_redraw = true;
                             }
                         }
                         KeyCode::Right | KeyCode::Char('l') => {
-                            if *selected_tab < filtered_stats.len() + 1 {
+                            if tui_state.selected_tab < filtered_stats.len() {
                                 // +1 for Summary tab
-                                *selected_tab += 1;
+                                tui_state.selected_tab += 1;
                                 needs_redraw = true;
                             }
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             // On summary tab, navigate through days (towards today)
-                            if *selected_tab == 0 {
-                                if *summary_day_offset > 0 {
-                                    *summary_day_offset -= 1;
+                            if tui_state.selected_tab == 0 {
+                                if tui_state.summary_day_offset > 0 {
+                                    tui_state.summary_day_offset -= 1;
                                     cached_summary_data = Some(calculate_summary_data(
                                         &filtered_stats,
-                                        *summary_day_offset,
+                                        tui_state.summary_day_offset,
                                     ));
                                     needs_redraw = true;
                                 }
                             }
                             // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            else if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                                let analyzer_index = *selected_tab - 1;
+                            else if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                                let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
                                     && let Some(current_stats) = filtered_stats.get(analyzer_index)
                                 {
@@ -271,25 +278,25 @@ async fn run_app(
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
                             // On summary tab, navigate through days (back in time)
-                            if *selected_tab == 0 {
+                            if tui_state.selected_tab == 0 {
                                 // Limit to 30 days back
-                                if *summary_day_offset < 30 {
-                                    *summary_day_offset += 1;
+                                if tui_state.summary_day_offset < 30 {
+                                    tui_state.summary_day_offset += 1;
                                     cached_summary_data = Some(calculate_summary_data(
                                         &filtered_stats,
-                                        *summary_day_offset,
+                                        tui_state.summary_day_offset,
                                     ));
                                     needs_redraw = true;
                                 }
                             }
                             // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            else if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                                let analyzer_index = *selected_tab - 1;
+                            else if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                                let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(current_stats) =
+                                    && let Some(current_stats) = 
                                         filtered_stats.get(analyzer_index)
-                                    && let Some(table_state) =
+                                    && let Some(table_state) = 
                                         table_states.get_mut(analyzer_index)
                                     && let Some(selected) = table_state.selected()
                                     && selected > 0
@@ -308,10 +315,10 @@ async fn run_app(
                         KeyCode::Home => {
                             // Only handle navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                                let analyzer_index = *selected_tab - 1;
+                            if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                                let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(table_state) =
+                                    && let Some(table_state) = 
                                         table_states.get_mut(analyzer_index)
                                 {
                                     table_state.select(Some(0));
@@ -322,16 +329,15 @@ async fn run_app(
                         KeyCode::End => {
                             // Only handle navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                                let analyzer_index = *selected_tab - 1;
+                            if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                                let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(current_stats) =
+                                    && let Some(current_stats) = 
                                         filtered_stats.get(analyzer_index)
                                 {
                                     let total_rows = current_stats.daily_stats.len() + 2;
-                                    if let Some(table_state) =
-                                        table_states.get_mut(analyzer_index)
-                                    {
+                                    if let Some(table_state) = 
+                                        table_states.get_mut(analyzer_index) {
                                         table_state.select(Some(total_rows.saturating_sub(1)));
                                         needs_redraw = true;
                                     }
@@ -341,18 +347,17 @@ async fn run_app(
                         KeyCode::PageDown => {
                             // Only handle navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                                let analyzer_index = *selected_tab - 1;
+                            if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                                let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(current_stats) =
+                                    && let Some(current_stats) = 
                                         filtered_stats.get(analyzer_index)
                                 {
                                     let total_rows = current_stats.daily_stats.len() + 2;
-                                    if let Some(table_state) =
+                                    if let Some(table_state) = 
                                         table_states.get_mut(analyzer_index)
-                                        && let Some(selected) = table_state.selected()
-                                    {
-                                        let new_selected =
+                                        && let Some(selected) = table_state.selected() {
+                                        let new_selected = 
                                             (selected + 10).min(total_rows.saturating_sub(1));
                                         table_state.select(Some(new_selected));
                                         needs_redraw = true;
@@ -363,13 +368,12 @@ async fn run_app(
                         KeyCode::PageUp => {
                             // Only handle navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                                let analyzer_index = *selected_tab - 1;
+                            if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                                let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(table_state) =
+                                    && let Some(table_state) = 
                                         table_states.get_mut(analyzer_index)
-                                    && let Some(selected) = table_state.selected()
-                                {
+                                    && let Some(selected) = table_state.selected() {
                                     let new_selected = selected.saturating_sub(10);
                                     table_state.select(Some(new_selected));
                                     needs_redraw = true;
@@ -380,29 +384,42 @@ async fn run_app(
                     }
                 }
                 Event::Mouse(mouse_event) => {
-                    match mouse_event.kind {
-                        crossterm::event::MouseEventKind::ScrollUp => {
-                            // In Summary view, ALL scroll events should affect CLI scroll, not the table
-                            if *selected_tab == 0 {
-                                if *cli_scroll_offset > 0 {
-                                    *cli_scroll_offset -= 1;
-                                    needs_redraw = true;
+                    if tui_state.selected_tab == 0 {
+                        let mouse_y = mouse_event.row;
+
+                        let today_by_cli_rect = tui_state.layout.today_by_cli_rect.unwrap_or_default();
+                        let live_activity_rect = tui_state.layout.live_activity_rect.unwrap_or_default();
+
+                        match mouse_event.kind {
+                            crossterm::event::MouseEventKind::ScrollUp => {
+                                if mouse_y >= live_activity_rect.y && mouse_y < live_activity_rect.y + live_activity_rect.height {
+                                    if tui_state.cli_scroll_offset > 0 {
+                                        tui_state.cli_scroll_offset -= 1;
+                                        needs_redraw = true;
+                                    }
+                                } else if mouse_y >= today_by_cli_rect.y && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height {
+                                    if tui_state.cli_table_scroll_offset > 0 {
+                                        tui_state.cli_table_scroll_offset -= 1;
+                                        needs_redraw = true;
+                                    }
                                 }
                             }
-                        }
-                        crossterm::event::MouseEventKind::ScrollDown => {
-                            // In Summary view, ALL scroll events should affect CLI scroll, not the table
-                            if *selected_tab == 0 {
-                                // Allow scrolling past the last full screen of items to ensure everything is viewable.
-                                // A more precise calculation would require knowing the rendered height, which is not
-                                // available here. This approach is a robust fallback.
-                                if *cli_scroll_offset < filtered_stats.len().saturating_sub(1) {
-                                    *cli_scroll_offset += 1;
-                                    needs_redraw = true;
+                            crossterm::event::MouseEventKind::ScrollDown => {
+                                if mouse_y >= live_activity_rect.y && mouse_y < live_activity_rect.y + live_activity_rect.height {
+                                    if tui_state.cli_scroll_offset < filtered_stats.len().saturating_sub(1) {
+                                        tui_state.cli_scroll_offset += 1;
+                                        needs_redraw = true;
+                                    }
+                                } else if mouse_y >= today_by_cli_rect.y && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height {
+                                    // Arbitrary limit, can be improved
+                                    if tui_state.cli_table_scroll_offset < filtered_stats.len().saturating_sub(1) {
+                                        tui_state.cli_table_scroll_offset += 1;
+                                        needs_redraw = true;
+                                    }
                                 }
                             }
+                            _ => {}
                         }
-                        _ => {} // Consume other mouse events to ensure no conflicts
                     }
                 }
                 Event::Resize(_, _) => {
@@ -422,9 +439,7 @@ fn draw_ui(
     filtered_stats: &[&AgenticCodingToolStats],
     format_options: &NumberFormatOptions,
     table_states: &mut [TableState],
-    _scroll_offset: usize,
-    selected_tab: usize,
-    cli_scroll_offset: usize,
+    tui_state: &mut TuiState,
     upload_status: Arc<Mutex<UploadStatus>>,
     cached_summary_data: &Option<SummaryData>,
 ) {
@@ -440,8 +455,8 @@ fn draw_ui(
 
     // Adjust layout based on whether we have data or not
     let chunks = if has_data {
-        // For Summary view (selected_tab == 0), give more space to main table since no totals shown
-        let summary_stats_height = if selected_tab == 0 { 0 } else { 9 };
+        // For Summary view (tui_state.selected_tab == 0), give more space to main table since no totals shown
+        let summary_stats_height = if tui_state.selected_tab == 0 { 0 } else { 9 };
         Layout::vertical([
             Constraint::Length(3),                             // Header
             Constraint::Length(1),                             // Tabs
@@ -478,12 +493,13 @@ fn draw_ui(
         tab_titles.extend(filtered_stats.iter().map(|stats| {
             Line::from(format!(
                 " {} ({}) ",
-                stats.analyzer_name, stats.num_conversations
+                stats.analyzer_name,
+                stats.num_conversations,
             ))
         }));
 
         let tabs = Tabs::new(tab_titles)
-            .select(selected_tab)
+            .select(tui_state.selected_tab)
             // .style(Style::default().add_modifier(Modifier::DIM))
             .highlight_style(Style::new().black().on_light_green())
             .padding("", "")
@@ -491,7 +507,7 @@ fn draw_ui(
 
         frame.render_widget(tabs, chunks[1]);
 
-        if selected_tab == 0 {
+        if tui_state.selected_tab == 0 {
             // Summary view - show cached aggregated data across all analyzers
             if let Some(summary_data) = &cached_summary_data {
                 draw_summary_view(
@@ -500,13 +516,13 @@ fn draw_ui(
                     summary_data,
                     format_options,
                     filtered_stats,
-                    cli_scroll_offset,
+                    tui_state,
                 );
                 draw_summary_stats(frame, chunks[3], filtered_stats, format_options, false);
             }
         } else {
             // Individual analyzer view (adjust index since Summary is tab 0)
-            let analyzer_index = selected_tab - 1;
+            let analyzer_index = tui_state.selected_tab - 1;
             if let Some(current_stats) = filtered_stats.get(analyzer_index)
                 && let Some(current_table_state) = table_states.get_mut(analyzer_index)
             {
@@ -538,7 +554,7 @@ fn draw_ui(
         ])
         .split(help_area);
 
-        let help = if selected_tab == 0 {
+        let help = if tui_state.selected_tab == 0 {
             Paragraph::new(
                 "Use ←/→ or h/l to switch tabs, ↑/↓ or j/k to navigate days, q/Esc to quit",
             )
@@ -1162,7 +1178,7 @@ fn draw_summary_view(
     summary_data: &SummaryData,
     format_options: &NumberFormatOptions,
     filtered_stats: &[&AgenticCodingToolStats],
-    cli_scroll_offset: usize,
+    tui_state: &mut TuiState,
 ) {
     let SummaryData {
         today_stats,
@@ -1184,6 +1200,10 @@ fn draw_summary_view(
         Constraint::Min(0),     // Visual CLI panels (takes remaining space)
     ])
     .split(area);
+
+    // Store the rects for mouse handling
+    tui_state.layout.today_by_cli_rect = Some(chunks[3]);
+    tui_state.layout.live_activity_rect = Some(chunks[5]);
 
     // Create table rows
     let header = Row::new(vec![
@@ -1485,8 +1505,7 @@ fn draw_summary_view(
                 "○ No data".to_string()
             };
 
-        cli_data.push((
-            analyzer_stats.analyzer_name.clone(),
+        cli_data.push(( (analyzer_stats.analyzer_name.clone(),
             cached,
             input,
             output,
@@ -1497,12 +1516,16 @@ fn draw_summary_view(
             session_count,
             message_count,
             state,
-        ));
+        )));
     }
 
     // Build CLI breakdown table with metrics as rows and CLIs as columns
+    let max_visible_cols = ((area.width - 15) / 15).max(1) as usize;
+    let end_col = (tui_state.cli_table_scroll_offset + max_visible_cols).min(cli_data.len());
+    let visible_cli_data = &cli_data[tui_state.cli_table_scroll_offset..end_col];
+
     let mut cli_header_cells = vec![Cell::new("")];
-    for (cli_name, _, _, _, _, _, _, _, _, _, _) in &cli_data {
+    for (cli_name, _, _, _, _, _, _, _, _, _, _) in visible_cli_data {
         cli_header_cells.push(Cell::new(Text::from(cli_name.clone()).right_aligned()));
     }
     let cli_header = Row::new(cli_header_cells)
@@ -1510,7 +1533,7 @@ fn draw_summary_view(
         .height(1);
 
     let mut cli_constraints = vec![Constraint::Length(15)]; // Metric label
-    for _ in 0..cli_data.len() {
+    for _ in 0..visible_cli_data.len() {
         cli_constraints.push(Constraint::Length(13)); // Each CLI column
     }
 
@@ -1520,7 +1543,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta)),
             )];
-            for (_, cached, _, _, _, _, _, _, _, _, _) in &cli_data {
+            for (_, cached, _, _, _, _, _, _, _, _, _) in visible_cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*cached, format_options)).right_aligned(),
                 ));
@@ -1532,7 +1555,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue)),
             )];
-            for (_, _, input, _, _, _, _, _, _, _, _) in &cli_data {
+            for (_, _, input, _, _, _, _, _, _, _, _) in visible_cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*input, format_options)).right_aligned(),
                 ));
@@ -1544,7 +1567,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan)),
             )];
-            for (_, _, _, output, _, _, _, _, _, _, _) in &cli_data {
+            for (_, _, _, output, _, _, _, _, _, _, _) in visible_cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*output, format_options)).right_aligned(),
                 ));
@@ -1556,7 +1579,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red)),
             )];
-            for (_, _, _, _, reasoning, _, _, _, _, _, _) in &cli_data {
+            for (_, _, _, _, reasoning, _, _, _, _, _, _) in visible_cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*reasoning, format_options)).right_aligned(),
                 ));
@@ -1568,7 +1591,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("💬 Sessions").style(Style::default().fg(Color::Cyan)),
             )];
-            for (_, _, _, _, _, _, _, _, sessions, _, _) in &cli_data {
+            for (_, _, _, _, _, _, _, _, sessions, _, _) in visible_cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*sessions, format_options)).right_aligned(),
                 ));
@@ -1580,7 +1603,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📨 Messages").style(Style::default().fg(Color::LightYellow)),
             )];
-            for (_, _, _, _, _, _, _, _, _, messages, _) in &cli_data {
+            for (_, _, _, _, _, _, _, _, _, messages, _) in visible_cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*messages, format_options)).right_aligned(),
                 ));
@@ -1592,7 +1615,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("⏱️ Active Time").style(Style::default().fg(Color::LightGreen)),
             )];
-            for (_, _, _, _, _, _, _, active_time, _, _, _) in &cli_data {
+            for (_, _, _, _, _, _, _, active_time, _, _, _) in visible_cli_data {
                 cells.push(Cell::new(Line::from(active_time.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -1602,7 +1625,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("⏰ Idle Time").style(Style::default().fg(Color::DarkGray)),
             )];
-            for (_, _, _, _, _, _, idle_time, _, _, _, _) in &cli_data {
+            for (_, _, _, _, _, _, idle_time, _, _, _, _) in visible_cli_data {
                 cells.push(Cell::new(Line::from(idle_time.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -1612,7 +1635,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("💰 Cost").style(Style::default().fg(Color::Yellow)),
             )];
-            for (_, _, _, _, _, cost, _, _, _, _, _) in &cli_data {
+            for (_, _, _, _, _, cost, _, _, _, _, _) in visible_cli_data {
                 cells.push(Cell::new(
                     Line::from(format!("${:.2}", cost)).right_aligned(),
                 ));
@@ -1624,7 +1647,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📡 Status").style(Style::default().fg(Color::White).bold()),
             )];
-            for (_, _, _, _, _, _, _, _, _, _, state) in &cli_data {
+            for (_, _, _, _, _, _, _, _, _, _, state) in visible_cli_data {
                 cells.push(Cell::new(Line::from(state.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -1641,7 +1664,9 @@ fn draw_summary_view(
         let formatted_date = selected_date_with_tz.format("%B %d, %Y").to_string(); // November 15, 2025
         format!(
             "📊 {} ({}, {} days ago) by CLI",
-            weekday, formatted_date, selected_day_offset
+            weekday,
+            formatted_date,
+            selected_day_offset,
         )
     };
 
@@ -1657,7 +1682,7 @@ fn draw_summary_view(
     frame.render_widget(cli_table, chunks[3]);
 
     // Draw visual CLI panels
-    draw_visual_cli_panels(frame, chunks[5], filtered_stats, &cli_data, format_options, cli_scroll_offset);
+    draw_visual_cli_panels(frame, chunks[5], filtered_stats, &cli_data, format_options, tui_state);
 }
 
 // Helper function to create a horizontal bar visualization
@@ -1714,11 +1739,11 @@ fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> String {
     let max = *buckets.iter().max().unwrap_or(&1).max(&1);
 
     // Create sparkline with baseline
-    let chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let chars = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     buckets.iter()
         .map(|&count| {
             if count == 0 {
-                '▁'
+                ' '
             } else {
                 let idx = ((count as f64 / max as f64) * (chars.len() - 1) as f64) as usize;
                 chars[idx.min(chars.len() - 1)]
@@ -1776,7 +1801,7 @@ fn draw_visual_cli_panels(
     filtered_stats: &[&AgenticCodingToolStats],
     cli_data: &[(String, u64, u64, u64, u64, f64, String, String, u64, u64, String)],
     _format_options: &NumberFormatOptions,
-    cli_scroll_offset: usize,
+    tui_state: &mut TuiState,
 ) {
     if filtered_stats.is_empty() {
         return;
@@ -1800,9 +1825,14 @@ fn draw_visual_cli_panels(
     // Calculate how many CLIs can be shown based on available area height
     let lines_per_cli = 1 + messages_per_cli; // 1 for header + messages
     let available_height = area.height as usize;
-    let max_visible_clis = available_height / lines_per_cli.max(1); // At least 1 line per CLI
+    let max_visible_clis = available_height / lines_per_cli.max(1); // At least 1
 
-    for (actual_idx, stats) in filtered_stats.iter().enumerate().skip(cli_scroll_offset).take(max_visible_clis) {
+    for (actual_idx, stats) in filtered_stats
+        .iter()
+        .enumerate()
+        .skip(tui_state.cli_scroll_offset)
+        .take(max_visible_clis)
+    {
         // Check bounds to avoid out of bounds access
         if actual_idx >= cli_data.len() {
             break;
@@ -2009,20 +2039,22 @@ fn draw_summary_stats(
 
         summary_lines.insert(
             0,
-            Line::from(vec![Span::styled(
-                "-----------------------------",
-                Style::default().dim(),
-            )]),
+            Line::from(Span::styled(
+                "Overall Stats",
+                Style::new().add_modifier(Modifier::BOLD),
+            )),
         );
         summary_lines.insert(
-            0,
-            Line::from(vec![Span::styled("Totals", Style::default().bold().dim())]),
+            1,
+            Line::from(Span::styled(
+                "-------------",
+                Style::new().add_modifier(Modifier::BOLD),
+            )),
         );
     }
 
-    let summary_widget =
-        Paragraph::new(Text::from(summary_lines)).block(Block::default().title(""));
-    frame.render_widget(summary_widget, area);
+    let summary = Paragraph::new(summary_lines).block(Block::default());
+    frame.render_widget(summary, area);
 }
 
 fn update_table_states(
@@ -2064,7 +2096,7 @@ fn update_table_states(
     }
 
     // Ensure selected tab is within bounds (+1 for Summary tab)
-    if *selected_tab >= filtered_count + 1 && filtered_count > 0 {
+    if *selected_tab > filtered_count {
         *selected_tab = filtered_count; // Last analyzer tab
     }
 }
@@ -2120,8 +2152,7 @@ pub fn show_upload_success(total: usize, format_options: &NumberFormatOptions) {
         stdout(),
         Print("\r"),
         SetForegroundColor(crossterm::style::Color::DarkGreen),
-        Print(format!(
-            "✓ Successfully uploaded {} messages\n",
+        Print(format!("✓ Successfully uploaded {} messages\n",
             format_number(total as u64, format_options)
         )),
         ResetColor
@@ -2133,7 +2164,7 @@ pub fn show_upload_error(error: &str) {
         stdout(),
         Print("\r"),
         SetForegroundColor(crossterm::style::Color::DarkRed),
-        Print(format!("✕ {error}\n")),
+        Print(format!("✕ {}\n", error)),
         ResetColor
     );
 }

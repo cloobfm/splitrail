@@ -148,6 +148,7 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
             KiloCodeUiMessage::Say { ts, say, text, .. } => {
                 // We're interested in "api_req_started" messages which contain token/cost data
                 if say == "api_req_started" && !text.is_empty() {
+                    let text_clone = text.clone(); // Clone to avoid move issue
                     // Parse the embedded JSON in the text field
                     let mut text_bytes = text.into_bytes();
                     if let Ok(api_req) =
@@ -173,6 +174,13 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                             ..Default::default()
                         };
 
+                        // Include the original text content if it's not just JSON for API request
+                        let content = if !api_req.usage_missing {
+                            None // This message is primarily for API stats, content might be JSON
+                        } else {
+                            Some(text_clone) // Include text if usage is missing
+                        };
+
                         entries.push(ConversationMessage {
                             application: Application::KiloCode,
                             date,
@@ -183,7 +191,70 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                             model: current_model.clone(),
                             stats,
                             role: MessageRole::Assistant, // API requests are from the assistant
-                            content: None, // No content available for API request messages
+                            content,
+                        });
+
+                        message_index += 1;
+                    } else {
+                        // If parsing fails, treat as a regular Say message with text content
+                        let date = DateTime::from_timestamp_millis(ts).unwrap_or_else(Utc::now);
+
+                        let local_hash = format!("{}-{}", conversation_hash, message_index);
+                        let global_hash = hash_text(&format!(
+                            "{}:{}:{}:{}",
+                            project_hash, conversation_hash, message_index, ts
+                        ));
+
+                        entries.push(ConversationMessage {
+                            application: Application::KiloCode,
+                            date,
+                            project_hash: project_hash.clone(),
+                            conversation_hash: conversation_hash.clone(),
+                            local_hash: Some(local_hash),
+                            global_hash,
+                            model: current_model.clone(),
+                            stats: Stats::default(),
+                            role: MessageRole::Assistant,
+                            content: Some(text_clone), // Use the text as content
+                        });
+
+                        message_index += 1;
+                    }
+                } else {
+                    // For other Say messages, include content for meaningful conversation messages
+                    // Preserve important messages like reasoning, user feedback, etc.
+                    // Filter out system messages like "checkpoint_saved" that just contain hashes
+                    let is_system_notification = say.contains("checkpoint") ||
+                                                say.contains("saved") ||
+                                                text.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') ||
+                                                text.len() < 10 && text.chars().filter(|c| c.is_alphanumeric()).count() > 8; // Likely a hash
+
+                    // Preserve important message types even if they might look like system messages
+                    let is_important_conversation = say.contains("reasoning") ||
+                                                  say.contains("feedback") ||
+                                                  text.contains("reasoning") ||
+                                                  text.contains("feedback");
+
+                    if !is_system_notification || is_important_conversation {
+                        let date = DateTime::from_timestamp_millis(ts).unwrap_or_else(Utc::now);
+
+                        let local_hash = format!("{}-{}", conversation_hash, message_index);
+                        let global_hash = hash_text(&format!(
+                            "{}:{}:{}:{}",
+                            project_hash, conversation_hash, message_index, ts
+                        ));
+
+                        entries.push(ConversationMessage {
+                            application: Application::KiloCode,
+                            date,
+                            project_hash: project_hash.clone(),
+                            conversation_hash: conversation_hash.clone(),
+                            local_hash: Some(local_hash),
+                            global_hash,
+                            model: current_model.clone(),
+                            stats: Stats::default(),
+                            role: MessageRole::Assistant,
+                            content: Some(text), // Include important text content
                         });
 
                         message_index += 1;
