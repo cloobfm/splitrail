@@ -1017,11 +1017,13 @@ fn calculate_summary_data(filtered_stats: &[&AgenticCodingToolStats]) -> Summary
     // Calculate date ranges
     let now = chrono::Local::now();
     let today_start = now.date_naive();
+    let yesterday_start = (now - ChronoDuration::days(1)).date_naive();
     let week_ago = (now - ChronoDuration::days(7)).date_naive();
     let two_weeks_ago = (now - ChronoDuration::days(14)).date_naive();
 
     // Aggregate data for each time period
     let mut today_stats = AggregatedStats::default();
+    let mut yesterday_stats = AggregatedStats::default();
     let mut week_stats = AggregatedStats::default();
     let mut two_week_stats = AggregatedStats::default();
 
@@ -1030,6 +1032,9 @@ fn calculate_summary_data(filtered_stats: &[&AgenticCodingToolStats]) -> Summary
             if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                 if date == today_start {
                     today_stats.add_day(day_stats);
+                }
+                if date == yesterday_start {
+                    yesterday_stats.add_day(day_stats);
                 }
                 if date >= week_ago {
                     week_stats.add_day(day_stats);
@@ -1043,6 +1048,7 @@ fn calculate_summary_data(filtered_stats: &[&AgenticCodingToolStats]) -> Summary
 
     SummaryData {
         today_stats,
+        yesterday_stats,
         week_stats,
         two_week_stats,
         active_clis: filtered_stats.len(),
@@ -1056,7 +1062,7 @@ fn draw_summary_view(
     format_options: &NumberFormatOptions,
     filtered_stats: &[&AgenticCodingToolStats],
 ) {
-    let SummaryData { today_stats, week_stats, two_week_stats, active_clis } = summary_data;
+    let SummaryData { today_stats, yesterday_stats, week_stats, two_week_stats, active_clis } = summary_data;
 
     // Split area into parts: spacing + overview table + spacing + CLI breakdown table
     let chunks = Layout::vertical([
@@ -1071,6 +1077,7 @@ fn draw_summary_view(
     let header = Row::new(vec![
         Cell::new(""),
         Cell::new(Text::from("Today").centered()),
+        Cell::new(Text::from("Yesterday").centered()),
         Cell::new(Text::from("7 Days").centered()),
         Cell::new(Text::from("14 Days").centered()),
     ])
@@ -1081,36 +1088,42 @@ fn draw_summary_view(
         Row::new(vec![
             Cell::new(Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta))),
             Cell::new(Line::from(format_number(today_stats.cached_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(yesterday_stats.cached_tokens, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(week_stats.cached_tokens, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(two_week_stats.cached_tokens, format_options)).right_aligned()),
         ]),
         Row::new(vec![
             Cell::new(Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue))),
             Cell::new(Line::from(format_number(today_stats.input_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(yesterday_stats.input_tokens, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(week_stats.input_tokens, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(two_week_stats.input_tokens, format_options)).right_aligned()),
         ]),
         Row::new(vec![
             Cell::new(Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan))),
             Cell::new(Line::from(format_number(today_stats.output_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(yesterday_stats.output_tokens, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(week_stats.output_tokens, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(two_week_stats.output_tokens, format_options)).right_aligned()),
         ]),
         Row::new(vec![
             Cell::new(Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red))),
             Cell::new(Line::from(format_number(today_stats.reasoning_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(yesterday_stats.reasoning_tokens, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(week_stats.reasoning_tokens, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(two_week_stats.reasoning_tokens, format_options)).right_aligned()),
         ]),
         Row::new(vec![
             Cell::new(Line::from("🛠️ Tool Calls").style(Style::default().fg(Color::LightGreen))),
             Cell::new(Line::from(format_number(today_stats.tool_calls, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(yesterday_stats.tool_calls, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(week_stats.tool_calls, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(two_week_stats.tool_calls, format_options)).right_aligned()),
         ]),
         Row::new(vec![
             Cell::new(Line::from("💬 Conversations").style(Style::default().fg(Color::Cyan))),
             Cell::new(Line::from(format_number(today_stats.conversations, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(yesterday_stats.conversations, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(week_stats.conversations, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(two_week_stats.conversations, format_options)).right_aligned()),
         ]),
@@ -1119,10 +1132,12 @@ fn draw_summary_view(
             Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
         ]),
         Row::new(vec![
             Cell::new(Line::from("💰 Cost").style(Style::default().fg(Color::Yellow))),
             Cell::new(Line::from(format!("${:.2}", today_stats.cost)).right_aligned()),
+            Cell::new(Line::from(format!("${:.2}", yesterday_stats.cost)).right_aligned()),
             Cell::new(Line::from(format!("${:.2}", week_stats.cost)).right_aligned()),
             Cell::new(Line::from(format!("${:.2}", two_week_stats.cost)).right_aligned()),
         ]),
@@ -1133,6 +1148,7 @@ fn draw_summary_view(
         [
             Constraint::Length(15), // Metric
             Constraint::Length(12), // Today
+            Constraint::Length(12), // Yesterday
             Constraint::Length(12), // 7 Days
             Constraint::Length(12), // 14 Days
         ],
@@ -1363,6 +1379,7 @@ struct AggregatedStats {
 #[derive(Clone)]
 struct SummaryData {
     today_stats: AggregatedStats,
+    yesterday_stats: AggregatedStats,
     week_stats: AggregatedStats,
     two_week_stats: AggregatedStats,
     active_clis: usize,
