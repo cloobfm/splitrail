@@ -1698,8 +1698,9 @@ fn get_last_message_preview(stats: &AgenticCodingToolStats, max_len: usize) -> (
             };
     
             if let Some(content) = &msg.content {
-                // Show full content without truncation
-                message_lines.push(format!("MSG{} ({}): {}", i + 1, msg_role, content));
+                // Show content as single line (remove newlines)
+                let single_line_content = content.replace('\n', " ").replace('\r', "");
+                message_lines.push(format!("MSG{} ({}): {}", i + 1, msg_role, single_line_content));
             } else {
                 // Show more debug info for missing content
                 let debug_details = format!(
