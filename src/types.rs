@@ -46,6 +46,9 @@ pub struct ConversationMessage {
     pub model: Option<String>, // None for user messages
     pub stats: Stats,
     pub role: MessageRole,
+    /// The actual message content (text). Only populated for recent messages to save memory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

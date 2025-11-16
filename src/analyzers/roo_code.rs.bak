@@ -11,19 +11,19 @@ use simd_json::prelude::*;
 use std::collections::HashSet;
 use std::path::Path;
 
-pub struct KiloCodeAnalyzer;
+pub struct RooCodeAnalyzer;
 
-impl KiloCodeAnalyzer {
+impl RooCodeAnalyzer {
     pub fn new() -> Self {
         Self
     }
 }
 
-// Kilo Code-specific data structures based on the discovered format
+// Roo Code-specific data structures based on the discovered format
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum KiloCodeUiMessage {
+enum RooCodeUiMessage {
     Say {
         ts: i64,
         say: String,
@@ -43,7 +43,7 @@ enum KiloCodeUiMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct KiloCodeApiRequest {
+struct RooCodeApiRequest {
     #[serde(rename = "apiProtocol")]
     api_protocol: String,
     #[serde(rename = "tokensIn")]
@@ -55,15 +55,11 @@ struct KiloCodeApiRequest {
     #[serde(rename = "cacheReads")]
     cache_reads: u64,
     cost: f64,
-    #[serde(default)]
-    usage_missing: bool,
 }
 
-// Helper function to extract project ID from Kilo Code file path and hash it
-fn extract_and_hash_project_id_kilo_code(file_path: &Path) -> String {
-    // Kilo Code path formats:
-    // - VS Code extension: ~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks/{UUID}/
-    // - CLI: ~/.kilocode/cli/global/tasks/{UUID}/
+// Helper function to extract project ID from Roo Code file path and hash it
+fn extract_and_hash_project_id_roo_code(file_path: &Path) -> String {
+    // Roo Code path format: ~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/{UUID}/
     // We'll use the parent directory of tasks as the project identifier (global storage path)
 
     let path_components: Vec<_> = file_path.components().collect();
@@ -94,9 +90,9 @@ fn extract_model_from_text(text: &str) -> Option<String> {
     None
 }
 
-// Parse a single Kilo Code task directory
-fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMessage>> {
-    let project_hash = extract_and_hash_project_id_kilo_code(task_dir);
+// Parse a single Roo Code task directory
+fn parse_roo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMessage>> {
+    let project_hash = extract_and_hash_project_id_roo_code(task_dir);
 
     // Get the conversation hash from the task directory name (UUID)
     let conversation_hash = task_dir
@@ -136,7 +132,7 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
     }
 
     let mut ui_messages_content = std::fs::read_to_string(&ui_messages_path)?.into_bytes();
-    let ui_messages: Vec<KiloCodeUiMessage> = simd_json::from_slice(&mut ui_messages_content)
+    let ui_messages: Vec<RooCodeUiMessage> = simd_json::from_slice(&mut ui_messages_content)
         .context("Failed to parse ui_messages.json")?;
 
     let mut entries = Vec::new();
@@ -145,13 +141,12 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
     // Process ui_messages to extract API requests with token/cost data
     for message in ui_messages {
         match message {
-            KiloCodeUiMessage::Say { ts, say, text, .. } => {
+            RooCodeUiMessage::Say { ts, say, text, .. } => {
                 // We're interested in "api_req_started" messages which contain token/cost data
                 if say == "api_req_started" && !text.is_empty() {
                     // Parse the embedded JSON in the text field
                     let mut text_bytes = text.into_bytes();
-                    if let Ok(api_req) =
-                        simd_json::from_slice::<KiloCodeApiRequest>(&mut text_bytes)
+                    if let Ok(api_req) = simd_json::from_slice::<RooCodeApiRequest>(&mut text_bytes)
                     {
                         // Create a message entry for this API request
                         let date = DateTime::from_timestamp_millis(ts).unwrap_or_else(Utc::now);
@@ -174,7 +169,7 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                         };
 
                         entries.push(ConversationMessage {
-                            application: Application::KiloCode,
+                            application: Application::RooCode,
                             date,
                             project_hash: project_hash.clone(),
                             conversation_hash: conversation_hash.clone(),
@@ -183,13 +178,13 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                             model: current_model.clone(),
                             stats,
                             role: MessageRole::Assistant, // API requests are from the assistant
-            content: None,                        });
+                        });
 
                         message_index += 1;
                     }
                 }
             }
-            KiloCodeUiMessage::Ask { ts, ask, .. } => {
+            RooCodeUiMessage::Ask { ts, ask, .. } => {
                 // Track user interactions (followup questions, confirmations)
                 if matches!(
                     ask.as_str(),
@@ -204,7 +199,7 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                     ));
 
                     entries.push(ConversationMessage {
-                        application: Application::KiloCode,
+                        application: Application::RooCode,
                         date,
                         project_hash: project_hash.clone(),
                         conversation_hash: conversation_hash.clone(),
@@ -213,7 +208,7 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                         model: None,
                         stats: Stats::default(), // User messages don't have token costs
                         role: MessageRole::User,
-            content: None,                    });
+                    });
 
                     message_index += 1;
                 }
@@ -225,15 +220,15 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
 }
 
 #[async_trait]
-impl Analyzer for KiloCodeAnalyzer {
+impl Analyzer for RooCodeAnalyzer {
     fn display_name(&self) -> &'static str {
-        "Kilo Code"
+        "Roo Code"
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
         let mut patterns = Vec::new();
 
-        // VSCode forks that might have Kilo Code installed: Code, Cursor, Windsurf, VSCodium, Positron and Code - Insiders
+        // VSCode forks that might have Kilo Code installed: Code, Cursor, Windsurf, VSCodium, Positron
         let vscode_gui_forks = [
             "Code",
             "Cursor",
@@ -247,27 +242,25 @@ impl Analyzer for KiloCodeAnalyzer {
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
 
-            // Kilo Code CLI path
-            patterns.push(format!("{home_str}/.kilocode/cli/global/tasks/*/ui_messages.json"));
-
-            // Linux paths for all VSCode GUI forks
+            // Linux paths for all VSCode forks
             for fork in &vscode_gui_forks {
-                patterns.push(format!("{home_str}/.config/{fork}/User/globalStorage/kilocode.kilo-code/tasks/*/ui_messages.json"));
+                patterns.push(format!("{home_str}/.config/{fork}/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json"));
             }
             // Linux paths for all VSCode CLI (server) forks
             for fork in &vscode_cli_forks {
-                patterns.push(format!("{home_str}/.{fork}/data/User/globalStorage/kilocode.kilo-code/tasks/*/ui_messages.json"));
+                patterns.push(format!("{home_str}/.{fork}/data/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json"));
             }
 
-            // macOS paths for all VSCode GUI forks
+            // macOS paths for all VSCode forks
             for fork in &vscode_gui_forks {
-                patterns.push(format!("{home_str}/Library/Application Support/{fork}/User/globalStorage/kilocode.kilo-code/tasks/*/ui_messages.json"));
+                patterns.push(format!("{home_str}/Library/Application Support/{fork}/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json"));
             }
         }
-        // Windows paths for all VSCode GUI forks
+
+        // Windows paths for all VSCode forks
         if let Ok(appdata) = std::env::var("APPDATA") {
             for fork in &vscode_gui_forks {
-                patterns.push(format!("{appdata}\\{fork}\\User\\globalStorage\\kilocode.kilo-code\\tasks\\*\\ui_messages.json"));
+                patterns.push(format!("{appdata}\\{fork}\\User\\globalStorage\\rooveterinaryinc.roo-cline\\tasks\\*\\ui_messages.json"));
             }
         }
 
@@ -304,18 +297,16 @@ impl Analyzer for KiloCodeAnalyzer {
         // Parse all task directories in parallel
         let all_entries: Vec<ConversationMessage> = sources
             .into_par_iter()
-            .flat_map(
-                |source| match parse_kilo_code_task_directory(&source.path) {
-                    Ok(messages) => messages,
-                    Err(e) => {
-                        eprintln!(
-                            "Failed to parse Kilo Code task directory {:?}: {}",
-                            source.path, e
-                        );
-                        Vec::new()
-                    }
-                },
-            )
+            .flat_map(|source| match parse_roo_code_task_directory(&source.path) {
+                Ok(messages) => messages,
+                Err(e) => {
+                    eprintln!(
+                        "Failed to parse Roo Code task directory {:?}: {}",
+                        source.path, e
+                    );
+                    Vec::new()
+                }
+            })
             .collect();
 
         // Deduplicate by global hash
@@ -363,10 +354,10 @@ mod tests {
     #[test]
     fn test_extract_project_hash() {
         let path = PathBuf::from(
-            "/home/user/.config/Code/User/globalStorage/kilocode.kilo-code/tasks/9f365349-84f2-4a9a-b470-f94910583293/ui_messages.json",
+            "/home/user/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/9f365349-84f2-4a9a-b470-f94910583293/ui_messages.json",
         );
         let parent = path.parent().unwrap();
-        let hash = extract_and_hash_project_id_kilo_code(parent);
+        let hash = extract_and_hash_project_id_roo_code(parent);
         assert!(!hash.is_empty());
         assert_eq!(hash.len(), 64); // SHA256 hex length
     }

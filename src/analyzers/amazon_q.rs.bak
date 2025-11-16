@@ -216,7 +216,7 @@ pub(crate) fn parse_amazon_q_conversation(
             model: None,
             stats: Stats::default(),
             role: MessageRole::User,
-            content: None,        });
+        });
 
         // Create assistant message with stats
         let assistant_local_hash = format!("{}-assistant-{}", conversation_hash, idx);
@@ -270,7 +270,7 @@ pub(crate) fn parse_amazon_q_conversation(
             model,
             stats,
             role: MessageRole::Assistant,
-            content: None,        });
+        });
     }
 
     Ok(entries)

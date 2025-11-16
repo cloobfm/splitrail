@@ -14,35 +14,35 @@ use simd_json::prelude::*;
 use std::collections::HashSet;
 use std::path::Path;
 
-pub struct QwenCodeAnalyzer;
+pub struct GeminiCliAnalyzer;
 
-impl QwenCodeAnalyzer {
+impl GeminiCliAnalyzer {
     pub fn new() -> Self {
         Self
     }
 }
 
-// Qwen Code-specific data structures (identical to Gemini CLI format)
+// Gemini CLI-specific data structures following the plan's simplified flat approach
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct QwenCodeSession {
+struct GeminiCliSession {
     session_id: String,
     project_hash: String,
     start_time: String,
     last_updated: String,
-    messages: Vec<QwenCodeMessage>,
+    messages: Vec<GeminiCliMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-enum QwenCodeMessage {
+enum GeminiCliMessage {
     User {
         id: String,
         #[serde(deserialize_with = "deserialize_utc_timestamp")]
         timestamp: DateTime<Utc>,
         content: String,
     },
-    Qwen {
+    Gemini {
         id: String,
         #[serde(deserialize_with = "deserialize_utc_timestamp")]
         timestamp: DateTime<Utc>,
@@ -50,7 +50,7 @@ enum QwenCodeMessage {
         model: String,
         #[serde(default)]
         thoughts: Vec<simd_json::OwnedValue>,
-        tokens: Option<QwenCodeTokens>,
+        tokens: Option<GeminiCliTokens>,
         #[serde(rename = "toolCalls", default)]
         tool_calls: Vec<simd_json::OwnedValue>,
     },
@@ -69,7 +69,7 @@ enum QwenCodeMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct QwenCodeTokens {
+struct GeminiCliTokens {
     #[serde(default)]
     input: u64,
     #[serde(default)]
@@ -158,10 +158,10 @@ fn extract_tool_stats(tool_calls: &[simd_json::OwnedValue]) -> Stats {
     stats
 }
 
-// Helper function to extract project ID from Qwen Code file path and hash it
-fn extract_and_hash_project_id_qwen_code(file_path: &Path) -> String {
-    // Qwen Code path format: ~/.qwen/tmp/{PROJECT_ID}/chats/{session}.json
-    // Example: "/home/user/.qwen/tmp/project-abc123/chats/session.json"
+// Helper function to extract project ID from Gemini CLI file path and hash it
+fn extract_and_hash_project_id_gemini_cli(file_path: &Path) -> String {
+    // Gemini CLI path format: ~/.gemini/tmp/{PROJECT_ID}/chats/{session}.json
+    // Example: "/home/user/.gemini/tmp/project-abc123/chats/session.json"
 
     let path_components: Vec<_> = file_path.components().collect();
     for (i, component) in path_components.iter().enumerate() {
@@ -179,37 +179,37 @@ fn extract_and_hash_project_id_qwen_code(file_path: &Path) -> String {
 }
 
 // Cost calculation using the centralized model system
-fn calculate_qwen_cost(tokens: &QwenCodeTokens, model_name: &str) -> f64 {
+fn calculate_gemini_cost(tokens: &GeminiCliTokens, model_name: &str) -> f64 {
     let total_input_tokens = tokens.input + tokens.thoughts + tokens.tool;
 
     let input_cost = calculate_input_cost(model_name, total_input_tokens);
     let output_cost = calculate_output_cost(model_name, tokens.output);
-    let cache_cost = calculate_cache_cost(model_name, 0, tokens.cached); // Qwen Code doesn't have cache creation
+    let cache_cost = calculate_cache_cost(model_name, 0, tokens.cached); // Gemini CLI doesn't have cache creation
 
     input_cost + output_cost + cache_cost
 }
 
 // JSON session parsing (not JSONL)
 fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
-    let project_hash = extract_and_hash_project_id_qwen_code(file_path);
+    let project_hash = extract_and_hash_project_id_gemini_cli(file_path);
     let file_path_str = file_path.to_string_lossy();
     let mut entries = Vec::new();
 
     // Parse the complete session JSON
-    let session: QwenCodeSession =
+    let session: GeminiCliSession =
         simd_json::from_slice(&mut std::fs::read_to_string(file_path)?.into_bytes())?;
 
     // Process each message in the session
     for message in session.messages {
         match message {
-            QwenCodeMessage::User {
+            GeminiCliMessage::User {
                 id: _,
                 timestamp,
                 content: _,
             } => {
                 entries.push(ConversationMessage {
                     date: timestamp,
-                    application: Application::QwenCode,
+                    application: Application::GeminiCli,
                     project_hash: project_hash.clone(),
                     local_hash: None,
                     global_hash: hash_text(&format!(
@@ -221,9 +221,9 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                     model: None,
                     stats: Stats::default(),
                     role: MessageRole::User,
-            content: None,                });
+                });
             }
-            QwenCodeMessage::Qwen {
+            GeminiCliMessage::Gemini {
                 id: _,
                 timestamp,
                 content: _,
@@ -240,11 +240,11 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                 stats.cache_creation_tokens = 0;
                 stats.cache_read_tokens = 0;
                 stats.cached_tokens = tokens.cached;
-                stats.cost = calculate_qwen_cost(&tokens, &model);
+                stats.cost = calculate_gemini_cost(&tokens, &model);
                 stats.tool_calls = tool_calls.len() as u32;
 
                 entries.push(ConversationMessage {
-                    application: Application::QwenCode,
+                    application: Application::GeminiCli,
                     model: Some(model),
                     local_hash: None,
                     global_hash: hash_text(&format!(
@@ -257,7 +257,7 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                     conversation_hash: hash_text(&file_path.to_string_lossy()),
                     stats,
                     role: MessageRole::Assistant,
-            content: None,                });
+                });
             }
             _ => {}
         }
@@ -267,9 +267,9 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
 }
 
 #[async_trait]
-impl Analyzer for QwenCodeAnalyzer {
+impl Analyzer for GeminiCliAnalyzer {
     fn display_name(&self) -> &'static str {
-        "Qwen Code"
+        "Gemini CLI"
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
@@ -277,7 +277,7 @@ impl Analyzer for QwenCodeAnalyzer {
 
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
-            patterns.push(format!("{home_str}/.qwen/tmp/*/chats/*.json"));
+            patterns.push(format!("{home_str}/.gemini/tmp/*/chats/*.json"));
         }
 
         patterns
@@ -310,7 +310,7 @@ impl Analyzer for QwenCodeAnalyzer {
                 Ok(messages) => Some(messages),
                 Err(e) => {
                     eprintln!(
-                        "Failed to parse Qwen Code session file {}: {e:#}",
+                        "Failed to parse Gemini session file {}: {e:#}",
                         source.path.display(),
                     );
                     None

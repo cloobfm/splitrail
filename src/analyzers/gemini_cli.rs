@@ -221,7 +221,7 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                     model: None,
                     stats: Stats::default(),
                     role: MessageRole::User,
-                });
+            content: None,                });
             }
             GeminiCliMessage::Gemini {
                 id: _,
@@ -257,7 +257,7 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                     conversation_hash: hash_text(&file_path.to_string_lossy()),
                     stats,
                     role: MessageRole::Assistant,
-                });
+            content: None,                });
             }
             _ => {}
         }

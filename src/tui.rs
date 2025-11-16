@@ -1123,12 +1123,14 @@ fn draw_summary_view(
         active_clis,
     } = summary_data;
 
-    // Split area into parts: spacing + overview table + spacing + CLI breakdown table
+    // Split area into parts: spacing + overview table + spacing + CLI breakdown table + visual panels
     let chunks = Layout::vertical([
         Constraint::Length(1),  // Space above overview
         Constraint::Length(11), // Overview table (header + 8 rows + border)
         Constraint::Length(1),  // Space between tables
-        Constraint::Min(0),     // CLI breakdown table
+        Constraint::Length(13), // CLI breakdown table (fixed height)
+        Constraint::Length(1),  // Space before visual panels
+        Constraint::Min(0),     // Visual CLI panels (takes remaining space)
     ])
     .split(area);
 
@@ -1602,6 +1604,171 @@ fn draw_summary_view(
         .column_spacing(2);
 
     frame.render_widget(cli_table, chunks[3]);
+
+    // Draw visual CLI panels
+    draw_visual_cli_panels(frame, chunks[5], filtered_stats, &cli_data, format_options);
+}
+
+// Helper function to create a horizontal bar visualization
+fn create_bar(value: u64, max_value: u64, width: usize, color: Color) -> Line<'static> {
+    let filled = if max_value > 0 {
+        ((value as f64 / max_value as f64) * width as f64) as usize
+    } else {
+        0
+    };
+    let filled = filled.min(width);
+    let empty = width.saturating_sub(filled);
+
+    let filled_chars = "█".repeat(filled);
+    let empty_chars = "░".repeat(empty);
+
+    Line::from(vec![
+        Span::styled(filled_chars, Style::default().fg(color)),
+        Span::styled(empty_chars, Style::default().fg(Color::DarkGray)),
+    ])
+}
+
+// Helper function to create a percentage display
+fn create_percentage_bar(value: u64, total: u64, width: usize, color: Color) -> (Line<'static>, String) {
+    let percentage = if total > 0 {
+        (value as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let bar = create_bar(value, total, width, color);
+    let pct_text = format!("{:>5.1}%", percentage);
+
+    (bar, pct_text)
+}
+
+// Helper to create activity sparkline for last hour
+fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> String {
+    let now = chrono::Utc::now();
+
+    // Create 60 buckets (1-minute intervals for last hour)
+    let mut buckets = vec![0u32; 60];
+
+    for msg in &stats.messages {
+        let age = now.signed_duration_since(msg.date);
+        if age.num_seconds() < 3600 && age.num_seconds() >= 0 {
+            let bucket_idx = (age.num_seconds() / 60) as usize; // 60 sec = 1 min
+            if bucket_idx < 60 {
+                buckets[59 - bucket_idx] += 1;
+            }
+        }
+    }
+
+    // Find max for scaling
+    let max = *buckets.iter().max().unwrap_or(&1).max(&1);
+
+    // Create sparkline
+    let chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    buckets.iter()
+        .map(|&count| {
+            if count == 0 {
+                ' '
+            } else {
+                let idx = ((count as f64 / max as f64) * (chars.len() - 1) as f64) as usize;
+                chars[idx.min(chars.len() - 1)]
+            }
+        })
+        .collect()
+}
+
+// Get last message preview
+// TODO: Add message content storage to ConversationMessage to show actual message text
+fn get_last_message_preview(stats: &AgenticCodingToolStats, _max_len: usize) -> (String, String) {
+    if let Some(last_msg) = stats.messages.iter().max_by_key(|msg| msg.date) {
+        let role = match last_msg.role {
+            crate::types::MessageRole::User => "You",
+            crate::types::MessageRole::Assistant => &stats.analyzer_name,
+        };
+
+        // TODO: Once we add message content to ConversationMessage, show actual message here
+        // For now, show metadata about the message
+        let preview = if last_msg.stats.tool_calls > 0 {
+            format!("used {} tools • {}m ago",
+                last_msg.stats.tool_calls,
+                chrono::Utc::now().signed_duration_since(last_msg.date).num_minutes().max(0)
+            )
+        } else {
+            format!("{}m ago",
+                chrono::Utc::now().signed_duration_since(last_msg.date).num_minutes().max(0)
+            )
+        };
+
+        (role.to_string(), preview)
+    } else {
+        ("—".to_string(), "No activity".to_string())
+    }
+}
+
+// Draw visual CLI panels section (compact 2-line design)
+fn draw_visual_cli_panels(
+    frame: &mut Frame,
+    area: Rect,
+    filtered_stats: &[&AgenticCodingToolStats],
+    cli_data: &[(String, u64, u64, u64, u64, f64, String, String, u64, u64, String)],
+    _format_options: &NumberFormatOptions,
+) {
+    if filtered_stats.is_empty() {
+        return;
+    }
+
+    let mut lines = Vec::new();
+
+    // Add blank line for spacing
+    lines.push(Line::from(""));
+
+    for (idx, stats) in filtered_stats.iter().enumerate() {
+        let (cli_name, _cached, _input, _output, _reasoning, cost, _idle, _active, sessions, messages, state) = &cli_data[idx];
+
+        // Line 1: CLI name, state, activity sparkline
+        let sparkline = create_activity_sparkline(stats);
+        let (last_role, last_time) = get_last_message_preview(stats, 50);
+
+        let name_color = match state.as_str() {
+            s if s.contains("Active") => Color::Green,
+            s if s.contains("Waiting") => Color::Yellow,
+            s if s.contains("Processing") => Color::Blue,
+            s if s.contains("Idle") => Color::DarkGray,
+            _ => Color::Gray,
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:12}", cli_name), Style::default().fg(name_color).bold()),
+            Span::raw(" "),
+            Span::styled(state.chars().next().unwrap_or('⚫').to_string(), Style::default()),
+            Span::raw(" "),
+            Span::styled(sparkline, Style::default().fg(Color::Cyan)),
+            Span::raw(" idle: "),
+            Span::styled(_idle.clone(), Style::default().fg(Color::DarkGray)),
+        ]));
+
+        // Line 2: Last message preview
+        let preview_width = area.width.saturating_sub(15) as usize;
+        let last_msg_text = format!("{}: {}", last_role, last_time);
+        let truncated = if last_msg_text.len() > preview_width {
+            format!("{}…", &last_msg_text[..preview_width.saturating_sub(1)])
+        } else {
+            last_msg_text
+        };
+
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(truncated, Style::default().fg(Color::DarkGray).italic()),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title("📊 Live Activity (last hour)")
+                .title_style(Style::default().bold().fg(Color::Cyan)),
+        );
+
+    frame.render_widget(paragraph, area);
 }
 
 #[derive(Default, Clone)]

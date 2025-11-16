@@ -433,7 +433,7 @@ where
             stats: extract_tool_stats(&content, &tool_use_result),
             // Default to AI.
             role: MessageRole::Assistant,
-            content: None,        };
+        };
         match usage {
             Some(usage) => {
                 let model = match &model {
@@ -643,7 +643,7 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                stats: Stats {
                     input_tokens: 10, // Different from others
                     output_tokens: 2, // thinking block
                     tool_calls: 0,
@@ -659,7 +659,7 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                stats: Stats {
                     input_tokens: 5,  // Different from others
                     output_tokens: 2, // text block
                     tool_calls: 0,
@@ -675,7 +675,7 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                stats: Stats {
                     input_tokens: 0,    // Different from others
                     output_tokens: 447, // tool_use block
                     tool_calls: 1,
@@ -714,7 +714,7 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                stats: Stats {
                     output_tokens: 4, // All blocks report same total
                     input_tokens: 100,
                     tool_calls: 2,
@@ -730,7 +730,7 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                stats: Stats {
                     output_tokens: 4,  // Identical
                     input_tokens: 100, // Identical
                     tool_calls: 2,     // Not checked for identity, but will be kept
@@ -766,7 +766,7 @@ mod tests {
             project_hash: "proj".to_string(),
             conversation_hash: "conv".to_string(),
             role: MessageRole::Assistant,
-            content: None,            stats: Stats {
+            stats: Stats {
                 input_tokens: 100,
                 output_tokens: 4,
                 cache_creation_tokens: 0,
@@ -786,7 +786,7 @@ mod tests {
             project_hash: "proj".to_string(),
             conversation_hash: "conv".to_string(),
             role: MessageRole::Assistant,
-            content: None,            stats: Stats {
+            stats: Stats {
                 input_tokens: 100,
                 output_tokens: 4,
                 cache_creation_tokens: 0,
@@ -820,7 +820,7 @@ mod tests {
             project_hash: "proj".to_string(),
             conversation_hash: "conv".to_string(),
             role: MessageRole::Assistant,
-            content: None,            stats: Stats {
+            stats: Stats {
                 input_tokens: 10,
                 output_tokens: 2,
                 ..Default::default()
@@ -842,7 +842,7 @@ mod tests {
             project_hash: "proj".to_string(),
             conversation_hash: "conv".to_string(),
             role: MessageRole::Assistant,
-            content: None,            stats: Stats {
+            stats: Stats {
                 input_tokens: 0,
                 output_tokens: 447,
                 tool_calls: 1,
