@@ -234,11 +234,10 @@ async fn run_app(
                     }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    // On summary tab, navigate through days
+                    // On summary tab, navigate through days (towards today)
                     if *selected_tab == 0 {
-                        // Limit to 30 days back
-                        if *summary_day_offset < 30 {
-                            *summary_day_offset += 1;
+                        if *summary_day_offset > 0 {
+                            *summary_day_offset -= 1;
                             cached_summary_data =
                                 Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
                             needs_redraw = true;
@@ -269,10 +268,11 @@ async fn run_app(
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    // On summary tab, navigate through days (back towards today)
+                    // On summary tab, navigate through days (back in time)
                     if *selected_tab == 0 {
-                        if *summary_day_offset > 0 {
-                            *summary_day_offset -= 1;
+                        // Limit to 30 days back
+                        if *summary_day_offset < 30 {
+                            *summary_day_offset += 1;
                             cached_summary_data =
                                 Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
                             needs_redraw = true;
@@ -1425,13 +1425,13 @@ fn draw_summary_view(
                     "🔵 Processing".to_string()
                 } else if seconds_since_last < 900 {
                     // No activity in last 15 min but recent = idle
-                    "⚪ Idle".to_string()
+                    "● Idle".to_string()
                 } else {
                     // Old activity = inactive
-                    "⚫ Inactive".to_string()
+                    "○ Inactive".to_string()
                 }
             } else {
-                "⚫ No data".to_string()
+                "○ No data".to_string()
             };
 
         cli_data.push((
@@ -1662,12 +1662,12 @@ fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> String {
     // Find max for scaling
     let max = *buckets.iter().max().unwrap_or(&1).max(&1);
 
-    // Create sparkline
+    // Create sparkline with baseline
     let chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     buckets.iter()
         .map(|&count| {
             if count == 0 {
-                ' '
+                '▁'
             } else {
                 let idx = ((count as f64 / max as f64) * (chars.len() - 1) as f64) as usize;
                 chars[idx.min(chars.len() - 1)]
@@ -1739,10 +1739,10 @@ fn draw_visual_cli_panels(
         lines.push(Line::from(vec![
             Span::styled(format!("{:12}", cli_name), Style::default().fg(name_color).bold()),
             Span::raw(" "),
+            Span::styled(sparkline, Style::default().fg(Color::Cyan)),
+            Span::raw("   "),
             Span::styled(state.chars().next().unwrap_or('⚫').to_string(), Style::default()),
             Span::raw(" "),
-            Span::styled(sparkline, Style::default().fg(Color::Cyan)),
-            Span::raw(" idle: "),
             Span::styled(_idle.clone(), Style::default().fg(Color::DarkGray)),
         ]));
 
@@ -1759,6 +1759,9 @@ fn draw_visual_cli_panels(
             Span::raw("  "),
             Span::styled(truncated, Style::default().fg(Color::DarkGray).italic()),
         ]));
+
+        // Add blank line for spacing between CLI entries
+        lines.push(Line::from(""));
     }
 
     let paragraph = Paragraph::new(lines)
