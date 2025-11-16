@@ -992,10 +992,10 @@ fn draw_daily_stats_table(
             Constraint::Length(1),  // Arrow
             Constraint::Length(11), // Date
             Constraint::Length(10), // Cost
-            Constraint::Length(12), // Cached
-            Constraint::Length(8),  // Input
-            Constraint::Length(9),  // Output
-            Constraint::Length(11), // Reasoning
+            Constraint::Length(13), // Cached (was 12, increased for larger numbers)
+            Constraint::Length(12), // Input (was 8, increased significantly)
+            Constraint::Length(12), // Output (was 9, increased)
+            Constraint::Length(12), // Reasoning (was 11, increased)
             Constraint::Length(6),  // Convs
             Constraint::Length(6),  // Tools
             // Constraint::Length(23), // Lines
@@ -1069,16 +1069,22 @@ fn draw_summary_view(
 
     let rows = vec![
         Row::new(vec![
-            Cell::new(Line::from("💰 Cost").style(Style::default().fg(Color::Yellow))),
-            Cell::new(Line::from(format!("${:.2}", today_stats.cost)).right_aligned()),
-            Cell::new(Line::from(format!("${:.2}", week_stats.cost)).right_aligned()),
-            Cell::new(Line::from(format!("${:.2}", two_week_stats.cost)).right_aligned()),
+            Cell::new(Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta))),
+            Cell::new(Line::from(format_number(today_stats.cached_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(week_stats.cached_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(two_week_stats.cached_tokens, format_options)).right_aligned()),
         ]),
         Row::new(vec![
-            Cell::new(Line::from("🔢 Tokens").style(Style::default().fg(Color::LightBlue))),
-            Cell::new(Line::from(format_number(today_stats.total_tokens(), format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(week_stats.total_tokens(), format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(two_week_stats.total_tokens(), format_options)).right_aligned()),
+            Cell::new(Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue))),
+            Cell::new(Line::from(format_number(today_stats.input_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(week_stats.input_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(two_week_stats.input_tokens, format_options)).right_aligned()),
+        ]),
+        Row::new(vec![
+            Cell::new(Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan))),
+            Cell::new(Line::from(format_number(today_stats.output_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(week_stats.output_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(two_week_stats.output_tokens, format_options)).right_aligned()),
         ]),
         Row::new(vec![
             Cell::new(Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red))),
@@ -1103,6 +1109,12 @@ fn draw_summary_view(
             Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
             Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
+        ]),
+        Row::new(vec![
+            Cell::new(Line::from("💰 Cost").style(Style::default().fg(Color::Yellow))),
+            Cell::new(Line::from(format!("${:.2}", today_stats.cost)).right_aligned()),
+            Cell::new(Line::from(format!("${:.2}", week_stats.cost)).right_aligned()),
+            Cell::new(Line::from(format!("${:.2}", two_week_stats.cost)).right_aligned()),
         ]),
     ];
 
@@ -1150,10 +1162,6 @@ impl AggregatedStats {
         self.reasoning_tokens += day_stats.stats.reasoning_tokens;
         self.tool_calls += day_stats.stats.tool_calls as u64;
         self.conversations += day_stats.conversations as u64;
-    }
-
-    fn total_tokens(&self) -> u64 {
-        self.input_tokens + self.output_tokens + self.cached_tokens
     }
 }
 
