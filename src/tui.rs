@@ -61,6 +61,7 @@ pub fn run_tui(
 
     let mut selected_tab = 0;
     let mut scroll_offset = 0;
+    let mut summary_day_offset = 0; // 0 = today, 1 = yesterday, 2 = 2 days ago, etc.
 
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(run_app(
@@ -69,6 +70,7 @@ pub fn run_tui(
             format_options,
             &mut selected_tab,
             &mut scroll_offset,
+            &mut summary_day_offset,
             upload_status,
             file_watcher,
             &mut stats_manager,
@@ -87,6 +89,7 @@ async fn run_app(
     format_options: &NumberFormatOptions,
     selected_tab: &mut usize,
     scroll_offset: &mut usize,
+    summary_day_offset: &mut usize,
     upload_status: Arc<Mutex<UploadStatus>>,
     file_watcher: FileWatcher,
     stats_manager: &mut RealtimeStatsManager,
@@ -112,7 +115,7 @@ async fn run_app(
         .collect();
 
     // Cache summary data to avoid recalculating on every redraw
-    let mut cached_summary_data: Option<SummaryData> = Some(calculate_summary_data(&filtered_stats));
+    let mut cached_summary_data: Option<SummaryData> = Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
 
     loop {
         // Check for stats updates
@@ -126,7 +129,7 @@ async fn run_app(
                 .filter(|stats| has_data(stats))
                 .collect();
             // Recalculate summary data when stats change
-            cached_summary_data = Some(calculate_summary_data(&filtered_stats));
+            cached_summary_data = Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
             needs_redraw = true;
         }
 
@@ -223,9 +226,18 @@ async fn run_app(
                     }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                    // On summary tab, navigate through days
+                    if *selected_tab == 0 {
+                        // Limit to 30 days back
+                        if *summary_day_offset < 30 {
+                            *summary_day_offset += 1;
+                            cached_summary_data = Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
+                            needs_redraw = true;
+                        }
+                    }
+                    // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
                     // Summary tab is at index 0, so only process for tabs 1+
-                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                    else if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
                         let analyzer_index = *selected_tab - 1;
                         if analyzer_index < table_states.len()
                             && let Some(current_stats) = filtered_stats.get(analyzer_index)
@@ -246,9 +258,17 @@ async fn run_app(
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                    // On summary tab, navigate through days (back towards today)
+                    if *selected_tab == 0 {
+                        if *summary_day_offset > 0 {
+                            *summary_day_offset -= 1;
+                            cached_summary_data = Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
+                            needs_redraw = true;
+                        }
+                    }
+                    // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
                     // Summary tab is at index 0, so only process for tabs 1+
-                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                    else if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
                         let analyzer_index = *selected_tab - 1;
                         if analyzer_index < table_states.len()
                             && let Some(current_stats) = filtered_stats.get(analyzer_index)
@@ -450,7 +470,7 @@ fn draw_ui(
         .split(help_area);
 
         let help = if selected_tab == 0 {
-            Paragraph::new("Use ←/→ or h/l to switch tabs, q/Esc to quit")
+            Paragraph::new("Use ←/→ or h/l to switch tabs, ↑/↓ or j/k to navigate days, q/Esc to quit")
                 .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new("Use ←/→ or h/l to switch tabs, ↑/↓ or j/k to navigate, q/Esc to quit")
@@ -1013,19 +1033,21 @@ fn draw_daily_stats_table(
     total_rows
 }
 
-fn calculate_summary_data(filtered_stats: &[&AgenticCodingToolStats]) -> SummaryData {
+fn calculate_summary_data(filtered_stats: &[&AgenticCodingToolStats], day_offset: usize) -> SummaryData {
     // Calculate date ranges
     let now = chrono::Local::now();
     let today_start = now.date_naive();
     let yesterday_start = (now - ChronoDuration::days(1)).date_naive();
     let week_ago = (now - ChronoDuration::days(7)).date_naive();
     let two_weeks_ago = (now - ChronoDuration::days(14)).date_naive();
+    let selected_day = (now - ChronoDuration::days(day_offset as i64)).date_naive();
 
     // Aggregate data for each time period
     let mut today_stats = AggregatedStats::default();
     let mut yesterday_stats = AggregatedStats::default();
     let mut week_stats = AggregatedStats::default();
     let mut two_week_stats = AggregatedStats::default();
+    let mut selected_day_stats = AggregatedStats::default();
 
     for analyzer_stats in filtered_stats {
         for (date_str, day_stats) in &analyzer_stats.daily_stats {
@@ -1042,6 +1064,9 @@ fn calculate_summary_data(filtered_stats: &[&AgenticCodingToolStats]) -> Summary
                 if date >= two_weeks_ago {
                     two_week_stats.add_day(day_stats);
                 }
+                if date == selected_day {
+                    selected_day_stats.add_day(day_stats);
+                }
             }
         }
     }
@@ -1051,6 +1076,8 @@ fn calculate_summary_data(filtered_stats: &[&AgenticCodingToolStats]) -> Summary
         yesterday_stats,
         week_stats,
         two_week_stats,
+        selected_day_stats,
+        selected_day_offset: day_offset,
         active_clis: filtered_stats.len(),
     }
 }
@@ -1062,7 +1089,7 @@ fn draw_summary_view(
     format_options: &NumberFormatOptions,
     filtered_stats: &[&AgenticCodingToolStats],
 ) {
-    let SummaryData { today_stats, yesterday_stats, week_stats, two_week_stats, active_clis } = summary_data;
+    let SummaryData { today_stats, yesterday_stats, week_stats, two_week_stats, selected_day_stats: _, selected_day_offset, active_clis } = summary_data;
 
     // Split area into parts: spacing + overview table + spacing + CLI breakdown table
     let chunks = Layout::vertical([
@@ -1159,11 +1186,11 @@ fn draw_summary_view(
 
     frame.render_widget(table, chunks[1]);
 
-    // Calculate today's stats for each CLI
+    // Calculate stats for the selected day for each CLI
     let now = chrono::Local::now();
-    let today_start = now.date_naive();
+    let selected_day_date = (now - ChronoDuration::days(*selected_day_offset as i64)).date_naive();
 
-    // Collect today's data for each CLI
+    // Collect data for the selected day for each CLI
     let mut cli_data: Vec<(String, u64, u64, u64, u64, f64, String, String, u64, u64)> = Vec::new();
     for analyzer_stats in filtered_stats {
         let mut cached = 0u64;
@@ -1174,7 +1201,7 @@ fn draw_summary_view(
 
         for (date_str, day_stats) in &analyzer_stats.daily_stats {
             if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                if date == today_start {
+                if date == selected_day_date {
                     cached += day_stats.stats.cached_tokens;
                     input += day_stats.stats.input_tokens;
                     output += day_stats.stats.output_tokens;
@@ -1206,30 +1233,30 @@ fn draw_summary_view(
             "No data".to_string()
         };
 
-        // Get today's messages and sort by timestamp
-        let mut today_messages: Vec<_> = analyzer_stats
+        // Get messages for the selected day and sort by timestamp
+        let mut selected_day_messages: Vec<_> = analyzer_stats
             .messages
             .iter()
             .filter(|msg| {
-                msg.date.with_timezone(&chrono::Local).date_naive() == today_start
+                msg.date.with_timezone(&chrono::Local).date_naive() == selected_day_date
             })
             .collect();
-        today_messages.sort_by_key(|msg| msg.date);
+        selected_day_messages.sort_by_key(|msg| msg.date);
 
         // Count messages
-        let message_count = today_messages.len() as u64;
+        let message_count = selected_day_messages.len() as u64;
 
         // Count unique conversation sessions (by conversation_hash)
-        let unique_sessions: std::collections::HashSet<_> = today_messages
+        let unique_sessions: std::collections::HashSet<_> = selected_day_messages
             .iter()
             .map(|msg| &msg.conversation_hash)
             .collect();
         let session_count = unique_sessions.len() as u64;
 
         // Calculate actual active time (sum of gaps < 15 minutes between consecutive messages)
-        let active_time = if today_messages.len() > 1 {
+        let active_time = if selected_day_messages.len() > 1 {
             let mut total_active_seconds = 0i64;
-            for window in today_messages.windows(2) {
+            for window in selected_day_messages.windows(2) {
                 let gap = window[1].date.signed_duration_since(window[0].date);
                 let gap_seconds = gap.num_seconds();
                 // Only count gaps less than 15 minutes as "active time"
@@ -1357,9 +1384,20 @@ fn draw_summary_view(
         },
     ];
 
+    // Format the title based on the selected day offset
+    let table_title = if *selected_day_offset == 0 {
+        "📊 Today by CLI".to_string()
+    } else {
+        // Format the selected date as "Weekday, Month Day, Year"
+        let selected_date_with_tz = now - ChronoDuration::days(*selected_day_offset as i64);
+        let weekday = selected_date_with_tz.format("%A").to_string(); // Monday, Tuesday, etc.
+        let formatted_date = selected_date_with_tz.format("%B %d, %Y").to_string(); // November 15, 2025
+        format!("📊 {} ({}, {} days ago) by CLI", weekday, formatted_date, selected_day_offset)
+    };
+
     let cli_table = Table::new(cli_rows, cli_constraints)
         .header(cli_header)
-        .block(Block::default().title("📊 Today by CLI").title_style(Style::default().bold()))
+        .block(Block::default().title(table_title).title_style(Style::default().bold()))
         .column_spacing(2);
 
     frame.render_widget(cli_table, chunks[3]);
@@ -1382,6 +1420,8 @@ struct SummaryData {
     yesterday_stats: AggregatedStats,
     week_stats: AggregatedStats,
     two_week_stats: AggregatedStats,
+    selected_day_stats: AggregatedStats,
+    selected_day_offset: usize,
     active_clis: usize,
 }
 
