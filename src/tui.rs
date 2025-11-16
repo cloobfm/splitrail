@@ -1058,9 +1058,11 @@ fn draw_summary_view(
 ) {
     let SummaryData { today_stats, week_stats, two_week_stats, active_clis } = summary_data;
 
-    // Split area into two parts: overview table and CLI breakdown table
+    // Split area into parts: spacing + overview table + spacing + CLI breakdown table
     let chunks = Layout::vertical([
+        Constraint::Length(1),  // Space above overview
         Constraint::Length(11), // Overview table (header + 8 rows + border)
+        Constraint::Length(1),  // Space between tables
         Constraint::Min(0),     // CLI breakdown table
     ])
     .split(area);
@@ -1139,14 +1141,14 @@ fn draw_summary_view(
     .block(Block::default().title("📈 Summary Overview").title_style(Style::default().bold()))
     .column_spacing(2);
 
-    frame.render_widget(table, chunks[0]);
+    frame.render_widget(table, chunks[1]);
 
     // Calculate today's stats for each CLI
     let now = chrono::Local::now();
     let today_start = now.date_naive();
 
     // Collect today's data for each CLI
-    let mut cli_data: Vec<(String, u64, u64, u64, u64, f64)> = Vec::new();
+    let mut cli_data: Vec<(String, u64, u64, u64, u64, f64, String, String, u64, u64)> = Vec::new();
     for analyzer_stats in filtered_stats {
         let mut cached = 0u64;
         let mut input = 0u64;
@@ -1166,12 +1168,93 @@ fn draw_summary_view(
             }
         }
 
-        cli_data.push((analyzer_stats.analyzer_name.clone(), cached, input, output, reasoning, cost));
+        // Find most recent message timestamp
+        let last_activity = analyzer_stats
+            .messages
+            .iter()
+            .map(|msg| msg.date)
+            .max();
+
+        let idle_time = if let Some(last_msg_time) = last_activity {
+            let duration = chrono::Utc::now().signed_duration_since(last_msg_time);
+            if duration.num_days() > 0 {
+                format!("{}d ago", duration.num_days())
+            } else if duration.num_hours() > 0 {
+                format!("{}h ago", duration.num_hours())
+            } else if duration.num_minutes() > 0 {
+                format!("{}m ago", duration.num_minutes())
+            } else {
+                "Just now".to_string()
+            }
+        } else {
+            "No data".to_string()
+        };
+
+        // Get today's messages and sort by timestamp
+        let mut today_messages: Vec<_> = analyzer_stats
+            .messages
+            .iter()
+            .filter(|msg| {
+                msg.date.with_timezone(&chrono::Local).date_naive() == today_start
+            })
+            .collect();
+        today_messages.sort_by_key(|msg| msg.date);
+
+        // Count messages
+        let message_count = today_messages.len() as u64;
+
+        // Count unique conversation sessions (by conversation_hash)
+        let unique_sessions: std::collections::HashSet<_> = today_messages
+            .iter()
+            .map(|msg| &msg.conversation_hash)
+            .collect();
+        let session_count = unique_sessions.len() as u64;
+
+        // Calculate actual active time (sum of gaps < 15 minutes between consecutive messages)
+        let active_time = if today_messages.len() > 1 {
+            let mut total_active_seconds = 0i64;
+            for window in today_messages.windows(2) {
+                let gap = window[1].date.signed_duration_since(window[0].date);
+                let gap_seconds = gap.num_seconds();
+                // Only count gaps less than 15 minutes as "active time"
+                if gap_seconds > 0 && gap_seconds < 900 {
+                    total_active_seconds += gap_seconds;
+                }
+            }
+
+            let hours = total_active_seconds / 3600;
+            let minutes = (total_active_seconds % 3600) / 60;
+
+            if hours > 0 {
+                format!("{}h {}m", hours, minutes)
+            } else if minutes > 0 {
+                format!("{}m", minutes)
+            } else if total_active_seconds > 0 {
+                format!("{}s", total_active_seconds)
+            } else {
+                "< 1m".to_string()
+            }
+        } else {
+            "0m".to_string()
+        };
+
+        cli_data.push((
+            analyzer_stats.analyzer_name.clone(),
+            cached,
+            input,
+            output,
+            reasoning,
+            cost,
+            idle_time,
+            active_time,
+            session_count,
+            message_count,
+        ));
     }
 
     // Build CLI breakdown table with metrics as rows and CLIs as columns
     let mut cli_header_cells = vec![Cell::new("")];
-    for (cli_name, _, _, _, _, _) in &cli_data {
+    for (cli_name, _, _, _, _, _, _, _, _, _) in &cli_data {
         cli_header_cells.push(Cell::new(Text::from(cli_name.clone()).centered()));
     }
     let cli_header = Row::new(cli_header_cells)
@@ -1187,7 +1270,7 @@ fn draw_summary_view(
         // Cached Tokens row
         {
             let mut cells = vec![Cell::new(Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta)))];
-            for (_, cached, _, _, _, _) in &cli_data {
+            for (_, cached, _, _, _, _, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(Line::from(format_number(*cached, format_options)).right_aligned()));
             }
             Row::new(cells)
@@ -1195,7 +1278,7 @@ fn draw_summary_view(
         // Input Tokens row
         {
             let mut cells = vec![Cell::new(Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue)))];
-            for (_, _, input, _, _, _) in &cli_data {
+            for (_, _, input, _, _, _, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(Line::from(format_number(*input, format_options)).right_aligned()));
             }
             Row::new(cells)
@@ -1203,7 +1286,7 @@ fn draw_summary_view(
         // Output Tokens row
         {
             let mut cells = vec![Cell::new(Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan)))];
-            for (_, _, _, output, _, _) in &cli_data {
+            for (_, _, _, output, _, _, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(Line::from(format_number(*output, format_options)).right_aligned()));
             }
             Row::new(cells)
@@ -1211,15 +1294,47 @@ fn draw_summary_view(
         // Reasoning row
         {
             let mut cells = vec![Cell::new(Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red)))];
-            for (_, _, _, _, reasoning, _) in &cli_data {
+            for (_, _, _, _, reasoning, _, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(Line::from(format_number(*reasoning, format_options)).right_aligned()));
+            }
+            Row::new(cells)
+        },
+        // Sessions row
+        {
+            let mut cells = vec![Cell::new(Line::from("💬 Sessions").style(Style::default().fg(Color::Cyan)))];
+            for (_, _, _, _, _, _, _, _, sessions, _) in &cli_data {
+                cells.push(Cell::new(Line::from(format_number(*sessions, format_options)).right_aligned()));
+            }
+            Row::new(cells)
+        },
+        // Messages row
+        {
+            let mut cells = vec![Cell::new(Line::from("📨 Messages").style(Style::default().fg(Color::LightYellow)))];
+            for (_, _, _, _, _, _, _, _, _, messages) in &cli_data {
+                cells.push(Cell::new(Line::from(format_number(*messages, format_options)).right_aligned()));
+            }
+            Row::new(cells)
+        },
+        // Active Time row
+        {
+            let mut cells = vec![Cell::new(Line::from("⏱️ Active Time").style(Style::default().fg(Color::LightGreen)))];
+            for (_, _, _, _, _, _, _, active_time, _, _) in &cli_data {
+                cells.push(Cell::new(Line::from(active_time.clone()).right_aligned()));
+            }
+            Row::new(cells)
+        },
+        // Idle Time row
+        {
+            let mut cells = vec![Cell::new(Line::from("⏰ Idle Time").style(Style::default().fg(Color::DarkGray)))];
+            for (_, _, _, _, _, _, idle_time, _, _, _) in &cli_data {
+                cells.push(Cell::new(Line::from(idle_time.clone()).right_aligned()));
             }
             Row::new(cells)
         },
         // Cost row
         {
             let mut cells = vec![Cell::new(Line::from("💰 Cost").style(Style::default().fg(Color::Yellow)))];
-            for (_, _, _, _, _, cost) in &cli_data {
+            for (_, _, _, _, _, cost, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(Line::from(format!("${:.2}", cost)).right_aligned()));
             }
             Row::new(cells)
@@ -1231,7 +1346,7 @@ fn draw_summary_view(
         .block(Block::default().title("📊 Today by CLI").title_style(Style::default().bold()))
         .column_spacing(2);
 
-    frame.render_widget(cli_table, chunks[1]);
+    frame.render_widget(cli_table, chunks[3]);
 }
 
 #[derive(Default, Clone)]
