@@ -33,7 +33,18 @@ impl Analyzer for CodexCliAnalyzer {
 
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
-            patterns.push(format!("{home_str}/.codex/sessions/**/*.jsonl"));
+
+            // Watch today's session directory directly (no deep recursion!)
+            let today = chrono::Local::now();
+            let today_dir = format!("{home_str}/.codex/sessions/{}/{:02}/{:02}/*.jsonl",
+                today.format("%Y"), today.format("%m"), today.format("%d"));
+            patterns.push(today_dir);
+
+            // Also watch yesterday's directory for edge cases around midnight
+            let yesterday = today - chrono::Duration::days(1);
+            let yesterday_dir = format!("{home_str}/.codex/sessions/{}/{:02}/{:02}/*.jsonl",
+                yesterday.format("%Y"), yesterday.format("%m"), yesterday.format("%d"));
+            patterns.push(yesterday_dir);
         }
 
         patterns

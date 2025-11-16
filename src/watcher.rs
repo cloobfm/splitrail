@@ -1,14 +1,13 @@
 use anyhow::Result;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher, Config as NotifyConfig};
 use notify_types::event::{Event, EventKind};
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
-use crate::analyzer::AnalyzerRegistry;
+use crate::analyzer::{AnalyzerRegistry, AnalyzerWatchDir};
 use crate::config::Config;
 use crate::tui::UploadStatus;
 use crate::types::MultiAnalyzerStats;
@@ -25,18 +24,86 @@ pub struct FileWatcher {
     event_rx: Receiver<WatcherEvent>,
 }
 
+#[derive(Clone)]
+struct WatchDebugConfig {
+    analyzer_filter: Option<String>, // lowercase substring to match, None = log all
+}
+
+impl WatchDebugConfig {
+    fn from_env() -> Option<Self> {
+        match std::env::var("SPLITRAIL_DEBUG_WATCHERS") {
+            Ok(val) => {
+                let trimmed = val.trim();
+                if trimmed.is_empty()
+                    || trimmed == "1"
+                    || trimmed.eq_ignore_ascii_case("true")
+                    || trimmed.eq_ignore_ascii_case("all")
+                {
+                    Some(Self {
+                        analyzer_filter: None,
+                    })
+                } else {
+                    Some(Self {
+                        analyzer_filter: Some(trimmed.to_lowercase()),
+                    })
+                }
+            }
+            Err(_) => None,
+        }
+    }
+
+    fn matches(&self, analyzer_name: &str) -> bool {
+        match &self.analyzer_filter {
+            Some(filter) => analyzer_name.to_lowercase().contains(filter),
+            None => true,
+        }
+    }
+}
+
 impl FileWatcher {
     pub fn new(registry: &AnalyzerRegistry) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::channel();
 
         // Get directory to analyzer mapping from registry
         let dir_to_analyzer = registry.get_directory_to_analyzer_mapping();
-        let watched_dirs: HashSet<_> = dir_to_analyzer.keys().cloned().collect();
+        let debug_config = WatchDebugConfig::from_env();
+        if let Some(config) = &debug_config {
+            eprintln!(
+                "[watch] Debug logging enabled for analyzer filter: {}",
+                config
+                    .analyzer_filter
+                    .as_deref()
+                    .unwrap_or("<all analyzers>")
+            );
+            for entry in &dir_to_analyzer {
+                if config.matches(&entry.analyzer_name) {
+                    eprintln!(
+                        "[watch] {} -> match_dir={} watch_dir={} pattern={}",
+                        entry.analyzer_name,
+                        entry.match_dir.display(),
+                        entry.watch_dir.display(),
+                        entry.pattern.as_str()
+                    );
+                }
+            }
+        }
 
-        let mut watcher =
-            notify::recommended_watcher(move |res: Result<Event, notify::Error>| match res {
+        let debug_config_for_handler = debug_config.clone();
+        let watched_dirs: HashSet<_> = dir_to_analyzer
+            .iter()
+            .map(|entry| entry.watch_dir.clone())
+            .collect();
+
+        // Use RecommendedWatcher (FSEvents on macOS) with default config
+        let mut watcher = notify::recommended_watcher(
+            move |res: Result<Event, notify::Error>| match res {
                 Ok(event) => {
-                    if let Err(e) = handle_fs_event(event, &event_tx, &dir_to_analyzer) {
+                    if let Err(e) = handle_fs_event(
+                        event,
+                        &event_tx,
+                        &dir_to_analyzer,
+                        debug_config_for_handler.as_ref(),
+                    ) {
                         let _ = event_tx
                             .send(WatcherEvent::Error(format!("Event handling error: {e}")));
                     }
@@ -44,7 +111,8 @@ impl FileWatcher {
                 Err(e) => {
                     let _ = event_tx.send(WatcherEvent::Error(format!("Watch error: {e}")));
                 }
-            })?;
+            }
+        )?;
 
         // Start watching all directories
         for dir in &watched_dirs {
@@ -71,43 +139,29 @@ impl FileWatcher {
 fn handle_fs_event(
     event: Event,
     tx: &Sender<WatcherEvent>,
-    dir_to_analyzer: &HashMap<PathBuf, String>,
+    dir_to_analyzer: &[AnalyzerWatchDir],
+    debug_config: Option<&WatchDebugConfig>,
 ) -> Result<()> {
     // Only care about create, write, and remove events
     match event.kind {
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+            let mut notified_analyzers = HashSet::new();
             for path in &event.paths {
-                // Find which analyzer owns this file by checking which watched directory contains it
-                if let Some(analyzer_name) = find_analyzer_for_path(path, dir_to_analyzer) {
-                    let _ = tx.send(WatcherEvent::DataChanged(analyzer_name));
-                    break; // Only send one event per filesystem event
+                for entry in dir_to_analyzer {
+                    if !path.starts_with(&entry.watch_dir) {
+                        continue;
+                    }
+                    if path.starts_with(&entry.match_dir) || entry.pattern.matches_path(path) {
+                        if notified_analyzers.insert(entry.analyzer_name.clone()) {
+                            let _ = tx.send(WatcherEvent::DataChanged(entry.analyzer_name.clone()));
+                        }
+                    }
                 }
             }
         }
         _ => {}
     }
     Ok(())
-}
-
-fn find_analyzer_for_path(
-    file_path: &Path,
-    dir_to_analyzer: &HashMap<PathBuf, String>,
-) -> Option<String> {
-    // Find the longest matching directory path (most specific match)
-    let mut best_match: Option<(&PathBuf, &String)> = None;
-    let mut best_length = 0;
-
-    for (watched_dir, analyzer_name) in dir_to_analyzer {
-        if file_path.starts_with(watched_dir) {
-            let length = watched_dir.components().count();
-            if length > best_length {
-                best_length = length;
-                best_match = Some((watched_dir, analyzer_name));
-            }
-        }
-    }
-
-    best_match.map(|(_, analyzer_name)| analyzer_name.clone())
 }
 
 pub struct RealtimeStatsManager {
@@ -120,6 +174,10 @@ pub struct RealtimeStatsManager {
     upload_status: Option<Arc<Mutex<UploadStatus>>>,
     upload_in_progress: Arc<Mutex<bool>>,
     pending_upload: Arc<Mutex<bool>>,
+    last_reload_times: std::collections::HashMap<String, Instant>,
+    reload_debounce: Duration,
+    last_poll_time: Instant,
+    poll_interval: Duration,
 }
 
 impl RealtimeStatsManager {
@@ -134,10 +192,14 @@ impl RealtimeStatsManager {
             update_tx,
             update_rx,
             last_upload_time: None,
-            upload_debounce: Duration::from_secs(3), // Wait 3 seconds after changes before uploading
+            upload_debounce: Duration::from_secs(3),
             upload_status: None,
             upload_in_progress: Arc::new(Mutex::new(false)),
             pending_upload: Arc::new(Mutex::new(false)),
+            last_reload_times: std::collections::HashMap::new(),
+            reload_debounce: Duration::from_secs(2),
+            last_poll_time: Instant::now(),
+            poll_interval: Duration::from_secs(5), // Poll Codex CLI every 5 seconds
         })
     }
 
@@ -149,13 +211,72 @@ impl RealtimeStatsManager {
         self.update_rx.clone()
     }
 
+    /// Check if enough time has passed since last poll and reload Codex CLI if needed
+    pub async fn poll_codex_if_needed(&mut self) -> Result<()> {
+        // Skip polling if disabled via env var
+        if std::env::var("SPLITRAIL_DISABLE_POLLING").is_ok() {
+            return Ok(());
+        }
+
+        let now = Instant::now();
+        if now.duration_since(self.last_poll_time) >= self.poll_interval {
+            self.last_poll_time = now;
+
+            // Reload Codex CLI specifically
+            if let Some(analyzer) = self.registry.get_analyzer_by_display_name("Codex CLI") {
+                match analyzer.get_stats().await {
+                    Ok(new_stats) => {
+                        let mut updated_analyzer_stats = self.current_stats.analyzer_stats.clone();
+
+                        if let Some(pos) = updated_analyzer_stats
+                            .iter()
+                            .position(|s| s.analyzer_name == "Codex CLI")
+                        {
+                            updated_analyzer_stats[pos] = new_stats;
+                        } else {
+                            updated_analyzer_stats.push(new_stats);
+                        }
+
+                        self.current_stats = MultiAnalyzerStats {
+                            analyzer_stats: updated_analyzer_stats,
+                        };
+
+                        let _ = self.update_tx.send(self.current_stats.clone());
+                    }
+                    Err(_) => {} // Silently ignore polling errors
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn handle_watcher_event(&mut self, event: WatcherEvent) -> Result<()> {
         match event {
             WatcherEvent::DataChanged(analyzer_name) => {
+                // Check debounce - only reload if enough time has passed since last reload
+                let now = Instant::now();
+                if let Some(last_reload) = self.last_reload_times.get(&analyzer_name) {
+                    if now.duration_since(*last_reload) < self.reload_debounce {
+                        // Skip this reload, too soon
+                        return Ok(());
+                    }
+                }
+
+                // Update last reload time
+                self.last_reload_times.insert(analyzer_name.clone(), now);
+
+                // Only log Codex CLI reloads to reduce noise
+                if analyzer_name == "Codex CLI" {
+                    eprintln!("🔄 Reloading Codex CLI...");
+                }
+
                 // Reload data for the specific analyzer
                 if let Some(analyzer) = self.registry.get_analyzer_by_display_name(&analyzer_name) {
                     match analyzer.get_stats().await {
                         Ok(new_stats) => {
+                            if analyzer_name == "Codex CLI" {
+                                eprintln!("✅ Codex CLI updated - {} messages", new_stats.messages.len());
+                            }
                             // Update the stats for this analyzer
                             let mut updated_analyzer_stats =
                                 self.current_stats.analyzer_stats.clone();
@@ -182,13 +303,13 @@ impl RealtimeStatsManager {
                             self.trigger_auto_upload_if_enabled().await;
                         }
                         Err(e) => {
-                            eprintln!("Error reloading {analyzer_name} stats: {e}");
+                            eprintln!("❌ Error reloading {analyzer_name}: {e}");
                         }
                     }
                 }
             }
             WatcherEvent::Error(err) => {
-                eprintln!("File watcher error: {err}");
+                eprintln!("❌ Watcher error: {err}");
             }
         }
         Ok(())

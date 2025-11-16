@@ -115,7 +115,8 @@ async fn run_app(
         .collect();
 
     // Cache summary data to avoid recalculating on every redraw
-    let mut cached_summary_data: Option<SummaryData> = Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
+    let mut cached_summary_data: Option<SummaryData> =
+        Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
 
     loop {
         // Check for stats updates
@@ -129,7 +130,8 @@ async fn run_app(
                 .filter(|stats| has_data(stats))
                 .collect();
             // Recalculate summary data when stats change
-            cached_summary_data = Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
+            cached_summary_data =
+                Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
             needs_redraw = true;
         }
 
@@ -138,6 +140,11 @@ async fn run_app(
             if let Err(e) = stats_manager.handle_watcher_event(watcher_event).await {
                 eprintln!("Error handling watcher event: {e}");
             }
+        }
+
+        // Poll Codex CLI periodically (every 5 seconds)
+        if let Err(e) = stats_manager.poll_codex_if_needed().await {
+            eprintln!("Error polling Codex CLI: {e}");
         }
 
         // Check if upload status has changed or advance dots animation
@@ -220,7 +227,8 @@ async fn run_app(
                     }
                 }
                 KeyCode::Right | KeyCode::Char('l') => {
-                    if *selected_tab < filtered_stats.len() + 1 { // +1 for Summary tab
+                    if *selected_tab < filtered_stats.len() + 1 {
+                        // +1 for Summary tab
                         *selected_tab += 1;
                         needs_redraw = true;
                     }
@@ -231,7 +239,8 @@ async fn run_app(
                         // Limit to 30 days back
                         if *summary_day_offset < 30 {
                             *summary_day_offset += 1;
-                            cached_summary_data = Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
+                            cached_summary_data =
+                                Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
                             needs_redraw = true;
                         }
                     }
@@ -247,11 +256,13 @@ async fn run_app(
                                 && let Some(selected) = table_state.selected()
                                 && selected < total_rows.saturating_sub(1)
                             {
-                                table_state.select(Some(if selected == current_stats.daily_stats.len() {
-                                    selected + 2 // Skip separator row
-                                } else {
-                                    selected + 1
-                                }));
+                                table_state.select(Some(
+                                    if selected == current_stats.daily_stats.len() {
+                                        selected + 2 // Skip separator row
+                                    } else {
+                                        selected + 1
+                                    },
+                                ));
                                 needs_redraw = true;
                             }
                         }
@@ -262,7 +273,8 @@ async fn run_app(
                     if *selected_tab == 0 {
                         if *summary_day_offset > 0 {
                             *summary_day_offset -= 1;
-                            cached_summary_data = Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
+                            cached_summary_data =
+                                Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
                             needs_redraw = true;
                         }
                     }
@@ -328,7 +340,8 @@ async fn run_app(
                             if let Some(table_state) = table_states.get_mut(analyzer_index)
                                 && let Some(selected) = table_state.selected()
                             {
-                                let new_selected = (selected + 10).min(total_rows.saturating_sub(1));
+                                let new_selected =
+                                    (selected + 10).min(total_rows.saturating_sub(1));
                                 table_state.select(Some(new_selected));
                                 needs_redraw = true;
                             }
@@ -432,7 +445,13 @@ fn draw_ui(
         if selected_tab == 0 {
             // Summary view - show cached aggregated data across all analyzers
             if let Some(summary_data) = &cached_summary_data {
-                draw_summary_view(frame, chunks[2], summary_data, format_options, filtered_stats);
+                draw_summary_view(
+                    frame,
+                    chunks[2],
+                    summary_data,
+                    format_options,
+                    filtered_stats,
+                );
                 draw_summary_stats(frame, chunks[3], filtered_stats, format_options);
             }
         } else {
@@ -470,8 +489,10 @@ fn draw_ui(
         .split(help_area);
 
         let help = if selected_tab == 0 {
-            Paragraph::new("Use ←/→ or h/l to switch tabs, ↑/↓ or j/k to navigate days, q/Esc to quit")
-                .style(Style::default().add_modifier(Modifier::DIM))
+            Paragraph::new(
+                "Use ←/→ or h/l to switch tabs, ↑/↓ or j/k to navigate days, q/Esc to quit",
+            )
+            .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new("Use ←/→ or h/l to switch tabs, ↑/↓ or j/k to navigate, q/Esc to quit")
                 .style(Style::default().add_modifier(Modifier::DIM))
@@ -1033,7 +1054,10 @@ fn draw_daily_stats_table(
     total_rows
 }
 
-fn calculate_summary_data(filtered_stats: &[&AgenticCodingToolStats], day_offset: usize) -> SummaryData {
+fn calculate_summary_data(
+    filtered_stats: &[&AgenticCodingToolStats],
+    day_offset: usize,
+) -> SummaryData {
     // Calculate date ranges
     let now = chrono::Local::now();
     let today_start = now.date_naive();
@@ -1089,7 +1113,15 @@ fn draw_summary_view(
     format_options: &NumberFormatOptions,
     filtered_stats: &[&AgenticCodingToolStats],
 ) {
-    let SummaryData { today_stats, yesterday_stats, week_stats, two_week_stats, selected_day_stats: _, selected_day_offset, active_clis } = summary_data;
+    let SummaryData {
+        today_stats,
+        yesterday_stats,
+        week_stats,
+        two_week_stats,
+        selected_day_stats: _,
+        selected_day_offset,
+        active_clis,
+    } = summary_data;
 
     // Split area into parts: spacing + overview table + spacing + CLI breakdown table
     let chunks = Layout::vertical([
@@ -1114,52 +1146,131 @@ fn draw_summary_view(
     let rows = vec![
         Row::new(vec![
             Cell::new(Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta))),
-            Cell::new(Line::from(format_number(today_stats.cached_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(yesterday_stats.cached_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(week_stats.cached_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(two_week_stats.cached_tokens, format_options)).right_aligned()),
+            Cell::new(
+                Line::from(format_number(today_stats.cached_tokens, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(yesterday_stats.cached_tokens, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(week_stats.cached_tokens, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(two_week_stats.cached_tokens, format_options))
+                    .right_aligned(),
+            ),
         ]),
         Row::new(vec![
             Cell::new(Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue))),
-            Cell::new(Line::from(format_number(today_stats.input_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(yesterday_stats.input_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(week_stats.input_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(two_week_stats.input_tokens, format_options)).right_aligned()),
+            Cell::new(
+                Line::from(format_number(today_stats.input_tokens, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(yesterday_stats.input_tokens, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(week_stats.input_tokens, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(two_week_stats.input_tokens, format_options))
+                    .right_aligned(),
+            ),
         ]),
         Row::new(vec![
             Cell::new(Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan))),
-            Cell::new(Line::from(format_number(today_stats.output_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(yesterday_stats.output_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(week_stats.output_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(two_week_stats.output_tokens, format_options)).right_aligned()),
+            Cell::new(
+                Line::from(format_number(today_stats.output_tokens, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(yesterday_stats.output_tokens, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(week_stats.output_tokens, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(two_week_stats.output_tokens, format_options))
+                    .right_aligned(),
+            ),
         ]),
         Row::new(vec![
             Cell::new(Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red))),
-            Cell::new(Line::from(format_number(today_stats.reasoning_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(yesterday_stats.reasoning_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(week_stats.reasoning_tokens, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(two_week_stats.reasoning_tokens, format_options)).right_aligned()),
+            Cell::new(
+                Line::from(format_number(today_stats.reasoning_tokens, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(
+                    yesterday_stats.reasoning_tokens,
+                    format_options,
+                ))
+                .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(week_stats.reasoning_tokens, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(
+                    two_week_stats.reasoning_tokens,
+                    format_options,
+                ))
+                .right_aligned(),
+            ),
         ]),
         Row::new(vec![
             Cell::new(Line::from("🛠️ Tool Calls").style(Style::default().fg(Color::LightGreen))),
-            Cell::new(Line::from(format_number(today_stats.tool_calls, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(yesterday_stats.tool_calls, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(week_stats.tool_calls, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(two_week_stats.tool_calls, format_options)).right_aligned()),
+            Cell::new(
+                Line::from(format_number(today_stats.tool_calls, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(yesterday_stats.tool_calls, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(week_stats.tool_calls, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(two_week_stats.tool_calls, format_options))
+                    .right_aligned(),
+            ),
         ]),
         Row::new(vec![
             Cell::new(Line::from("💬 Conversations").style(Style::default().fg(Color::Cyan))),
-            Cell::new(Line::from(format_number(today_stats.conversations, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(yesterday_stats.conversations, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(week_stats.conversations, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(two_week_stats.conversations, format_options)).right_aligned()),
+            Cell::new(
+                Line::from(format_number(today_stats.conversations, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(yesterday_stats.conversations, format_options))
+                    .right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(week_stats.conversations, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(two_week_stats.conversations, format_options))
+                    .right_aligned(),
+            ),
         ]),
         Row::new(vec![
             Cell::new(Line::from("📊 CLIs Active").style(Style::default().fg(Color::Magenta))),
-            Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
+            Cell::new(
+                Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
+            ),
+            Cell::new(
+                Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
+            ),
         ]),
         Row::new(vec![
             Cell::new(Line::from("💰 Cost").style(Style::default().fg(Color::Yellow))),
@@ -1181,7 +1292,11 @@ fn draw_summary_view(
         ],
     )
     .header(header)
-    .block(Block::default().title("📈 Summary Overview").title_style(Style::default().bold()))
+    .block(
+        Block::default()
+            .title("📈 Summary Overview")
+            .title_style(Style::default().bold()),
+    )
     .column_spacing(2);
 
     frame.render_widget(table, chunks[1]);
@@ -1212,11 +1327,7 @@ fn draw_summary_view(
         }
 
         // Find most recent message timestamp
-        let last_activity = analyzer_stats
-            .messages
-            .iter()
-            .map(|msg| msg.date)
-            .max();
+        let last_activity = analyzer_stats.messages.iter().map(|msg| msg.date).max();
 
         let idle_time = if let Some(last_msg_time) = last_activity {
             let duration = chrono::Utc::now().signed_duration_since(last_msg_time);
@@ -1237,9 +1348,7 @@ fn draw_summary_view(
         let mut selected_day_messages: Vec<_> = analyzer_stats
             .messages
             .iter()
-            .filter(|msg| {
-                msg.date.with_timezone(&chrono::Local).date_naive() == selected_day_date
-            })
+            .filter(|msg| msg.date.with_timezone(&chrono::Local).date_naive() == selected_day_date)
             .collect();
         selected_day_messages.sort_by_key(|msg| msg.date);
 
@@ -1281,6 +1390,48 @@ fn draw_summary_view(
             "0m".to_string()
         };
 
+        // Determine CLI state based on last message and recent activity
+        let state =
+            if let Some(last_message) = analyzer_stats.messages.iter().max_by_key(|msg| msg.date) {
+                let time_since_last = chrono::Utc::now().signed_duration_since(last_message.date);
+                let seconds_since_last = time_since_last.num_seconds();
+
+                // Check for recent consecutive assistant messages (indicates active work)
+                let recent_assistant_messages = analyzer_stats
+                    .messages
+                    .iter()
+                    .filter(|msg| {
+                        let age = chrono::Utc::now()
+                            .signed_duration_since(msg.date)
+                            .num_seconds();
+                        age < 60 && matches!(msg.role, crate::types::MessageRole::Assistant)
+                    })
+                    .count();
+
+                if seconds_since_last < 30 && recent_assistant_messages > 1 {
+                    // Multiple recent assistant messages = actively working
+                    "🟢 Active".to_string()
+                } else if matches!(last_message.role, crate::types::MessageRole::Assistant)
+                    && seconds_since_last < 120
+                {
+                    // Last message from assistant, recent = waiting for input
+                    "🟡 Waiting".to_string()
+                } else if matches!(last_message.role, crate::types::MessageRole::User)
+                    && seconds_since_last < 120
+                {
+                    // Last message from user, recent = processing
+                    "🔵 Processing".to_string()
+                } else if seconds_since_last < 900 {
+                    // No activity in last 15 min but recent = idle
+                    "⚪ Idle".to_string()
+                } else {
+                    // Old activity = inactive
+                    "⚫ Inactive".to_string()
+                }
+            } else {
+                "⚫ No data".to_string()
+            };
+
         cli_data.push((
             analyzer_stats.analyzer_name.clone(),
             cached,
@@ -1312,55 +1463,81 @@ fn draw_summary_view(
     let cli_rows = vec![
         // Cached Tokens row
         {
-            let mut cells = vec![Cell::new(Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta)))];
+            let mut cells = vec![Cell::new(
+                Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta)),
+            )];
             for (_, cached, _, _, _, _, _, _, _, _) in &cli_data {
-                cells.push(Cell::new(Line::from(format_number(*cached, format_options)).right_aligned()));
+                cells.push(Cell::new(
+                    Line::from(format_number(*cached, format_options)).right_aligned(),
+                ));
             }
             Row::new(cells)
         },
         // Input Tokens row
         {
-            let mut cells = vec![Cell::new(Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue)))];
+            let mut cells = vec![Cell::new(
+                Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue)),
+            )];
             for (_, _, input, _, _, _, _, _, _, _) in &cli_data {
-                cells.push(Cell::new(Line::from(format_number(*input, format_options)).right_aligned()));
+                cells.push(Cell::new(
+                    Line::from(format_number(*input, format_options)).right_aligned(),
+                ));
             }
             Row::new(cells)
         },
         // Output Tokens row
         {
-            let mut cells = vec![Cell::new(Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan)))];
+            let mut cells = vec![Cell::new(
+                Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan)),
+            )];
             for (_, _, _, output, _, _, _, _, _, _) in &cli_data {
-                cells.push(Cell::new(Line::from(format_number(*output, format_options)).right_aligned()));
+                cells.push(Cell::new(
+                    Line::from(format_number(*output, format_options)).right_aligned(),
+                ));
             }
             Row::new(cells)
         },
         // Reasoning row
         {
-            let mut cells = vec![Cell::new(Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red)))];
+            let mut cells = vec![Cell::new(
+                Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red)),
+            )];
             for (_, _, _, _, reasoning, _, _, _, _, _) in &cli_data {
-                cells.push(Cell::new(Line::from(format_number(*reasoning, format_options)).right_aligned()));
+                cells.push(Cell::new(
+                    Line::from(format_number(*reasoning, format_options)).right_aligned(),
+                ));
             }
             Row::new(cells)
         },
         // Sessions row
         {
-            let mut cells = vec![Cell::new(Line::from("💬 Sessions").style(Style::default().fg(Color::Cyan)))];
+            let mut cells = vec![Cell::new(
+                Line::from("💬 Sessions").style(Style::default().fg(Color::Cyan)),
+            )];
             for (_, _, _, _, _, _, _, _, sessions, _) in &cli_data {
-                cells.push(Cell::new(Line::from(format_number(*sessions, format_options)).right_aligned()));
+                cells.push(Cell::new(
+                    Line::from(format_number(*sessions, format_options)).right_aligned(),
+                ));
             }
             Row::new(cells)
         },
         // Messages row
         {
-            let mut cells = vec![Cell::new(Line::from("📨 Messages").style(Style::default().fg(Color::LightYellow)))];
+            let mut cells = vec![Cell::new(
+                Line::from("📨 Messages").style(Style::default().fg(Color::LightYellow)),
+            )];
             for (_, _, _, _, _, _, _, _, _, messages) in &cli_data {
-                cells.push(Cell::new(Line::from(format_number(*messages, format_options)).right_aligned()));
+                cells.push(Cell::new(
+                    Line::from(format_number(*messages, format_options)).right_aligned(),
+                ));
             }
             Row::new(cells)
         },
         // Active Time row
         {
-            let mut cells = vec![Cell::new(Line::from("⏱️ Active Time").style(Style::default().fg(Color::LightGreen)))];
+            let mut cells = vec![Cell::new(
+                Line::from("⏱️ Active Time").style(Style::default().fg(Color::LightGreen)),
+            )];
             for (_, _, _, _, _, _, _, active_time, _, _) in &cli_data {
                 cells.push(Cell::new(Line::from(active_time.clone()).right_aligned()));
             }
@@ -1368,7 +1545,9 @@ fn draw_summary_view(
         },
         // Idle Time row
         {
-            let mut cells = vec![Cell::new(Line::from("⏰ Idle Time").style(Style::default().fg(Color::DarkGray)))];
+            let mut cells = vec![Cell::new(
+                Line::from("⏰ Idle Time").style(Style::default().fg(Color::DarkGray)),
+            )];
             for (_, _, _, _, _, _, idle_time, _, _, _) in &cli_data {
                 cells.push(Cell::new(Line::from(idle_time.clone()).right_aligned()));
             }
@@ -1376,9 +1555,13 @@ fn draw_summary_view(
         },
         // Cost row
         {
-            let mut cells = vec![Cell::new(Line::from("💰 Cost").style(Style::default().fg(Color::Yellow)))];
+            let mut cells = vec![Cell::new(
+                Line::from("💰 Cost").style(Style::default().fg(Color::Yellow)),
+            )];
             for (_, _, _, _, _, cost, _, _, _, _) in &cli_data {
-                cells.push(Cell::new(Line::from(format!("${:.2}", cost)).right_aligned()));
+                cells.push(Cell::new(
+                    Line::from(format!("${:.2}", cost)).right_aligned(),
+                ));
             }
             Row::new(cells)
         },
@@ -1392,12 +1575,19 @@ fn draw_summary_view(
         let selected_date_with_tz = now - ChronoDuration::days(*selected_day_offset as i64);
         let weekday = selected_date_with_tz.format("%A").to_string(); // Monday, Tuesday, etc.
         let formatted_date = selected_date_with_tz.format("%B %d, %Y").to_string(); // November 15, 2025
-        format!("📊 {} ({}, {} days ago) by CLI", weekday, formatted_date, selected_day_offset)
+        format!(
+            "📊 {} ({}, {} days ago) by CLI",
+            weekday, formatted_date, selected_day_offset
+        )
     };
 
     let cli_table = Table::new(cli_rows, cli_constraints)
         .header(cli_header)
-        .block(Block::default().title(table_title).title_style(Style::default().bold()))
+        .block(
+            Block::default()
+                .title(table_title)
+                .title_style(Style::default().bold()),
+        )
         .column_spacing(2);
 
     frame.render_widget(cli_table, chunks[3]);
@@ -1575,7 +1765,8 @@ fn update_table_states(
     let filtered_count = filtered_analyzers.len();
 
     // Create a map of analyzer name to old table state
-    let mut old_states_by_name: std::collections::HashMap<String, TableState> = std::collections::HashMap::new();
+    let mut old_states_by_name: std::collections::HashMap<String, TableState> =
+        std::collections::HashMap::new();
     for (i, analyzer) in filtered_analyzers.iter().enumerate() {
         if i < table_states.len() {
             old_states_by_name.insert(analyzer.analyzer_name.clone(), table_states[i].clone());
