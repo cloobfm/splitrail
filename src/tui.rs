@@ -3,7 +3,7 @@ use crate::utils::{NumberFormatOptions, format_date_for_display, format_number};
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::Result;
 use chrono::{Duration as ChronoDuration, Local};
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, EnableMouseCapture, DisableMouseCapture};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -55,7 +55,7 @@ pub fn run_tui(
     mut stats_manager: RealtimeStatsManager,
 ) -> Result<()> {
     enable_raw_mode()?;
-    stdout().execute(EnterAlternateScreen)?;
+    stdout().execute(EnterAlternateScreen)?.execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
@@ -81,7 +81,10 @@ pub fn run_tui(
     });
 
     disable_raw_mode()?;
-    terminal.backend_mut().execute(LeaveAlternateScreen)?;
+    terminal
+        .backend_mut()
+        .execute(LeaveAlternateScreen)?
+        .execute(DisableMouseCapture)?;
     result
 }
 
@@ -204,198 +207,207 @@ async fn run_app(
             }
 
             // Handle different event types
-            let key = match event::read()? {
-                Event::Key(key) if key.is_press() => key,
-                Event::Mouse(mouse_event) => {
-                    // For now, globally handle mouse scrolling for CLI panels in summary view
-                    // In a full implementation, we would check mouse coordinates
-                    // but that would require passing frame info to this function
-                    match mouse_event.kind {
-                        crossterm::event::MouseEventKind::ScrollUp => {
-                            // In Summary view, scroll up through CLIs in Live Activity
-                            if *selected_tab == 0 && *cli_scroll_offset > 0 {
-                                *cli_scroll_offset -= 1;
+            match event::read()? {
+                Event::Key(key) if key.is_press() => {
+                    // Handle quitting.
+                    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                        break;
+                    }
+
+                    // Only handle navigation keys if we have data (`filtered_stats` is non-empty).
+                    if filtered_stats.is_empty() {
+                        continue;
+                    }
+
+                    match key.code {
+                        KeyCode::Left | KeyCode::Char('h') => {
+                            if *selected_tab > 0 {
+                                *selected_tab -= 1;
                                 needs_redraw = true;
                             }
-                            continue; // Consume the event to prevent other components from processing it
+                        }
+                        KeyCode::Right | KeyCode::Char('l') => {
+                            if *selected_tab < filtered_stats.len() + 1 {
+                                // +1 for Summary tab
+                                *selected_tab += 1;
+                                needs_redraw = true;
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            // On summary tab, navigate through days (towards today)
+                            if *selected_tab == 0 {
+                                if *summary_day_offset > 0 {
+                                    *summary_day_offset -= 1;
+                                    cached_summary_data = Some(calculate_summary_data(
+                                        &filtered_stats,
+                                        *summary_day_offset,
+                                    ));
+                                    needs_redraw = true;
+                                }
+                            }
+                            // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
+                            // Summary tab is at index 0, so only process for tabs 1+
+                            else if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                                let analyzer_index = *selected_tab - 1;
+                                if analyzer_index < table_states.len()
+                                    && let Some(current_stats) = filtered_stats.get(analyzer_index)
+                                {
+                                    let total_rows = current_stats.daily_stats.len() + 3; // header + data + separator + totals
+                                    if let Some(table_state) = table_states.get_mut(analyzer_index)
+                                        && let Some(selected) = table_state.selected()
+                                        && selected < total_rows.saturating_sub(1)
+                                    {
+                                        table_state.select(Some(
+                                            if selected == current_stats.daily_stats.len() {
+                                                selected + 2 // Skip separator row
+                                            } else {
+                                                selected + 1
+                                            },
+                                        ));
+                                        needs_redraw = true;
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            // On summary tab, navigate through days (back in time)
+                            if *selected_tab == 0 {
+                                // Limit to 30 days back
+                                if *summary_day_offset < 30 {
+                                    *summary_day_offset += 1;
+                                    cached_summary_data = Some(calculate_summary_data(
+                                        &filtered_stats,
+                                        *summary_day_offset,
+                                    ));
+                                    needs_redraw = true;
+                                }
+                            }
+                            // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
+                            // Summary tab is at index 0, so only process for tabs 1+
+                            else if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                                let analyzer_index = *selected_tab - 1;
+                                if analyzer_index < table_states.len()
+                                    && let Some(current_stats) =
+                                        filtered_stats.get(analyzer_index)
+                                    && let Some(table_state) =
+                                        table_states.get_mut(analyzer_index)
+                                    && let Some(selected) = table_state.selected()
+                                    && selected > 0
+                                {
+                                    table_state.select(Some(selected.saturating_sub(
+                                        if selected == current_stats.daily_stats.len() + 1 {
+                                            2 // Skip separator row
+                                        } else {
+                                            1
+                                        },
+                                    )));
+                                    needs_redraw = true;
+                                }
+                            }
+                        }
+                        KeyCode::Home => {
+                            // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                            // Summary tab is at index 0, so only process for tabs 1+
+                            if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                                let analyzer_index = *selected_tab - 1;
+                                if analyzer_index < table_states.len()
+                                    && let Some(table_state) =
+                                        table_states.get_mut(analyzer_index)
+                                {
+                                    table_state.select(Some(0));
+                                    needs_redraw = true;
+                                }
+                            }
+                        }
+                        KeyCode::End => {
+                            // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                            // Summary tab is at index 0, so only process for tabs 1+
+                            if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                                let analyzer_index = *selected_tab - 1;
+                                if analyzer_index < table_states.len()
+                                    && let Some(current_stats) =
+                                        filtered_stats.get(analyzer_index)
+                                {
+                                    let total_rows = current_stats.daily_stats.len() + 2;
+                                    if let Some(table_state) =
+                                        table_states.get_mut(analyzer_index)
+                                    {
+                                        table_state.select(Some(total_rows.saturating_sub(1)));
+                                        needs_redraw = true;
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::PageDown => {
+                            // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                            // Summary tab is at index 0, so only process for tabs 1+
+                            if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                                let analyzer_index = *selected_tab - 1;
+                                if analyzer_index < table_states.len()
+                                    && let Some(current_stats) =
+                                        filtered_stats.get(analyzer_index)
+                                {
+                                    let total_rows = current_stats.daily_stats.len() + 2;
+                                    if let Some(table_state) =
+                                        table_states.get_mut(analyzer_index)
+                                        && let Some(selected) = table_state.selected()
+                                    {
+                                        let new_selected =
+                                            (selected + 10).min(total_rows.saturating_sub(1));
+                                        table_state.select(Some(new_selected));
+                                        needs_redraw = true;
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::PageUp => {
+                            // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                            // Summary tab is at index 0, so only process for tabs 1+
+                            if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                                let analyzer_index = *selected_tab - 1;
+                                if analyzer_index < table_states.len()
+                                    && let Some(table_state) =
+                                        table_states.get_mut(analyzer_index)
+                                    && let Some(selected) = table_state.selected()
+                                {
+                                    let new_selected = selected.saturating_sub(10);
+                                    table_state.select(Some(new_selected));
+                                    needs_redraw = true;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Event::Mouse(mouse_event) => {
+                    match mouse_event.kind {
+                        crossterm::event::MouseEventKind::ScrollUp => {
+                            // In Summary view, ALL scroll events should affect CLI scroll, not the table
+                            if *selected_tab == 0 {
+                                if *cli_scroll_offset > 0 {
+                                    *cli_scroll_offset -= 1;
+                                    needs_redraw = true;
+                                }
+                            }
                         }
                         crossterm::event::MouseEventKind::ScrollDown => {
-                            // In Summary view, scroll down through CLIs in Live Activity
+                            // In Summary view, ALL scroll events should affect CLI scroll, not the table
                             if *selected_tab == 0 {
-                                // Use more accurate calculation for how many CLIs fit in visual panel area
-                                let visible_cli_count = 6; // Use a reasonable default
-                                let max_scroll = filtered_stats.len().saturating_sub(visible_cli_count.max(1)); // At least 1
-                                if *cli_scroll_offset < max_scroll {
+                                // Allow scrolling past the last full screen of items to ensure everything is viewable.
+                                // A more precise calculation would require knowing the rendered height, which is not
+                                // available here. This approach is a robust fallback.
+                                if *cli_scroll_offset < filtered_stats.len().saturating_sub(1) {
                                     *cli_scroll_offset += 1;
                                     needs_redraw = true;
                                 }
                             }
-                            continue; // Consume the event to prevent other components from processing it
                         }
-                        _ => continue,
+                        _ => {} // Consume other mouse events to ensure no conflicts
                     }
                 }
                 Event::Resize(_, _) => {
                     // Terminal was resized, trigger redraw
                     needs_redraw = true;
-                    continue;
-                }
-                _ => continue,
-            };
-
-            // Handle quitting.
-            if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-                break;
-            }
-
-            // Only handle navigation keys if we have data (`filtered_stats` is non-empty).
-            if filtered_stats.is_empty() {
-                continue;
-            }
-
-            match key.code {
-                KeyCode::Left | KeyCode::Char('h') => {
-                    if *selected_tab > 0 {
-                        *selected_tab -= 1;
-                        needs_redraw = true;
-                    }
-                }
-                KeyCode::Right | KeyCode::Char('l') => {
-                    if *selected_tab < filtered_stats.len() + 1 {
-                        // +1 for Summary tab
-                        *selected_tab += 1;
-                        needs_redraw = true;
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    // On summary tab, navigate through days (towards today)
-                    if *selected_tab == 0 {
-                        if *summary_day_offset > 0 {
-                            *summary_day_offset -= 1;
-                            cached_summary_data =
-                                Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
-                            needs_redraw = true;
-                        }
-                    }
-                    // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
-                    // Summary tab is at index 0, so only process for tabs 1+
-                    else if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                        let analyzer_index = *selected_tab - 1;
-                        if analyzer_index < table_states.len()
-                            && let Some(current_stats) = filtered_stats.get(analyzer_index)
-                        {
-                            let total_rows = current_stats.daily_stats.len() + 3; // header + data + separator + totals
-                            if let Some(table_state) = table_states.get_mut(analyzer_index)
-                                && let Some(selected) = table_state.selected()
-                                && selected < total_rows.saturating_sub(1)
-                            {
-                                table_state.select(Some(
-                                    if selected == current_stats.daily_stats.len() {
-                                        selected + 2 // Skip separator row
-                                    } else {
-                                        selected + 1
-                                    },
-                                ));
-                                needs_redraw = true;
-                            }
-                        }
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    // On summary tab, navigate through days (back in time)
-                    if *selected_tab == 0 {
-                        // Limit to 30 days back
-                        if *summary_day_offset < 30 {
-                            *summary_day_offset += 1;
-                            cached_summary_data =
-                                Some(calculate_summary_data(&filtered_stats, *summary_day_offset));
-                            needs_redraw = true;
-                        }
-                    }
-                    // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
-                    // Summary tab is at index 0, so only process for tabs 1+
-                    else if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                        let analyzer_index = *selected_tab - 1;
-                        if analyzer_index < table_states.len()
-                            && let Some(current_stats) = filtered_stats.get(analyzer_index)
-                            && let Some(table_state) = table_states.get_mut(analyzer_index)
-                            && let Some(selected) = table_state.selected()
-                            && selected > 0
-                        {
-                            table_state.select(Some(selected.saturating_sub(
-                                if selected == current_stats.daily_stats.len() + 1 {
-                                    2 // Skip separator row
-                                } else {
-                                    1
-                                },
-                            )));
-                            needs_redraw = true;
-                        }
-                    }
-                }
-                KeyCode::Home => {
-                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
-                    // Summary tab is at index 0, so only process for tabs 1+
-                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                        let analyzer_index = *selected_tab - 1;
-                        if analyzer_index < table_states.len()
-                            && let Some(table_state) = table_states.get_mut(analyzer_index)
-                        {
-                            table_state.select(Some(0));
-                            needs_redraw = true;
-                        }
-                    }
-                }
-                KeyCode::End => {
-                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
-                    // Summary tab is at index 0, so only process for tabs 1+
-                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                        let analyzer_index = *selected_tab - 1;
-                        if analyzer_index < table_states.len()
-                            && let Some(current_stats) = filtered_stats.get(analyzer_index)
-                        {
-                            let total_rows = current_stats.daily_stats.len() + 2;
-                            if let Some(table_state) = table_states.get_mut(analyzer_index) {
-                                table_state.select(Some(total_rows.saturating_sub(1)));
-                                needs_redraw = true;
-                            }
-                        }
-                    }
-                }
-                KeyCode::PageDown => {
-                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
-                    // Summary tab is at index 0, so only process for tabs 1+
-                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                        let analyzer_index = *selected_tab - 1;
-                        if analyzer_index < table_states.len()
-                            && let Some(current_stats) = filtered_stats.get(analyzer_index)
-                        {
-                            let total_rows = current_stats.daily_stats.len() + 2;
-                            if let Some(table_state) = table_states.get_mut(analyzer_index)
-                                && let Some(selected) = table_state.selected()
-                            {
-                                let new_selected =
-                                    (selected + 10).min(total_rows.saturating_sub(1));
-                                table_state.select(Some(new_selected));
-                                needs_redraw = true;
-                            }
-                        }
-                    }
-                }
-                KeyCode::PageUp => {
-                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
-                    // Summary tab is at index 0, so only process for tabs 1+
-                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
-                        let analyzer_index = *selected_tab - 1;
-                        if analyzer_index < table_states.len()
-                            && let Some(table_state) = table_states.get_mut(analyzer_index)
-                            && let Some(selected) = table_state.selected()
-                        {
-                            let new_selected = selected.saturating_sub(10);
-                            table_state.select(Some(new_selected));
-                            needs_redraw = true;
-                        }
-                    }
                 }
                 _ => {}
             }
