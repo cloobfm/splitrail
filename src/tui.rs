@@ -2,6 +2,7 @@ use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats};
 use crate::utils::{NumberFormatOptions, format_date_for_display, format_number};
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::Result;
+use chrono::{Duration as ChronoDuration, Local};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
@@ -210,7 +211,7 @@ async fn run_app(
                     }
                 }
                 KeyCode::Right | KeyCode::Char('l') => {
-                    if *selected_tab < filtered_stats.len() - 1 {
+                    if *selected_tab < filtered_stats.len() { // +1 for Summary tab
                         *selected_tab += 1;
                         needs_redraw = true;
                     }
@@ -343,16 +344,14 @@ fn draw_ui(
     frame.render_widget(header, chunks[0]);
 
     if has_data {
-        // Tabs
-        let tab_titles: Vec<Line> = filtered_stats
-            .iter()
-            .map(|stats| {
-                Line::from(format!(
-                    " {} ({}) ",
-                    stats.analyzer_name, stats.num_conversations
-                ))
-            })
-            .collect();
+        // Create tab titles with Summary as first tab
+        let mut tab_titles: Vec<Line> = vec![Line::from(" 📊 Summary ")];
+        tab_titles.extend(filtered_stats.iter().map(|stats| {
+            Line::from(format!(
+                " {} ({}) ",
+                stats.analyzer_name, stats.num_conversations
+            ))
+        }));
 
         let tabs = Tabs::new(tab_titles)
             .select(selected_tab)
@@ -363,21 +362,28 @@ fn draw_ui(
 
         frame.render_widget(tabs, chunks[1]);
 
-        // Get current analyzer stats
-        if let Some(current_stats) = filtered_stats.get(selected_tab)
-            && let Some(current_table_state) = table_states.get_mut(selected_tab)
-        {
-            // Main table
-            draw_daily_stats_table(
-                frame,
-                chunks[2],
-                current_stats,
-                format_options,
-                current_table_state,
-            );
-
-            // Summary stats - pass all filtered stats for aggregation
+        if selected_tab == 0 {
+            // Summary view - show aggregated data across all analyzers
+            draw_summary_view(frame, chunks[2], filtered_stats, format_options);
             draw_summary_stats(frame, chunks[3], filtered_stats, format_options);
+        } else {
+            // Individual analyzer view (adjust index since Summary is tab 0)
+            let analyzer_index = selected_tab - 1;
+            if let Some(current_stats) = filtered_stats.get(analyzer_index)
+                && let Some(current_table_state) = table_states.get_mut(analyzer_index)
+            {
+                // Main table
+                draw_daily_stats_table(
+                    frame,
+                    chunks[2],
+                    current_stats,
+                    format_options,
+                    current_table_state,
+                );
+
+                // Summary stats - pass all filtered stats for aggregation
+                draw_summary_stats(frame, chunks[3], filtered_stats, format_options);
+            }
         }
 
         // Help text for data view with upload status
@@ -390,9 +396,13 @@ fn draw_ui(
         ])
         .split(help_area);
 
-        let help =
+        let help = if selected_tab == 0 {
+            Paragraph::new("Use ←/→ or h/l to switch tabs, q/Esc to quit")
+                .style(Style::default().add_modifier(Modifier::DIM))
+        } else {
             Paragraph::new("Use ←/→ or h/l to switch tabs, ↑/↓ or j/k to navigate, q/Esc to quit")
-                .style(Style::default().add_modifier(Modifier::DIM));
+                .style(Style::default().add_modifier(Modifier::DIM))
+        };
         frame.render_widget(help, help_chunks[0]);
 
         // Upload status in bottom-right
@@ -950,6 +960,132 @@ fn draw_daily_stats_table(
     total_rows
 }
 
+fn draw_summary_view(
+    frame: &mut Frame,
+    area: Rect,
+    filtered_stats: &[&AgenticCodingToolStats],
+    format_options: &NumberFormatOptions,
+) {
+
+    // Calculate date ranges
+    let now = chrono::Local::now();
+    let today_start = now.date_naive();
+    let week_ago = (now - ChronoDuration::days(7)).date_naive();
+    let two_weeks_ago = (now - ChronoDuration::days(14)).date_naive();
+
+    // Aggregate data for each time period
+    let mut today_stats = AggregatedStats::default();
+    let mut week_stats = AggregatedStats::default();
+    let mut two_week_stats = AggregatedStats::default();
+
+    for analyzer_stats in filtered_stats {
+        for (date_str, day_stats) in &analyzer_stats.daily_stats {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                if date == today_start {
+                    today_stats.add_day(day_stats);
+                }
+                if date >= week_ago {
+                    week_stats.add_day(day_stats);
+                }
+                if date >= two_weeks_ago {
+                    two_week_stats.add_day(day_stats);
+                }
+            }
+        }
+    }
+
+    // Create table rows
+    let header = Row::new(vec![
+        Cell::new(""),
+        Cell::new(Text::from("Today").centered()),
+        Cell::new(Text::from("7 Days").centered()),
+        Cell::new(Text::from("14 Days").centered()),
+    ])
+    .style(Style::default().add_modifier(Modifier::BOLD))
+    .height(1);
+
+    let rows = vec![
+        Row::new(vec![
+            Cell::new(Line::from("💰 Cost").style(Style::default().fg(Color::Yellow))),
+            Cell::new(Line::from(format!("${:.2}", today_stats.cost)).right_aligned()),
+            Cell::new(Line::from(format!("${:.2}", week_stats.cost)).right_aligned()),
+            Cell::new(Line::from(format!("${:.2}", two_week_stats.cost)).right_aligned()),
+        ]),
+        Row::new(vec![
+            Cell::new(Line::from("🔢 Tokens").style(Style::default().fg(Color::LightBlue))),
+            Cell::new(Line::from(format_number(today_stats.total_tokens(), format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(week_stats.total_tokens(), format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(two_week_stats.total_tokens(), format_options)).right_aligned()),
+        ]),
+        Row::new(vec![
+            Cell::new(Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red))),
+            Cell::new(Line::from(format_number(today_stats.reasoning_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(week_stats.reasoning_tokens, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(two_week_stats.reasoning_tokens, format_options)).right_aligned()),
+        ]),
+        Row::new(vec![
+            Cell::new(Line::from("🛠️ Tool Calls").style(Style::default().fg(Color::LightGreen))),
+            Cell::new(Line::from(format_number(today_stats.tool_calls, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(week_stats.tool_calls, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(two_week_stats.tool_calls, format_options)).right_aligned()),
+        ]),
+        Row::new(vec![
+            Cell::new(Line::from("💬 Conversations").style(Style::default().fg(Color::Cyan))),
+            Cell::new(Line::from(format_number(today_stats.conversations, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(week_stats.conversations, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(two_week_stats.conversations, format_options)).right_aligned()),
+        ]),
+        Row::new(vec![
+            Cell::new(Line::from("📊 CLIs Active").style(Style::default().fg(Color::Magenta))),
+            Cell::new(Line::from(format_number(filtered_stats.len() as u64, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(filtered_stats.len() as u64, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(filtered_stats.len() as u64, format_options)).right_aligned()),
+        ]),
+    ];
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(15), // Metric
+            Constraint::Length(12), // Today
+            Constraint::Length(12), // 7 Days
+            Constraint::Length(12), // 14 Days
+        ],
+    )
+    .header(header)
+    .block(Block::default().title("📈 Summary Overview").title_style(Style::default().bold()))
+    .column_spacing(2);
+
+    frame.render_widget(table, area);
+}
+
+#[derive(Default)]
+struct AggregatedStats {
+    cost: f64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    reasoning_tokens: u64,
+    tool_calls: u64,
+    conversations: u64,
+}
+
+impl AggregatedStats {
+    fn add_day(&mut self, day_stats: &crate::types::DailyStats) {
+        self.cost += day_stats.stats.cost;
+        self.input_tokens += day_stats.stats.input_tokens;
+        self.output_tokens += day_stats.stats.output_tokens;
+        self.cached_tokens += day_stats.stats.cached_tokens;
+        self.reasoning_tokens += day_stats.stats.reasoning_tokens;
+        self.tool_calls += day_stats.stats.tool_calls as u64;
+        self.conversations += day_stats.conversations as u64;
+    }
+
+    fn total_tokens(&self) -> u64 {
+        self.input_tokens + self.output_tokens + self.cached_tokens
+    }
+}
+
 fn draw_summary_stats(
     frame: &mut Frame,
     area: Rect,
@@ -1102,9 +1238,9 @@ fn update_table_states(
         table_states.push(state);
     }
 
-    // Ensure selected tab is within bounds
-    if *selected_tab >= filtered_count && filtered_count > 0 {
-        *selected_tab = filtered_count - 1;
+    // Ensure selected tab is within bounds (+1 for Summary tab)
+    if *selected_tab >= filtered_count + 1 && filtered_count > 0 {
+        *selected_tab = filtered_count; // Last analyzer tab
     }
 }
 
