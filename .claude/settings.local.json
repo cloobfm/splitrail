@@ -6,7 +6,13 @@
       "Bash(cargo check:*)",
       "Bash(cargo test)",
       "Bash(grep:*)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "Bash(cargo build:*)",
+      "Bash(q chat --help:*)",
+      "Bash(q --help:*)",
+      "Bash(sqlite3:*)",
+      "Bash(/tmp/amazon_q_sample.json)",
+      "Bash(python3:*)"
     ],
     "deny": []
   }
