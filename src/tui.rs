@@ -62,7 +62,9 @@ pub fn run_tui(
     let mut selected_tab = 0;
     let mut scroll_offset = 0;
     let mut summary_day_offset = 0; // 0 = today, 1 = yesterday, 2 = 2 days ago, etc.
+    let mut cli_scroll_offset = 0; // For scrolling through CLIs in Live Activity
 
+    let mut cli_scroll_offset = 0; // For scrolling through CLIs in Live Activity
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(run_app(
             &mut terminal,
@@ -71,6 +73,7 @@ pub fn run_tui(
             &mut selected_tab,
             &mut scroll_offset,
             &mut summary_day_offset,
+            &mut cli_scroll_offset,
             upload_status,
             file_watcher,
             &mut stats_manager,
@@ -90,6 +93,7 @@ async fn run_app(
     selected_tab: &mut usize,
     scroll_offset: &mut usize,
     summary_day_offset: &mut usize,
+    cli_scroll_offset: &mut usize,
     upload_status: Arc<Mutex<UploadStatus>>,
     file_watcher: FileWatcher,
     stats_manager: &mut RealtimeStatsManager,
@@ -185,6 +189,7 @@ async fn run_app(
                     &mut table_states,
                     *scroll_offset,
                     *selected_tab,
+                    *cli_scroll_offset,
                     upload_status.clone(),
                     &cached_summary_data,
                 );
@@ -201,6 +206,30 @@ async fn run_app(
             // Handle different event types
             let key = match event::read()? {
                 Event::Key(key) if key.is_press() => key,
+                Event::Mouse(mouse_event) => {
+                    match mouse_event.kind {
+                        crossterm::event::MouseEventKind::ScrollUp => {
+                            // In Summary view, scroll up through CLIs instead of days
+                            if *selected_tab == 0 && *cli_scroll_offset > 0 {
+                                *cli_scroll_offset -= 1;
+                                needs_redraw = true;
+                            }
+                            continue;
+                        }
+                        crossterm::event::MouseEventKind::ScrollDown => {
+                            // In Summary view, scroll down through CLIs instead of days
+                            if *selected_tab == 0 {
+                                let max_scroll = filtered_stats.len().saturating_sub(6); // Assuming we show 6 CLIs
+                                if *cli_scroll_offset < max_scroll {
+                                    *cli_scroll_offset += 1;
+                                    needs_redraw = true;
+                                }
+                            }
+                            continue;
+                        }
+                        _ => continue,
+                    }
+                }
                 Event::Resize(_, _) => {
                     // Terminal was resized, trigger redraw
                     needs_redraw = true;
@@ -378,6 +407,7 @@ fn draw_ui(
     table_states: &mut [TableState],
     _scroll_offset: usize,
     selected_tab: usize,
+    cli_scroll_offset: usize,
     upload_status: Arc<Mutex<UploadStatus>>,
     cached_summary_data: &Option<SummaryData>,
 ) {
@@ -393,11 +423,13 @@ fn draw_ui(
 
     // Adjust layout based on whether we have data or not
     let chunks = if has_data {
+        // For Summary view (selected_tab == 0), give more space to main table since no totals shown
+        let summary_stats_height = if selected_tab == 0 { 0 } else { 9 };
         Layout::vertical([
             Constraint::Length(3),                             // Header
             Constraint::Length(1),                             // Tabs
             Constraint::Min(3),                                // Main table
-            Constraint::Length(9),                             // Summary stats
+            Constraint::Length(summary_stats_height),          // Summary stats (0 for Summary tab)
             Constraint::Length(if has_error { 3 } else { 1 }), // Help text
         ])
         .split(frame.area())
@@ -451,6 +483,7 @@ fn draw_ui(
                     summary_data,
                     format_options,
                     filtered_stats,
+                    cli_scroll_offset,
                 );
                 draw_summary_stats(frame, chunks[3], filtered_stats, format_options, false);
             }
@@ -1112,6 +1145,7 @@ fn draw_summary_view(
     summary_data: &SummaryData,
     format_options: &NumberFormatOptions,
     filtered_stats: &[&AgenticCodingToolStats],
+    cli_scroll_offset: usize,
 ) {
     let SummaryData {
         today_stats,
@@ -1606,7 +1640,7 @@ fn draw_summary_view(
     frame.render_widget(cli_table, chunks[3]);
 
     // Draw visual CLI panels
-    draw_visual_cli_panels(frame, chunks[5], filtered_stats, &cli_data, format_options);
+    draw_visual_cli_panels(frame, chunks[5], filtered_stats, &cli_data, format_options, cli_scroll_offset);
 }
 
 // Helper function to create a horizontal bar visualization
@@ -1725,6 +1759,7 @@ fn draw_visual_cli_panels(
     filtered_stats: &[&AgenticCodingToolStats],
     cli_data: &[(String, u64, u64, u64, u64, f64, String, String, u64, u64, String)],
     _format_options: &NumberFormatOptions,
+    cli_scroll_offset: usize,
 ) {
     if filtered_stats.is_empty() {
         return;
@@ -1735,8 +1770,19 @@ fn draw_visual_cli_panels(
     // Add blank line for spacing
     lines.push(Line::from(""));
 
-    for (idx, stats) in filtered_stats.iter().enumerate() {
-        let (cli_name, _cached, _input, _output, _reasoning, cost, _idle, _active, sessions, messages, state) = &cli_data[idx];
+    // Dynamically adjust messages per CLI based on total CLIs to prevent overflow
+    let total_clis = filtered_stats.len();
+    let messages_per_cli = if total_clis <= 3 {
+        5 // Show 5 messages for few CLIs
+    } else if total_clis <= 6 {
+        3 // Show 3 messages for medium number of CLIs
+    } else {
+        2 // Show 2 messages for many CLIs
+    };
+
+    for (relative_idx, stats) in filtered_stats.iter().enumerate().skip(cli_scroll_offset) {
+        let actual_idx = relative_idx + cli_scroll_offset;
+        let (cli_name, _cached, _input, _output, _reasoning, cost, _idle, _active, sessions, messages, state) = &cli_data[actual_idx];
 
         // Line 1: CLI name, state, activity sparkline
         let sparkline = create_activity_sparkline(stats);
@@ -1760,11 +1806,11 @@ fn draw_visual_cli_panels(
             Span::styled(_idle.clone(), Style::default().fg(Color::DarkGray)),
         ]));
 
-        // Show up to 5 messages, each limited to first line only
+        // Show messages, each limited to first line only
         let preview_width = area.width.saturating_sub(15) as usize;
 
-        // Show up to 5 message lines
-        for message_line in last_time.iter().take(5) {
+        // Show messages based on dynamic limit
+        for message_line in last_time.iter().take(messages_per_cli) {
             let line_content = if message_line.len() > preview_width {
                 format!("{}…", &message_line[..preview_width.saturating_sub(1)])
             } else {
