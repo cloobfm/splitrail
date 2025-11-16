@@ -412,7 +412,7 @@ fn draw_ui(
         if selected_tab == 0 {
             // Summary view - show cached aggregated data across all analyzers
             if let Some(summary_data) = &cached_summary_data {
-                draw_summary_view(frame, chunks[2], summary_data, format_options);
+                draw_summary_view(frame, chunks[2], summary_data, format_options, filtered_stats);
                 draw_summary_stats(frame, chunks[3], filtered_stats, format_options);
             }
         } else {
@@ -1054,8 +1054,16 @@ fn draw_summary_view(
     area: Rect,
     summary_data: &SummaryData,
     format_options: &NumberFormatOptions,
+    filtered_stats: &[&AgenticCodingToolStats],
 ) {
     let SummaryData { today_stats, week_stats, two_week_stats, active_clis } = summary_data;
+
+    // Split area into two parts: overview table and CLI breakdown table
+    let chunks = Layout::vertical([
+        Constraint::Length(11), // Overview table (header + 8 rows + border)
+        Constraint::Min(0),     // CLI breakdown table
+    ])
+    .split(area);
 
     // Create table rows
     let header = Row::new(vec![
@@ -1131,7 +1139,99 @@ fn draw_summary_view(
     .block(Block::default().title("📈 Summary Overview").title_style(Style::default().bold()))
     .column_spacing(2);
 
-    frame.render_widget(table, area);
+    frame.render_widget(table, chunks[0]);
+
+    // Calculate today's stats for each CLI
+    let now = chrono::Local::now();
+    let today_start = now.date_naive();
+
+    // Collect today's data for each CLI
+    let mut cli_data: Vec<(String, u64, u64, u64, u64, f64)> = Vec::new();
+    for analyzer_stats in filtered_stats {
+        let mut cached = 0u64;
+        let mut input = 0u64;
+        let mut output = 0u64;
+        let mut reasoning = 0u64;
+        let mut cost = 0.0;
+
+        for (date_str, day_stats) in &analyzer_stats.daily_stats {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                if date == today_start {
+                    cached += day_stats.stats.cached_tokens;
+                    input += day_stats.stats.input_tokens;
+                    output += day_stats.stats.output_tokens;
+                    reasoning += day_stats.stats.reasoning_tokens;
+                    cost += day_stats.stats.cost;
+                }
+            }
+        }
+
+        cli_data.push((analyzer_stats.analyzer_name.clone(), cached, input, output, reasoning, cost));
+    }
+
+    // Build CLI breakdown table with metrics as rows and CLIs as columns
+    let mut cli_header_cells = vec![Cell::new("")];
+    for (cli_name, _, _, _, _, _) in &cli_data {
+        cli_header_cells.push(Cell::new(Text::from(cli_name.clone()).centered()));
+    }
+    let cli_header = Row::new(cli_header_cells)
+        .style(Style::default().add_modifier(Modifier::BOLD))
+        .height(1);
+
+    let mut cli_constraints = vec![Constraint::Length(15)]; // Metric label
+    for _ in 0..cli_data.len() {
+        cli_constraints.push(Constraint::Length(13)); // Each CLI column
+    }
+
+    let cli_rows = vec![
+        // Cached Tokens row
+        {
+            let mut cells = vec![Cell::new(Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta)))];
+            for (_, cached, _, _, _, _) in &cli_data {
+                cells.push(Cell::new(Line::from(format_number(*cached, format_options)).right_aligned()));
+            }
+            Row::new(cells)
+        },
+        // Input Tokens row
+        {
+            let mut cells = vec![Cell::new(Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue)))];
+            for (_, _, input, _, _, _) in &cli_data {
+                cells.push(Cell::new(Line::from(format_number(*input, format_options)).right_aligned()));
+            }
+            Row::new(cells)
+        },
+        // Output Tokens row
+        {
+            let mut cells = vec![Cell::new(Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan)))];
+            for (_, _, _, output, _, _) in &cli_data {
+                cells.push(Cell::new(Line::from(format_number(*output, format_options)).right_aligned()));
+            }
+            Row::new(cells)
+        },
+        // Reasoning row
+        {
+            let mut cells = vec![Cell::new(Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red)))];
+            for (_, _, _, _, reasoning, _) in &cli_data {
+                cells.push(Cell::new(Line::from(format_number(*reasoning, format_options)).right_aligned()));
+            }
+            Row::new(cells)
+        },
+        // Cost row
+        {
+            let mut cells = vec![Cell::new(Line::from("💰 Cost").style(Style::default().fg(Color::Yellow)))];
+            for (_, _, _, _, _, cost) in &cli_data {
+                cells.push(Cell::new(Line::from(format!("${:.2}", cost)).right_aligned()));
+            }
+            Row::new(cells)
+        },
+    ];
+
+    let cli_table = Table::new(cli_rows, cli_constraints)
+        .header(cli_header)
+        .block(Block::default().title("📊 Today by CLI").title_style(Style::default().bold()))
+        .column_spacing(2);
+
+    frame.render_widget(cli_table, chunks[1]);
 }
 
 #[derive(Default, Clone)]
