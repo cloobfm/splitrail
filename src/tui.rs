@@ -1135,10 +1135,10 @@ fn draw_summary_view(
     // Create table rows
     let header = Row::new(vec![
         Cell::new(""),
-        Cell::new(Text::from("Today").centered()),
-        Cell::new(Text::from("Yesterday").centered()),
-        Cell::new(Text::from("7 Days").centered()),
-        Cell::new(Text::from("14 Days").centered()),
+        Cell::new(Text::from("Today").right_aligned()),
+        Cell::new(Text::from("Yesterday").right_aligned()),
+        Cell::new(Text::from("7 Days").right_aligned()),
+        Cell::new(Text::from("14 Days").right_aligned()),
     ])
     .style(Style::default().add_modifier(Modifier::BOLD))
     .height(1);
@@ -1306,7 +1306,7 @@ fn draw_summary_view(
     let selected_day_date = (now - ChronoDuration::days(*selected_day_offset as i64)).date_naive();
 
     // Collect data for the selected day for each CLI
-    let mut cli_data: Vec<(String, u64, u64, u64, u64, f64, String, String, u64, u64)> = Vec::new();
+    let mut cli_data: Vec<(String, u64, u64, u64, u64, f64, String, String, u64, u64, String)> = Vec::new();
     for analyzer_stats in filtered_stats {
         let mut cached = 0u64;
         let mut input = 0u64;
@@ -1443,13 +1443,14 @@ fn draw_summary_view(
             active_time,
             session_count,
             message_count,
+            state,
         ));
     }
 
     // Build CLI breakdown table with metrics as rows and CLIs as columns
     let mut cli_header_cells = vec![Cell::new("")];
-    for (cli_name, _, _, _, _, _, _, _, _, _) in &cli_data {
-        cli_header_cells.push(Cell::new(Text::from(cli_name.clone()).centered()));
+    for (cli_name, _, _, _, _, _, _, _, _, _, _) in &cli_data {
+        cli_header_cells.push(Cell::new(Text::from(cli_name.clone()).right_aligned()));
     }
     let cli_header = Row::new(cli_header_cells)
         .style(Style::default().add_modifier(Modifier::BOLD))
@@ -1466,7 +1467,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta)),
             )];
-            for (_, cached, _, _, _, _, _, _, _, _) in &cli_data {
+            for (_, cached, _, _, _, _, _, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*cached, format_options)).right_aligned(),
                 ));
@@ -1478,7 +1479,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue)),
             )];
-            for (_, _, input, _, _, _, _, _, _, _) in &cli_data {
+            for (_, _, input, _, _, _, _, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*input, format_options)).right_aligned(),
                 ));
@@ -1490,7 +1491,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan)),
             )];
-            for (_, _, _, output, _, _, _, _, _, _) in &cli_data {
+            for (_, _, _, output, _, _, _, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*output, format_options)).right_aligned(),
                 ));
@@ -1502,7 +1503,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red)),
             )];
-            for (_, _, _, _, reasoning, _, _, _, _, _) in &cli_data {
+            for (_, _, _, _, reasoning, _, _, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*reasoning, format_options)).right_aligned(),
                 ));
@@ -1514,7 +1515,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("💬 Sessions").style(Style::default().fg(Color::Cyan)),
             )];
-            for (_, _, _, _, _, _, _, _, sessions, _) in &cli_data {
+            for (_, _, _, _, _, _, _, _, sessions, _, _) in &cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*sessions, format_options)).right_aligned(),
                 ));
@@ -1526,7 +1527,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📨 Messages").style(Style::default().fg(Color::LightYellow)),
             )];
-            for (_, _, _, _, _, _, _, _, _, messages) in &cli_data {
+            for (_, _, _, _, _, _, _, _, _, messages, _) in &cli_data {
                 cells.push(Cell::new(
                     Line::from(format_number(*messages, format_options)).right_aligned(),
                 ));
@@ -1538,7 +1539,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("⏱️ Active Time").style(Style::default().fg(Color::LightGreen)),
             )];
-            for (_, _, _, _, _, _, _, active_time, _, _) in &cli_data {
+            for (_, _, _, _, _, _, _, active_time, _, _, _) in &cli_data {
                 cells.push(Cell::new(Line::from(active_time.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -1548,7 +1549,7 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("⏰ Idle Time").style(Style::default().fg(Color::DarkGray)),
             )];
-            for (_, _, _, _, _, _, idle_time, _, _, _) in &cli_data {
+            for (_, _, _, _, _, _, idle_time, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(Line::from(idle_time.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -1558,10 +1559,20 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("💰 Cost").style(Style::default().fg(Color::Yellow)),
             )];
-            for (_, _, _, _, _, cost, _, _, _, _) in &cli_data {
+            for (_, _, _, _, _, cost, _, _, _, _, _) in &cli_data {
                 cells.push(Cell::new(
                     Line::from(format!("${:.2}", cost)).right_aligned(),
                 ));
+            }
+            Row::new(cells)
+        },
+        // Status row
+        {
+            let mut cells = vec![Cell::new(
+                Line::from("📡 Status").style(Style::default().fg(Color::White).bold()),
+            )];
+            for (_, _, _, _, _, _, _, _, _, _, state) in &cli_data {
+                cells.push(Cell::new(Line::from(state.clone()).right_aligned()));
             }
             Row::new(cells)
         },
