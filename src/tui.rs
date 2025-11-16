@@ -219,7 +219,19 @@ async fn run_app(
                         crossterm::event::MouseEventKind::ScrollDown => {
                             // In Summary view, scroll down through CLIs instead of days
                             if *selected_tab == 0 {
-                                let max_scroll = filtered_stats.len().saturating_sub(6); // Assuming we show 6 CLIs
+                                // Calculate max scroll based on dynamic message display logic
+                                let total_clis = filtered_stats.len();
+                                let messages_per_cli = if total_clis <= 3 {
+                                    5 // Show 5 messages for few CLIs
+                                } else if total_clis <= 6 {
+                                    3 // Show 3 messages for medium number of CLIs
+                                } else {
+                                    2 // Show 2 messages for many CLIs
+                                };
+                                // Estimate how many CLIs we can show at once to determine max scroll position
+                                let lines_per_cli = 1 + messages_per_cli; // 1 for header + messages
+                                let visible_cli_count = 10 / lines_per_cli.max(1); // Use area height of ~10 as estimate
+                                let max_scroll = filtered_stats.len().saturating_sub(visible_cli_count.max(1)); // At least 1
                                 if *cli_scroll_offset < max_scroll {
                                     *cli_scroll_offset += 1;
                                     needs_redraw = true;
@@ -1780,8 +1792,16 @@ fn draw_visual_cli_panels(
         2 // Show 2 messages for many CLIs
     };
 
-    for (relative_idx, stats) in filtered_stats.iter().enumerate().skip(cli_scroll_offset) {
-        let actual_idx = relative_idx + cli_scroll_offset;
+    // Calculate how many CLIs can be shown based on available area height
+    let lines_per_cli = 1 + messages_per_cli; // 1 for header + messages
+    let available_height = area.height as usize;
+    let max_visible_clis = available_height / lines_per_cli.max(1); // At least 1 line per CLI
+
+    for (actual_idx, stats) in filtered_stats.iter().enumerate().skip(cli_scroll_offset).take(max_visible_clis) {
+        // Check bounds to avoid out of bounds access
+        if actual_idx >= cli_data.len() {
+            break;
+        }
         let (cli_name, _cached, _input, _output, _reasoning, cost, _idle, _active, sessions, messages, state) = &cli_data[actual_idx];
 
         // Line 1: CLI name, state, activity sparkline
