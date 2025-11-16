@@ -111,6 +111,9 @@ async fn run_app(
         .filter(|stats| has_data(stats))
         .collect();
 
+    // Cache summary data to avoid recalculating on every redraw
+    let mut cached_summary_data: Option<SummaryData> = Some(calculate_summary_data(&filtered_stats));
+
     loop {
         // Check for stats updates
         if stats_receiver.has_changed()? {
@@ -122,6 +125,8 @@ async fn run_app(
                 .iter()
                 .filter(|stats| has_data(stats))
                 .collect();
+            // Recalculate summary data when stats change
+            cached_summary_data = Some(calculate_summary_data(&filtered_stats));
             needs_redraw = true;
         }
 
@@ -171,6 +176,7 @@ async fn run_app(
                     *scroll_offset,
                     *selected_tab,
                     upload_status.clone(),
+                    &cached_summary_data,
                 );
             })?;
             needs_redraw = false;
@@ -300,6 +306,7 @@ fn draw_ui(
     _scroll_offset: usize,
     selected_tab: usize,
     upload_status: Arc<Mutex<UploadStatus>>,
+    cached_summary_data: &Option<SummaryData>,
 ) {
     // Since we're already working with filtered stats, has_data is simply whether we have any stats
     let has_data = !filtered_stats.is_empty();
@@ -363,9 +370,11 @@ fn draw_ui(
         frame.render_widget(tabs, chunks[1]);
 
         if selected_tab == 0 {
-            // Summary view - show aggregated data across all analyzers
-            draw_summary_view(frame, chunks[2], filtered_stats, format_options);
-            draw_summary_stats(frame, chunks[3], filtered_stats, format_options);
+            // Summary view - show cached aggregated data across all analyzers
+            if let Some(summary_data) = &cached_summary_data {
+                draw_summary_view(frame, chunks[2], summary_data, format_options);
+                draw_summary_stats(frame, chunks[3], filtered_stats, format_options);
+            }
         } else {
             // Individual analyzer view (adjust index since Summary is tab 0)
             let analyzer_index = selected_tab - 1;
@@ -960,13 +969,7 @@ fn draw_daily_stats_table(
     total_rows
 }
 
-fn draw_summary_view(
-    frame: &mut Frame,
-    area: Rect,
-    filtered_stats: &[&AgenticCodingToolStats],
-    format_options: &NumberFormatOptions,
-) {
-
+fn calculate_summary_data(filtered_stats: &[&AgenticCodingToolStats]) -> SummaryData {
     // Calculate date ranges
     let now = chrono::Local::now();
     let today_start = now.date_naive();
@@ -993,6 +996,22 @@ fn draw_summary_view(
             }
         }
     }
+
+    SummaryData {
+        today_stats,
+        week_stats,
+        two_week_stats,
+        active_clis: filtered_stats.len(),
+    }
+}
+
+fn draw_summary_view(
+    frame: &mut Frame,
+    area: Rect,
+    summary_data: &SummaryData,
+    format_options: &NumberFormatOptions,
+) {
+    let SummaryData { today_stats, week_stats, two_week_stats, active_clis } = summary_data;
 
     // Create table rows
     let header = Row::new(vec![
@@ -1037,9 +1056,9 @@ fn draw_summary_view(
         ]),
         Row::new(vec![
             Cell::new(Line::from("📊 CLIs Active").style(Style::default().fg(Color::Magenta))),
-            Cell::new(Line::from(format_number(filtered_stats.len() as u64, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(filtered_stats.len() as u64, format_options)).right_aligned()),
-            Cell::new(Line::from(format_number(filtered_stats.len() as u64, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
+            Cell::new(Line::from(format_number(*active_clis as u64, format_options)).right_aligned()),
         ]),
     ];
 
@@ -1059,7 +1078,7 @@ fn draw_summary_view(
     frame.render_widget(table, area);
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct AggregatedStats {
     cost: f64,
     input_tokens: u64,
@@ -1068,6 +1087,14 @@ struct AggregatedStats {
     reasoning_tokens: u64,
     tool_calls: u64,
     conversations: u64,
+}
+
+#[derive(Clone)]
+struct SummaryData {
+    today_stats: AggregatedStats,
+    week_stats: AggregatedStats,
+    two_week_stats: AggregatedStats,
+    active_clis: usize,
 }
 
 impl AggregatedStats {
