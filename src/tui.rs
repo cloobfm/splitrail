@@ -38,6 +38,7 @@ pub struct TuiState {
     pub cli_scroll_offset: usize,
     pub cli_table_scroll_offset: usize, // For horizontal scroll
     pub layout: UiLayout,
+    pub mouse_mode_enabled: bool, // Toggle between mouse scroll and text selection
 }
 
 #[derive(Debug, Clone)]
@@ -74,11 +75,14 @@ pub fn run_tui(
     mut stats_manager: RealtimeStatsManager,
 ) -> Result<()> {
     enable_raw_mode()?;
-    stdout().execute(EnterAlternateScreen)?.execute(EnableMouseCapture)?;
+    stdout().execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
     let mut tui_state = TuiState::default();
+    // Enable mouse mode by default for consistent scrolling
+    tui_state.mouse_mode_enabled = true;
+    terminal.backend_mut().execute(EnableMouseCapture)?;
 
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(run_app(
@@ -95,8 +99,8 @@ pub fn run_tui(
     disable_raw_mode()?;
     terminal
         .backend_mut()
-        .execute(LeaveAlternateScreen)?
-        .execute(DisableMouseCapture)?;
+        .execute(DisableMouseCapture)?
+        .execute(LeaveAlternateScreen)?;
     result
 }
 
@@ -219,6 +223,27 @@ async fn run_app(
                     // Handle quitting.
                     if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
                         break;
+                    }
+
+                    // Handle mouse mode toggle
+                    if matches!(key.code, KeyCode::Char('m')) {
+                        tui_state.mouse_mode_enabled = !tui_state.mouse_mode_enabled;
+                        if tui_state.mouse_mode_enabled {
+                            terminal.backend_mut().execute(EnableMouseCapture)?;
+                        } else {
+                            // Disable mouse capture and flush any pending events
+                            terminal.backend_mut().execute(DisableMouseCapture)?;
+                            // Consume any queued mouse events
+                            while event::poll(Duration::from_millis(0))? {
+                                if let Event::Mouse(_) = event::read()? {
+                                    // Discard mouse event
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                        needs_redraw = true;
+                        continue;
                     }
 
                     // Only handle navigation keys if we have data (`filtered_stats` is non-empty).
@@ -384,6 +409,11 @@ async fn run_app(
                     }
                 }
                 Event::Mouse(mouse_event) => {
+                    // Only handle mouse events if mouse mode is enabled
+                    if !tui_state.mouse_mode_enabled {
+                        continue;
+                    }
+
                     if tui_state.selected_tab == 0 {
                         let mouse_y = mouse_event.row;
 
@@ -554,13 +584,19 @@ fn draw_ui(
         ])
         .split(help_area);
 
+        let mouse_mode_indicator = if tui_state.mouse_mode_enabled {
+            "🖱️ Scroll"
+        } else {
+            "📝 Select"
+        };
+
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(
-                "Use ←/→ or h/l to switch tabs, ↑/↓ or j/k to navigate days, q/Esc to quit",
+                format!("←/→ or h/l: tabs, ↑/↓ or j/k: navigate days, m: toggle {} mode, q/Esc: quit", mouse_mode_indicator),
             )
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
-            Paragraph::new("Use ←/→ or h/l to switch tabs, ↑/↓ or j/k to navigate, q/Esc to quit")
+            Paragraph::new(format!("←/→ or h/l: tabs, ↑/↓ or j/k: navigate, m: toggle {} mode, q/Esc: quit", mouse_mode_indicator))
                 .style(Style::default().add_modifier(Modifier::DIM))
         };
         frame.render_widget(help, help_chunks[0]);
@@ -630,7 +666,12 @@ fn draw_ui(
         frame.render_widget(no_data_message, chunks[1]);
 
         // Help text for no-data view
-        let help = Paragraph::new("Press q/Esc to quit")
+        let mouse_mode_indicator = if tui_state.mouse_mode_enabled {
+            "🖱️ Scroll"
+        } else {
+            "📝 Select"
+        };
+        let help = Paragraph::new(format!("m: toggle {} mode, q/Esc: quit", mouse_mode_indicator))
             .style(Style::default().add_modifier(Modifier::DIM));
         frame.render_widget(help, chunks[2]);
     }
@@ -1812,21 +1853,15 @@ fn draw_visual_cli_panels(
     // Add blank line for spacing
     lines.push(Line::from(""));
 
-    // Dynamically adjust messages per CLI based on total CLIs to prevent overflow
-    let total_clis = filtered_stats.len();
-    let messages_per_cli = if total_clis <= 3 {
-        5 // Show 5 messages for few CLIs
-    } else if total_clis <= 6 {
-        3 // Show 3 messages for medium number of CLIs
-    } else {
-        2 // Show 2 messages for many CLIs
-    };
+    // Show 5 messages per CLI for better detail
+    let messages_per_cli = 5;
 
-    // Calculate how many CLIs can be shown based on available area height
-    let lines_per_cli = 1 + messages_per_cli; // 1 for header + messages
-    let available_height = area.height as usize;
-    let max_visible_clis = available_height / lines_per_cli.max(1); // At least 1
+    // Calculate how many CLIs can fit in the visible area
+    let lines_per_cli = 1 + messages_per_cli + 1; // header + messages + spacing
+    let available_height = area.height.saturating_sub(2) as usize; // Account for title/borders
+    let max_visible_clis = (available_height / lines_per_cli.max(1)).max(1);
 
+    // Render visible CLI entries with scrolling support
     for (actual_idx, stats) in filtered_stats
         .iter()
         .enumerate()
