@@ -355,6 +355,59 @@ pub fn calculate_cost_from_tokens(usage: &Usage, model_name: &str) -> f64 {
     )
 }
 
+pub fn extract_text_content(content: &Content) -> Option<String> {
+    match content {
+        Content::String(bytes) => {
+            // Try to decode as UTF-8, fallback to lossy conversion
+            String::from_utf8(bytes.to_vec()).ok()
+        }
+        Content::Blocks(blocks) => {
+            // For debugging: show ALL content blocks to see what's available
+            let mut all_content = Vec::new();
+            for block in blocks {
+                match block {
+                    ContentBlock::Text { text } => {
+                        if let Ok(text_str) = String::from_utf8(text.to_vec()) {
+                            if !text_str.trim().is_empty() {
+                                all_content.push(format!("TEXT: {}", text_str));
+                            }
+                        }
+                    }
+                    ContentBlock::Thinking { thinking, .. } => {
+                        if let Ok(thinking_str) = String::from_utf8(thinking.to_vec()) {
+                            all_content.push(format!("THINKING: {}", thinking_str));
+                        }
+                    }
+                    ContentBlock::ToolUse { name, .. } => {
+                        all_content.push(format!("TOOL_USE: {}", name));
+                    }
+                    ContentBlock::ToolResult { content: tool_content, .. } => {
+                        match tool_content {
+                            Content::String(bytes) => {
+                                if let Ok(result_str) = String::from_utf8(bytes.to_vec()) {
+                                    all_content.push(format!("TOOL_RESULT: {}", result_str));
+                                }
+                            }
+                            Content::Blocks(_) => {
+                                all_content.push("TOOL_RESULT: complex output".to_string());
+                            }
+                        }
+                    }
+                    ContentBlock::Image { .. } => {
+                        all_content.push("IMAGE".to_string());
+                    }
+                }
+            }
+
+            if all_content.is_empty() {
+                None
+            } else {
+                Some(all_content.join(" | "))
+            }
+        }
+    }
+}
+
 pub fn parse_jsonl_file<T>(
     file_path: &Path,
     buffer_reader: &mut BufReader<T>,
@@ -378,36 +431,37 @@ where
 
         // Parse the line, filtering various invalid scenarios.
         let parsed_line = simd_json::from_slice::<ClaudeCodeEntry>(&mut line.clone().into_bytes());
-        let (message_id, model, content, usage, timestamp, request_id, tool_use_result, uuid) =
+        let (message_id, model, content, usage, timestamp, request_id, tool_use_result, uuid, entry) =
             match parsed_line {
                 // Only get real user/AI messages; filter out summaries and any garbage message entries.
-                Ok(ClaudeCodeEntry::Message(ClaudeCodeMessageEntry {
+                Ok(ClaudeCodeEntry::Message(ref entry @ ClaudeCodeMessageEntry {
                                                 message:
                                                 Some(Message {
-                                                         id: message_id,
-                                                         model,
-                                                         content: Some(content),
-                                                         usage,
+                                                         id: ref message_id,
+                                                         model: ref model,
+                                                         content: Some(ref content),
+                                                         usage: ref usage,
                                                          ..
                                                      }),
-                                                timestamp,
-                                                tool_use_result,
-                                                request_id,
-                                                uuid,
+                                                timestamp: ref timestamp,
+                                                tool_use_result: ref tool_use_result,
+                                                request_id: ref request_id,
+                                                uuid: ref uuid,
                                                 ..
                                                 // Skip messages for which no model is specified, or the model is `<synthetic>`;
                                                 // i.e. Claude Code-generated system messages.  These have their token usage all
                                                 // 0 anyway.
                                             })) if !matches!(model.as_deref(), Some("<synthetic>")) => {
                     (
-                        message_id,
-                        model,
-                        content,
-                        usage,
-                        timestamp,
-                        request_id,
-                        tool_use_result,
-                        uuid,
+                        message_id.clone(),
+                        model.clone(),
+                        content.clone(),
+                        usage.clone(),
+                        *timestamp,
+                        request_id.clone(),
+                        tool_use_result.clone(),
+                        uuid.clone(),
+                        entry,
                     )
                 }
                 Err(e) => {
@@ -422,33 +476,25 @@ where
                 _ => continue,
             };
 
-        let mut msg = ConversationMessage {
-            global_hash: hash_text(&format!("{session_id}_{uuid}")),
-            local_hash: None,
-            application: Application::ClaudeCode,
-            model: model.clone(),
-            date: timestamp,
-            project_hash: project_hash.clone(),
-            conversation_hash: hash_text(&file_path_str),
-            stats: extract_tool_stats(&content, &tool_use_result),
-            // Default to AI.
-            role: MessageRole::Assistant,
-            content: None,        };
+        let mut stats = extract_tool_stats(&content, &tool_use_result);
+        let mut content_opt = extract_text_content(&content);
+        let mut local_hash = None;
+
         match usage {
-            Some(usage) => {
+            Some(ref usage) => {
                 let model = match &model {
                     Some(m) => m.to_owned(),
                     None => continue, // Invalid entry.
                 };
 
-                msg.stats.input_tokens = usage.input_tokens;
-                msg.stats.output_tokens = usage.output_tokens;
-                msg.stats.cache_creation_tokens = usage.cache_creation_input_tokens;
-                msg.stats.cache_read_tokens = usage.cache_read_input_tokens;
-                msg.stats.cached_tokens =
+                stats.input_tokens = usage.input_tokens;
+                stats.output_tokens = usage.output_tokens;
+                stats.cache_creation_tokens = usage.cache_creation_input_tokens;
+                stats.cache_read_tokens = usage.cache_read_input_tokens;
+                stats.cached_tokens =
                     usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
-                msg.stats.cost = calculate_cost_from_tokens(&usage, &model);
-                msg.stats.tool_calls = match content {
+                stats.cost = calculate_cost_from_tokens(&usage, &model);
+                stats.tool_calls = match content {
                     Content::Blocks(blocks) => blocks
                         .iter()
                         .filter(|c| matches!(c, ContentBlock::ToolUse { .. }))
@@ -466,13 +512,34 @@ where
                     // them here, but actually some message _across files_ can have the same
                     // message ID and request ID (probably due to resuming sessions), so we need to
                     // do it later when we have a complete pool of messages.
-                    msg.local_hash = Some(hash_text(&format!("{request_id}_{message_id}")));
+                    local_hash = Some(hash_text(&format!("{request_id}_{message_id}")));
                 }
             }
             None => {
-                msg.role = MessageRole::User;
+                // For user messages, try to extract content from the message if available
+                if let Some(message) = &entry.message {
+                    if let Some(content) = &message.content {
+                        content_opt = extract_text_content(content);
+                    }
+                }
             }
         }
+
+        // Determine role: assistant if there's usage OR tool results (since tool results are Claude's outputs)
+        let is_assistant = usage.is_some() || tool_use_result.is_some();
+
+        let msg = ConversationMessage {
+            global_hash: hash_text(&format!("{session_id}_{uuid}")),
+            local_hash,
+            application: Application::ClaudeCode,
+            model: model.clone(),
+            date: timestamp,
+            project_hash: project_hash.clone(),
+            conversation_hash: hash_text(&file_path_str),
+            stats,
+            role: if is_assistant { MessageRole::Assistant } else { MessageRole::User },
+            content: content_opt,
+        };
         entries.push(msg);
     }
 

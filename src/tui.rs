@@ -452,7 +452,7 @@ fn draw_ui(
                     format_options,
                     filtered_stats,
                 );
-                draw_summary_stats(frame, chunks[3], filtered_stats, format_options);
+                draw_summary_stats(frame, chunks[3], filtered_stats, format_options, false);
             }
         } else {
             // Individual analyzer view (adjust index since Summary is tab 0)
@@ -474,7 +474,7 @@ fn draw_ui(
                 );
 
                 // Summary stats - pass all filtered stats for aggregation
-                draw_summary_stats(frame, chunks[3], filtered_stats, format_options);
+                draw_summary_stats(frame, chunks[3], filtered_stats, format_options, true);
             }
         }
 
@@ -1677,30 +1677,43 @@ fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> String {
 }
 
 // Get last message preview
-// TODO: Add message content storage to ConversationMessage to show actual message text
-fn get_last_message_preview(stats: &AgenticCodingToolStats, _max_len: usize) -> (String, String) {
+fn get_last_message_preview(stats: &AgenticCodingToolStats, max_len: usize) -> (String, Vec<String>) {
+    // Get last 5 messages for debugging (all roles)
+    let mut recent_messages: Vec<_> = stats.messages.iter().collect();
+    recent_messages.sort_by_key(|msg| std::cmp::Reverse(msg.date));
+    recent_messages.truncate(5);
+
     if let Some(last_msg) = stats.messages.iter().max_by_key(|msg| msg.date) {
         let role = match last_msg.role {
             crate::types::MessageRole::User => "You",
             crate::types::MessageRole::Assistant => &stats.analyzer_name,
         };
 
-        // TODO: Once we add message content to ConversationMessage, show actual message here
-        // For now, show metadata about the message
-        let preview = if last_msg.stats.tool_calls > 0 {
-            format!("used {} tools • {}m ago",
-                last_msg.stats.tool_calls,
-                chrono::Utc::now().signed_duration_since(last_msg.date).num_minutes().max(0)
-            )
-        } else {
-            format!("{}m ago",
-                chrono::Utc::now().signed_duration_since(last_msg.date).num_minutes().max(0)
-            )
-        };
-
-        (role.to_string(), preview)
+        // For debugging, collect last 5 messages as individual strings
+        let mut message_lines = Vec::new();
+        for (i, msg) in recent_messages.iter().enumerate() {
+            let msg_role = match msg.role {
+                crate::types::MessageRole::User => "You",
+                crate::types::MessageRole::Assistant => &stats.analyzer_name,
+            };
+    
+            if let Some(content) = &msg.content {
+                // Show full content without truncation
+                message_lines.push(format!("MSG{} ({}): {}", i + 1, msg_role, content));
+            } else {
+                // Show more debug info for missing content
+                let debug_details = format!(
+                    "role={}, tokens={}, cost=${:.4}, tools={}",
+                    msg.role.clone() as u8, msg.stats.input_tokens + msg.stats.output_tokens,
+                    msg.stats.cost, msg.stats.tool_calls
+                );
+                message_lines.push(format!("MSG{} ({}): [no content] {}", i + 1, msg_role, debug_details));
+            }
+        }
+    
+        (role.to_string(), message_lines)
     } else {
-        ("—".to_string(), "No activity".to_string())
+        ("—".to_string(), vec!["No activity".to_string()])
     }
 }
 
@@ -1746,19 +1759,22 @@ fn draw_visual_cli_panels(
             Span::styled(_idle.clone(), Style::default().fg(Color::DarkGray)),
         ]));
 
-        // Line 2: Last message preview
+        // Show up to 5 messages, each limited to first line only
         let preview_width = area.width.saturating_sub(15) as usize;
-        let last_msg_text = format!("{}: {}", last_role, last_time);
-        let truncated = if last_msg_text.len() > preview_width {
-            format!("{}…", &last_msg_text[..preview_width.saturating_sub(1)])
-        } else {
-            last_msg_text
-        };
 
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(truncated, Style::default().fg(Color::DarkGray).italic()),
-        ]));
+        // Show up to 5 message lines
+        for message_line in last_time.iter().take(5) {
+            let line_content = if message_line.len() > preview_width {
+                format!("{}…", &message_line[..preview_width.saturating_sub(1)])
+            } else {
+                message_line.clone()
+            };
+
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(line_content, Style::default().fg(Color::DarkGray).italic()),
+            ]));
+        }
 
         // Add blank line for spacing between CLI entries
         lines.push(Line::from(""));
@@ -1813,6 +1829,7 @@ fn draw_summary_stats(
     area: Rect,
     filtered_stats: &[&AgenticCodingToolStats],
     format_options: &NumberFormatOptions,
+    show_totals: bool,
 ) {
     // Aggregate stats from all tools
     let mut total_cost: f64 = 0.0;
@@ -1871,61 +1888,65 @@ fn draw_summary_stats(
         }
     }
 
-    let total_tokens = total_cached + total_input + total_output;
-    let tools_count = filtered_stats.len();
+    let mut summary_lines: Vec<Line> = Vec::new();
 
-    // Define summary rows with labels and values
-    let summary_rows = vec![
-        ("Tools:", format!("{tools_count} tracked"), Color::Cyan),
-        (
-            "Tokens:",
-            format_number(total_tokens, format_options),
-            Color::LightBlue,
-        ),
-        (
-            "Reasoning:",
-            format_number(total_reasoning, format_options),
-            Color::Red,
-        ),
-        (
-            "Tool Calls:",
-            format_number(total_tool_calls, format_options),
-            Color::LightGreen,
-        ),
-        ("Cost:", format!("${total_cost:.2}"), Color::LightYellow),
-        ("Days tracked:", all_days.len().to_string(), Color::White),
-    ];
+    if show_totals {
+        let total_tokens = total_cached + total_input + total_output;
+        let tools_count = filtered_stats.len();
 
-    // Find the maximum label width for alignment
-    let max_label_width = summary_rows
-        .iter()
-        .map(|(label, _, _)| label.len())
-        .max()
-        .unwrap_or(0);
+        // Define summary rows with labels and values
+        let summary_rows = vec![
+            ("Tools:", format!("{tools_count} tracked"), Color::Cyan),
+            (
+                "Tokens:",
+                format_number(total_tokens, format_options),
+                Color::LightBlue,
+            ),
+            (
+                "Reasoning:",
+                format_number(total_reasoning, format_options),
+                Color::Red,
+            ),
+            (
+                "Tool Calls:",
+                format_number(total_tool_calls, format_options),
+                Color::LightGreen,
+            ),
+            ("Cost:", format!("${total_cost:.2}"), Color::LightYellow),
+            ("Days tracked:", all_days.len().to_string(), Color::White),
+        ];
 
-    // Create lines with consistent spacing
-    let mut summary_lines: Vec<Line> = summary_rows
-        .into_iter()
-        .map(|(label, value, color)| {
-            Line::from(vec![
-                Span::raw(format!("{label:<max_label_width$}")),
-                Span::raw("      "), // 6 spaces between label and value
-                Span::styled(value, Style::new().fg(color).bold()),
-            ])
-        })
-        .collect();
+        // Find the maximum label width for alignment
+        let max_label_width = summary_rows
+            .iter()
+            .map(|(label, _, _)| label.len())
+            .max()
+            .unwrap_or(0);
 
-    summary_lines.insert(
-        0,
-        Line::from(vec![Span::styled(
-            "-----------------------------",
-            Style::default().dim(),
-        )]),
-    );
-    summary_lines.insert(
-        0,
-        Line::from(vec![Span::styled("Totals", Style::default().bold().dim())]),
-    );
+        // Create lines with consistent spacing
+        summary_lines = summary_rows
+            .into_iter()
+            .map(|(label, value, color)| {
+                Line::from(vec![
+                    Span::raw(format!("{label:<max_label_width$}")),
+                    Span::raw("      "), // 6 spaces between label and value
+                    Span::styled(value, Style::new().fg(color).bold()),
+                ])
+            })
+            .collect();
+
+        summary_lines.insert(
+            0,
+            Line::from(vec![Span::styled(
+                "-----------------------------",
+                Style::default().dim(),
+            )]),
+        );
+        summary_lines.insert(
+            0,
+            Line::from(vec![Span::styled("Totals", Style::default().bold().dim())]),
+        );
+    }
 
     let summary_widget =
         Paragraph::new(Text::from(summary_lines)).block(Block::default().title(""));

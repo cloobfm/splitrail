@@ -183,7 +183,8 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                             model: current_model.clone(),
                             stats,
                             role: MessageRole::Assistant, // API requests are from the assistant
-            content: None,                        });
+                            content: None, // No content available for API request messages
+                        });
 
                         message_index += 1;
                     }
@@ -213,7 +214,8 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                         model: None,
                         stats: Stats::default(), // User messages don't have token costs
                         role: MessageRole::User,
-            content: None,                    });
+                        content: Some(ask), // Include the user's ask/question
+                    });
 
                     message_index += 1;
                 }
