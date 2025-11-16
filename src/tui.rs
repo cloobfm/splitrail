@@ -217,77 +217,117 @@ async fn run_app(
                     }
                 }
                 KeyCode::Right | KeyCode::Char('l') => {
-                    if *selected_tab < filtered_stats.len() { // +1 for Summary tab
+                    if *selected_tab < filtered_stats.len() + 1 { // +1 for Summary tab
                         *selected_tab += 1;
                         needs_redraw = true;
                     }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if let Some(current_stats) = filtered_stats.get(*selected_tab) {
-                        let total_rows = current_stats.daily_stats.len() + 2; // +2 for separator and totals rows
-                        if let Some(table_state) = table_states.get_mut(*selected_tab)
-                            && let Some(selected) = table_state.selected()
-                            && selected < total_rows.saturating_sub(1)
+                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                    // Summary tab is at index 0, so only process for tabs 1+
+                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                        let analyzer_index = *selected_tab - 1;
+                        if analyzer_index < table_states.len()
+                            && let Some(current_stats) = filtered_stats.get(analyzer_index)
                         {
-                            table_state.select(Some(if selected == current_stats.daily_stats.len().saturating_sub(1) {
-                                selected + 2 // Skip separator row
-                            } else {
-                                selected + 1
-                            }));
-                            needs_redraw = true;
+                            let total_rows = current_stats.daily_stats.len() + 3; // header + data + separator + totals
+                            if let Some(table_state) = table_states.get_mut(analyzer_index)
+                                && let Some(selected) = table_state.selected()
+                                && selected < total_rows.saturating_sub(1)
+                            {
+                                table_state.select(Some(if selected == current_stats.daily_stats.len() {
+                                    selected + 2 // Skip separator row
+                                } else {
+                                    selected + 1
+                                }));
+                                needs_redraw = true;
+                            }
                         }
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    if let Some(current_stats) = filtered_stats.get(*selected_tab)
-                        && let Some(table_state) = table_states.get_mut(*selected_tab)
-                        && let Some(selected) = table_state.selected()
-                        && selected > 0
-                    {
-                        table_state.select(Some(selected.saturating_sub(
-                            if selected == current_stats.daily_stats.len() + 1 {
-                                2 // Skip separator row
-                            } else {
-                                1
-                            },
-                        )));
-                        needs_redraw = true;
+                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                    // Summary tab is at index 0, so only process for tabs 1+
+                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                        let analyzer_index = *selected_tab - 1;
+                        if analyzer_index < table_states.len()
+                            && let Some(current_stats) = filtered_stats.get(analyzer_index)
+                            && let Some(table_state) = table_states.get_mut(analyzer_index)
+                            && let Some(selected) = table_state.selected()
+                            && selected > 0
+                        {
+                            table_state.select(Some(selected.saturating_sub(
+                                if selected == current_stats.daily_stats.len() + 1 {
+                                    2 // Skip separator row
+                                } else {
+                                    1
+                                },
+                            )));
+                            needs_redraw = true;
+                        }
                     }
                 }
                 KeyCode::Home => {
-                    if let Some(table_state) = table_states.get_mut(*selected_tab) {
-                        table_state.select(Some(0));
-                        needs_redraw = true;
+                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                    // Summary tab is at index 0, so only process for tabs 1+
+                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                        let analyzer_index = *selected_tab - 1;
+                        if analyzer_index < table_states.len()
+                            && let Some(table_state) = table_states.get_mut(analyzer_index)
+                        {
+                            table_state.select(Some(0));
+                            needs_redraw = true;
+                        }
                     }
                 }
                 KeyCode::End => {
-                    if let Some(current_stats) = filtered_stats.get(*selected_tab) {
-                        let total_rows = current_stats.daily_stats.len() + 2;
-                        if let Some(table_state) = table_states.get_mut(*selected_tab) {
-                            table_state.select(Some(total_rows.saturating_sub(1)));
-                            needs_redraw = true;
+                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                    // Summary tab is at index 0, so only process for tabs 1+
+                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                        let analyzer_index = *selected_tab - 1;
+                        if analyzer_index < table_states.len()
+                            && let Some(current_stats) = filtered_stats.get(analyzer_index)
+                        {
+                            let total_rows = current_stats.daily_stats.len() + 2;
+                            if let Some(table_state) = table_states.get_mut(analyzer_index) {
+                                table_state.select(Some(total_rows.saturating_sub(1)));
+                                needs_redraw = true;
+                            }
                         }
                     }
                 }
                 KeyCode::PageDown => {
-                    if let Some(current_stats) = filtered_stats.get(*selected_tab) {
-                        let total_rows = current_stats.daily_stats.len() + 2;
-                        if let Some(table_state) = table_states.get_mut(*selected_tab)
-                            && let Some(selected) = table_state.selected()
+                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                    // Summary tab is at index 0, so only process for tabs 1+
+                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                        let analyzer_index = *selected_tab - 1;
+                        if analyzer_index < table_states.len()
+                            && let Some(current_stats) = filtered_stats.get(analyzer_index)
                         {
-                            let new_selected = (selected + 10).min(total_rows.saturating_sub(1));
-                            table_state.select(Some(new_selected));
-                            needs_redraw = true;
+                            let total_rows = current_stats.daily_stats.len() + 2;
+                            if let Some(table_state) = table_states.get_mut(analyzer_index)
+                                && let Some(selected) = table_state.selected()
+                            {
+                                let new_selected = (selected + 10).min(total_rows.saturating_sub(1));
+                                table_state.select(Some(new_selected));
+                                needs_redraw = true;
+                            }
                         }
                     }
                 }
                 KeyCode::PageUp => {
-                    if let Some(table_state) = table_states.get_mut(*selected_tab)
-                        && let Some(selected) = table_state.selected()
-                    {
-                        let new_selected = selected.saturating_sub(10);
-                        table_state.select(Some(new_selected));
-                        needs_redraw = true;
+                    // Only handle navigation on individual analyzer tabs (selected_tab > 0)
+                    // Summary tab is at index 0, so only process for tabs 1+
+                    if *selected_tab > 0 && *selected_tab <= filtered_stats.len() {
+                        let analyzer_index = *selected_tab - 1;
+                        if analyzer_index < table_states.len()
+                            && let Some(table_state) = table_states.get_mut(analyzer_index)
+                            && let Some(selected) = table_state.selected()
+                        {
+                            let new_selected = selected.saturating_sub(10);
+                            table_state.select(Some(new_selected));
+                            needs_redraw = true;
+                        }
                     }
                 }
                 _ => {}
@@ -381,6 +421,10 @@ fn draw_ui(
             if let Some(current_stats) = filtered_stats.get(analyzer_index)
                 && let Some(current_table_state) = table_states.get_mut(analyzer_index)
             {
+                // Debug: ensure table state is initialized for this analyzer
+                if current_table_state.selected().is_none() {
+                    current_table_state.select(Some(0));
+                }
                 // Main table
                 draw_daily_stats_table(
                     frame,
@@ -1242,20 +1286,29 @@ fn update_table_states(
     current_stats: &MultiAnalyzerStats,
     selected_tab: &mut usize,
 ) {
-    let filtered_count = current_stats
+    let filtered_analyzers: Vec<&AgenticCodingToolStats> = current_stats
         .analyzer_stats
         .iter()
         .filter(|stats| has_data(stats))
-        .count();
+        .collect();
 
-    // Preserve existing table states when resizing
-    let old_states = table_states.clone();
+    let filtered_count = filtered_analyzers.len();
+
+    // Create a map of analyzer name to old table state
+    let mut old_states_by_name: std::collections::HashMap<String, TableState> = std::collections::HashMap::new();
+    for (i, analyzer) in filtered_analyzers.iter().enumerate() {
+        if i < table_states.len() {
+            old_states_by_name.insert(analyzer.analyzer_name.clone(), table_states[i].clone());
+        }
+    }
+
+    // Clear and rebuild table states, preserving by analyzer name
     table_states.clear();
 
-    for i in 0..filtered_count {
-        let state = if i < old_states.len() {
-            // Preserve existing state if available
-            old_states[i].clone()
+    for analyzer in &filtered_analyzers {
+        let state = if let Some(old_state) = old_states_by_name.get(&analyzer.analyzer_name) {
+            // Preserve existing state for this analyzer
+            old_state.clone()
         } else {
             // Create new state for new analyzers
             let mut new_state = TableState::default();
