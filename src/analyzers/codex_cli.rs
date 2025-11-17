@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -33,6 +33,9 @@ impl Analyzer for CodexCliAnalyzer {
 
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
+
+            // Codex CLI history file contains summary commands sent via the CLI prompt
+            patterns.push(format!("{home_str}/.codex/history.jsonl"));
 
             // Watch today's session directory directly (no deep recursion!)
             let today = chrono::Local::now();
@@ -88,7 +91,7 @@ impl Analyzer for CodexCliAnalyzer {
 
         let aggregated: Result<Vec<ConversationMessage>> = sources
             .into_par_iter()
-            .map(|source| parse_codex_cli_jsonl_file(&source.path))
+            .map(|source| parse_codex_source(&source.path))
             // Start the reduction with an empty vector and extend it with the
             // entries coming from each successfully-parsed file.
             .try_reduce(Vec::new, |mut acc, mut entries| {
@@ -530,4 +533,81 @@ fn normalize_model_name(raw: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn parse_codex_source(path: &Path) -> Result<Vec<ConversationMessage>> {
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name == "history.jsonl")
+    {
+        return parse_codex_cli_history_file(path);
+    }
+
+    parse_codex_cli_jsonl_file(path)
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexHistoryEntry {
+    session_id: String,
+    ts: i64,
+    text: String,
+}
+
+fn parse_codex_cli_history_file(path: &Path) -> Result<Vec<ConversationMessage>> {
+    let file = File::open(path)?;
+    let reader = BufReader::with_capacity(64 * 1024, file);
+
+    let mut session_counts: HashMap<String, u64> = HashMap::new();
+    let mut messages = Vec::new();
+
+    for line_result in reader.lines() {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let mut bytes = line.into_bytes();
+        let entry: CodexHistoryEntry = match simd_json::from_slice(&mut bytes) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let trimmed = entry.text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let counter = session_counts
+            .entry(entry.session_id.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(0);
+
+        let date = DateTime::from_timestamp(entry.ts, 0).unwrap_or_else(Utc::now);
+
+        let conversation_hash = hash_text(&entry.session_id);
+        let global_hash = hash_text(&format!(
+            "history:{}:{}:{}",
+            entry.session_id, entry.ts, counter
+        ));
+        let local_hash = Some(format!("history-{}-{counter}", entry.session_id));
+
+        messages.push(ConversationMessage {
+            application: Application::CodexCli,
+            date,
+            project_hash: String::new(),
+            conversation_hash,
+            local_hash,
+            global_hash,
+            model: None,
+            stats: Stats::default(),
+            role: MessageRole::User,
+            content: Some(trimmed.to_string()),
+        });
+    }
+
+    Ok(messages)
 }
