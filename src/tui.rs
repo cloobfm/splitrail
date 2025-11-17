@@ -1760,18 +1760,18 @@ fn create_percentage_bar(value: u64, total: u64, width: usize, color: Color) -> 
 }
 
 // Helper to create activity sparkline for last hour
-fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> String {
+fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> Vec<Span<'static>> {
     let now = chrono::Utc::now();
 
-    // Create 80 buckets (45-second intervals for last hour)
-    let mut buckets = vec![0u32; 80];
+    // Create 120 buckets (30-second intervals for last hour)
+    let mut buckets = vec![0u32; 120];
 
     for msg in &stats.messages {
         let age = now.signed_duration_since(msg.date);
         if age.num_seconds() < 3600 && age.num_seconds() >= 0 {
-            let bucket_idx = (age.num_seconds() / 45) as usize; // 45 sec intervals
-            if bucket_idx < 80 {
-                buckets[79 - bucket_idx] += 1;
+            let bucket_idx = (age.num_seconds() / 30) as usize; // 30 sec intervals
+            if bucket_idx < 120 {
+                buckets[119 - bucket_idx] += 1;
             }
         }
     }
@@ -1779,15 +1779,27 @@ fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> String {
     // Find max for scaling
     let max = *buckets.iter().max().unwrap_or(&1).max(&1);
 
-    // Create sparkline with baseline
-    let chars = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    buckets.iter()
+    // Create sparkline with tiny dots like btop (truncate to 80 most recent)
+    let chars = [' ', '⡀', '⡄', '⡆', '⡇', '⣇', '⣧', '⣷', '⣿'];
+    buckets.iter().take(80)
         .map(|&count| {
             if count == 0 {
-                ' '
+                Span::raw(" ")
             } else {
-                let idx = ((count as f64 / max as f64) * (chars.len() - 1) as f64) as usize;
-                chars[idx.min(chars.len() - 1)]
+                let ratio = count as f64 / max as f64;
+                let idx = (ratio * (chars.len() - 1) as f64) as usize;
+                let ch = chars[idx.min(chars.len() - 1)];
+
+                // Gradient colors: green (low) -> yellow (medium) -> red (high)
+                let color = if ratio < 0.33 {
+                    Color::Green
+                } else if ratio < 0.66 {
+                    Color::Yellow
+                } else {
+                    Color::Red
+                };
+
+                Span::styled(ch.to_string(), Style::default().fg(color))
             }
         })
         .collect()
@@ -1886,15 +1898,19 @@ fn draw_visual_cli_panels(
             _ => Color::Gray,
         };
 
-        lines.push(Line::from(vec![
+        // Build the line with colored sparkline spans
+        let mut line_spans = vec![
             Span::styled(format!("{:12}", cli_name), Style::default().fg(name_color).bold()),
             Span::raw(" "),
-            Span::styled(sparkline, Style::default().fg(Color::Cyan)),
+        ];
+        line_spans.extend(sparkline);
+        line_spans.extend(vec![
             Span::raw("   "),
             Span::styled(state.chars().next().unwrap_or('⚫').to_string(), Style::default()),
             Span::raw(" "),
             Span::styled(_idle.clone(), Style::default().fg(Color::DarkGray)),
-        ]));
+        ]);
+        lines.push(Line::from(line_spans));
 
         // Add separator line below the sparkline graph (to end of content)
         // CLI name (12) + space + sparkline (80) + spacing + status + timestamp = ~109
@@ -1928,7 +1944,7 @@ fn draw_visual_cli_panels(
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
-                .title("📊 Live Activity (last hour)")
+                .title("📊 Live Activity")
                 .title_style(Style::default().bold().fg(Color::Cyan)),
         );
 
