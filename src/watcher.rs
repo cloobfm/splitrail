@@ -222,29 +222,7 @@ impl RealtimeStatsManager {
             self.last_poll_time = now;
 
             // Reload Codex CLI specifically
-            if let Some(analyzer) = self.registry.get_analyzer_by_display_name("Codex CLI") {
-                match analyzer.get_stats().await {
-                    Ok(new_stats) => {
-                        let mut updated_analyzer_stats = self.current_stats.analyzer_stats.clone();
-
-                        if let Some(pos) = updated_analyzer_stats
-                            .iter()
-                            .position(|s| s.analyzer_name == "Codex CLI")
-                        {
-                            updated_analyzer_stats[pos] = new_stats;
-                        } else {
-                            updated_analyzer_stats.push(new_stats);
-                        }
-
-                        self.current_stats = MultiAnalyzerStats {
-                            analyzer_stats: updated_analyzer_stats,
-                        };
-
-                        let _ = self.update_tx.send(self.current_stats.clone());
-                    }
-                    Err(_) => {} // Silently ignore polling errors
-                }
-            }
+            let _ = self.reload_analyzer_stats("Codex CLI", false).await;
         }
         Ok(())
     }
@@ -264,39 +242,8 @@ impl RealtimeStatsManager {
                 // Update last reload time
                 self.last_reload_times.insert(analyzer_name.clone(), now);
 
-                // Reload data for the specific analyzer
-                if let Some(analyzer) = self.registry.get_analyzer_by_display_name(&analyzer_name) {
-                    match analyzer.get_stats().await {
-                        Ok(new_stats) => {
-                            // Update the stats for this analyzer
-                            let mut updated_analyzer_stats =
-                                self.current_stats.analyzer_stats.clone();
-
-                            // Find and replace the stats for this analyzer
-                            if let Some(pos) = updated_analyzer_stats
-                                .iter()
-                                .position(|s| s.analyzer_name == analyzer_name)
-                            {
-                                updated_analyzer_stats[pos] = new_stats;
-                            } else {
-                                // New analyzer data
-                                updated_analyzer_stats.push(new_stats);
-                            }
-
-                            self.current_stats = MultiAnalyzerStats {
-                                analyzer_stats: updated_analyzer_stats,
-                            };
-
-                            // Send the update
-                            let _ = self.update_tx.send(self.current_stats.clone());
-
-                            // Trigger auto-upload if enabled and debounce time has passed
-                            self.trigger_auto_upload_if_enabled().await;
-                        }
-                        Err(e) => {
-                            eprintln!("❌ Error reloading {analyzer_name}: {e}");
-                        }
-                    }
+                if let Err(e) = self.reload_analyzer_stats(&analyzer_name, true).await {
+                    eprintln!("❌ Error reloading {analyzer_name}: {e}");
                 }
             }
             WatcherEvent::Error(err) => {
@@ -407,5 +354,39 @@ impl RealtimeStatsManager {
                 upload::perform_background_upload(stats, upload_status, None).await;
             }
         });
+    }
+
+    async fn reload_analyzer_stats(
+        &mut self,
+        analyzer_name: &str,
+        trigger_upload: bool,
+    ) -> Result<()> {
+        let Some(analyzer) = self.registry.get_analyzer_by_display_name(analyzer_name) else {
+            return Ok(());
+        };
+
+        let new_stats = analyzer.get_stats().await?;
+        let mut updated_analyzer_stats = self.current_stats.analyzer_stats.clone();
+
+        if let Some(pos) = updated_analyzer_stats
+            .iter()
+            .position(|s| s.analyzer_name == analyzer_name)
+        {
+            updated_analyzer_stats[pos] = new_stats;
+        } else {
+            updated_analyzer_stats.push(new_stats);
+        }
+
+        self.current_stats = MultiAnalyzerStats {
+            analyzer_stats: updated_analyzer_stats,
+        };
+
+        let _ = self.update_tx.send(self.current_stats.clone());
+
+        if trigger_upload {
+            self.trigger_auto_upload_if_enabled().await;
+        }
+
+        Ok(())
     }
 }
