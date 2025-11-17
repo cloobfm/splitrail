@@ -1805,31 +1805,59 @@ fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> Vec<Span<'static
         .collect()
 }
 
+// Helper function to get the current username
+fn get_username() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "You".to_string())
+}
+
+// Helper function to simplify analyzer names to single words
+fn simplify_analyzer_name(name: &str) -> &str {
+    match name {
+        "Claude Code" => "Claude",
+        "Codex CLI" => "Codex",
+        "Gemini CLI" => "Gemini",
+        "GitHub Copilot" => "Copilot",
+        "Cline" => "Cline",
+        "Roo Code" => "Roo",
+        "Kilo Code" => "Kilo",
+        "Qwen Code" => "Qwen",
+        "Q CLI" => "Q",
+        _ => name, // Fallback to original name if not matched
+    }
+}
+
 // Get last message preview
 fn get_last_message_preview(stats: &AgenticCodingToolStats, max_len: usize) -> (String, Vec<String>) {
-    // Get last 5 messages for debugging (all roles)
+    // Get last 5 messages (all roles)
     let mut recent_messages: Vec<_> = stats.messages.iter().collect();
     recent_messages.sort_by_key(|msg| std::cmp::Reverse(msg.date));
     recent_messages.truncate(5);
 
+    // Reverse to show oldest to newest
+    recent_messages.reverse();
+
     if let Some(last_msg) = stats.messages.iter().max_by_key(|msg| msg.date) {
+        let username = get_username();
+        let simplified_name = simplify_analyzer_name(&stats.analyzer_name);
         let role = match last_msg.role {
-            crate::types::MessageRole::User => "You",
-            crate::types::MessageRole::Assistant => &stats.analyzer_name,
+            crate::types::MessageRole::User => username.as_str(),
+            crate::types::MessageRole::Assistant => simplified_name,
         };
 
-        // For debugging, collect last 5 messages as individual strings
+        // Collect last 5 messages as individual strings, ordered oldest to newest
         let mut message_lines = Vec::new();
         for (i, msg) in recent_messages.iter().enumerate() {
             let msg_role = match msg.role {
-                crate::types::MessageRole::User => "You",
-                crate::types::MessageRole::Assistant => &stats.analyzer_name,
+                crate::types::MessageRole::User => username.as_str(),
+                crate::types::MessageRole::Assistant => simplified_name,
             };
-    
+
             if let Some(content) = &msg.content {
                 // Show content as single line (remove newlines)
                 let single_line_content = content.replace('\n', " ").replace('\r', "");
-                message_lines.push(format!("MSG{} ({}): {}", i + 1, msg_role, single_line_content));
+                message_lines.push(format!("{}: {}", msg_role, single_line_content));
             } else {
                 // Show more debug info for missing content
                 let debug_details = format!(
@@ -1837,10 +1865,10 @@ fn get_last_message_preview(stats: &AgenticCodingToolStats, max_len: usize) -> (
                     msg.role.clone() as u8, msg.stats.input_tokens + msg.stats.output_tokens,
                     msg.stats.cost, msg.stats.tool_calls
                 );
-                message_lines.push(format!("MSG{} ({}): [no content] {}", i + 1, msg_role, debug_details));
+                message_lines.push(format!("{}: [no content] {}", msg_role, debug_details));
             }
         }
-    
+
         (role.to_string(), message_lines)
     } else {
         ("—".to_string(), vec!["No activity".to_string()])
