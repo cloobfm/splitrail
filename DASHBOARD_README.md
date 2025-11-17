@@ -81,7 +81,7 @@ source ~/.zshrc
 Run this one-liner to install automatically:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cloobfm/splitrail/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cloobfm/splitrail/dashboard/scripts/install.sh | bash
 ```
 
 ## Features of This Custom Fork

@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Splitrail Installation Script
+# Splitrail Dashboard Installation Script
 # This script builds and installs Splitrail from source
 
 set -e  # Exit on any error
 
-echo "🔍 Installing Splitrail..."
+echo "🔍 Installing Splitrail Dashboard..."
 
 # Check if Rust is installed
 if ! command -v rustc &> /dev/null; then
@@ -29,19 +29,19 @@ fi
 
 # Create temporary directory
 TEMP_DIR=$(mktemp -d)
-echo "📦 Cloning Splitrail repository..."
+echo "📦 Cloning Splitrail Dashboard repository..."
 
 # Clone the repository
-git clone https://github.com/cloobfm/splitrail.git "$TEMP_DIR/splitrail" --depth 1
+git clone https://github.com/cloobfm/splitrail.git -b dashboard "$TEMP_DIR/splitrail"
 
 cd "$TEMP_DIR/splitrail"
 
-echo "🔨 Building Splitrail with nightly toolchain (this may take a few minutes)..."
+echo "🔨 Building Splitrail Dashboard with nightly toolchain (this may take a few minutes)..."
 
 # Build in release mode using nightly toolchain (as specified in rust-toolchain.toml)
 rustup run nightly cargo build --release
 
-echo "💾 Installing Splitrail to /usr/local/bin..."
+echo "💾 Installing Splitrail Dashboard to /usr/local/bin..."
 
 # Install to system
 if [ -w /usr/local/bin ]; then
@@ -59,7 +59,7 @@ fi
 # Clean up
 rm -rf "$TEMP_DIR"
 
-echo "✅ Splitrail installed successfully!"
+echo "✅ Splitrail Dashboard installed successfully!"
 echo ""
 echo "🚀 Quick start:"
 echo "   splitrail                    # Start the dashboard"
