@@ -21,6 +21,12 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 ```
 
+Splitrail requires Rust nightly toolchain. Install it with:
+
+```bash
+rustup toolchain install nightly
+```
+
 ### Install Command Line Tools (macOS)
 ```bash
 xcode-select --install

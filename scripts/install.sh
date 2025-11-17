@@ -20,6 +20,13 @@ if ! command -v git &> /dev/null; then
     exit 1
 fi
 
+# Ensure nightly toolchain is installed
+echo "🔧 Checking for nightly Rust toolchain..."
+if ! rustup toolchain list | grep -q "nightly"; then
+    echo "📦 Installing nightly Rust toolchain..."
+    rustup toolchain install nightly
+fi
+
 # Create temporary directory
 TEMP_DIR=$(mktemp -d)
 echo "📦 Cloning Splitrail repository..."
@@ -29,10 +36,10 @@ git clone https://github.com/cloobfm/splitrail.git "$TEMP_DIR/splitrail" --depth
 
 cd "$TEMP_DIR/splitrail"
 
-echo "🔨 Building Splitrail (this may take a few minutes)..."
+echo "🔨 Building Splitrail with nightly toolchain (this may take a few minutes)..."
 
-# Build in release mode
-cargo build --release
+# Build in release mode using nightly toolchain (as specified in rust-toolchain.toml)
+rustup run nightly cargo build --release
 
 echo "💾 Installing Splitrail to /usr/local/bin..."
 
@@ -58,3 +65,5 @@ echo "🚀 Quick start:"
 echo "   splitrail                    # Start the dashboard"
 echo "   splitrail config init        # Initialize configuration"
 echo "   splitrail --help            # Show available options"
+echo ""
+echo "💡 Note: This version requires Rust nightly toolchain (as configured in rust-toolchain.toml)."
