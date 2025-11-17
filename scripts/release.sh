@@ -19,39 +19,71 @@ if ! command -v rustup &> /dev/null; then
     exit 1
 fi
 
-# Install cross-compilation targets if needed
-echo "📦 Installing cross-compilation targets..."
-
-# Install targets for different platforms
-rustup target add x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-
 # Create releases directory
 mkdir -p releases
 
-echo "🔨 Building for macOS (x86_64)..."
-cargo +nightly build --release --target x86_64-apple-darwin
-cp target/x86_64-apple-darwin/release/splitrail-dashboard releases/splitrail-dashboard-macos-x86_64
+# Get current platform information
+ARCH=$(uname -m)
+OS=$(uname -s)
 
-echo "🔨 Building for macOS (aarch64)..."
-cargo +nightly build --release --target aarch64-apple-darwin
-cp target/aarch64-apple-darwin/release/splitrail-dashboard releases/splitrail-dashboard-macos-aarch64
+# Determine the current platform binary name
+if [ "$OS" = "Darwin" ]; then
+    PLATFORM="macos"
+    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+        TARGET="aarch64-apple-darwin"
+    else
+        TARGET="x86_64-apple-darwin"
+    fi
+    BINARY_NAME="splitrail-dashboard-macos-$ARCH"
+elif [ "$OS" = "Linux" ]; then
+    PLATFORM="linux"
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+        TARGET="aarch64-unknown-linux-musl"
+    else
+        TARGET="x86_64-unknown-linux-musl"
+    fi
+    BINARY_NAME="splitrail-dashboard-linux-$ARCH"
+else
+    echo "❌ Unsupported operating system: $OS"
+    exit 1
+fi
 
-echo "🔨 Building for Linux (x86_64)..."
-cargo +nightly build --release --target x86_64-unknown-linux-musl
-cp target/x86_64-unknown-linux-musl/release/splitrail-dashboard releases/splitrail-dashboard-linux-x86_64
+echo "📦 Detected platform: $PLATFORM ($ARCH)"
+echo "🎯 Building for target: $TARGET"
 
-echo "🔨 Building for Linux (aarch64)..."
-cargo +nightly build --release --target aarch64-unknown-linux-musl
-cp target/aarch64-unknown-linux-musl/release/splitrail-dashboard releases/splitrail-dashboard-linux-aarch64
+# Install the target for current platform only
+rustup target add $TARGET
 
-echo "✅ Splitrail Dashboard release binaries built successfully!"
+echo "🔨 Building for current platform ($TARGET)..."
+cargo +nightly build --release --target $TARGET
+cp target/$TARGET/release/splitrail-dashboard "releases/$BINARY_NAME"
+
+echo "✅ Splitrail Dashboard binary built successfully!"
+echo "   Binary location: releases/$BINARY_NAME"
+
+# Check if GitHub CLI is available and create release
+if command -v gh &> /dev/null; then
+    echo "🔗 GitHub CLI found. Creating release..."
+
+    # Get version from Cargo.toml
+    VERSION=$(grep -m 1 "version = " Cargo.toml | cut -d '"' -f 2)
+
+    echo "🏷️  Creating release with version: $VERSION"
+
+    gh release create "v$VERSION" "releases/$BINARY_NAME" \
+        --title "Splitrail Dashboard v$VERSION" \
+        --notes "Custom dashboard version with enhanced features for real-time token usage tracking."
+
+    echo "🎉 GitHub release created successfully!"
+    echo "   Available at: https://github.com/cloobfm/splitrail/releases/tag/v$VERSION"
+else
+    echo "💡 GitHub CLI not found. To create release manually:"
+    echo "   1. Install GitHub CLI: brew install gh"
+    echo "   2. Authenticate: gh auth login"
+    echo "   3. Run: gh release create v2.0.0-dashboard.1 releases/$BINARY_NAME --title \"Splitrail Dashboard v2.0.0-dashboard.1\" --notes \"Custom dashboard version with enhanced features for real-time token usage tracking.\""
+fi
+
 echo ""
-echo "📁 Release binaries are located in the 'releases' directory:"
-echo "   releases/splitrail-dashboard-macos-x86_64"
-echo "   releases/splitrail-dashboard-macos-aarch64"
-echo "   releases/splitrail-dashboard-linux-x86_64"
-echo "   releases/splitrail-dashboard-linux-aarch64"
-echo ""
-echo "📦 To upload to GitHub Releases:"
-echo "   Use GitHub CLI: gh release create v2.0.0-dashboard.1 releases/*"
-echo "   Or upload manually to: https://github.com/cloobfm/splitrail/releases"
+echo "💡 To build for additional platforms, install the required tools first:"
+echo "   For Linux targets from macOS: rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl"
+echo "   You may need to install cross-compilation tools like: rust-musl-cross"
