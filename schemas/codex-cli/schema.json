@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Piebald-AI/splitrail/schemas/codex-cli/session-schema.json",
+  "title": "Codex CLI Session JSONL Schema",
+  "description": "Schema for Codex CLI session JSONL log files (detailed conversations)",
+  "type": "object",
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["session_meta", "turn_context", "response_item", "event_msg", "function_call", "function_call_output"]
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "title": "Session Meta Payload",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "timestamp": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Current working directory when session was created"
+            },
+            "originator": {
+              "type": "string"
+            },
+            "cli_version": {
+              "type": "string"
+            },
+            "instructions": {
+              "type": ["string", "null"]
+            },
+            "source": {
+              "type": "string"
+            },
+            "model_provider": {
+              "type": "string"
+            },
+            "git": {
+              "type": "object",
+              "properties": {
+                "commit_hash": {
+                  "type": "string"
+                },
+                "branch": {
+                  "type": "string"
+                },
+                "repository_url": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              }
+            }
+          },
+          "required": ["id", "timestamp"]
+        },
+        {
+          "title": "Turn Context Payload",
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Current working directory for this turn"
+            },
+            "approval_policy": {
+              "type": "string"
+            },
+            "sandbox_policy": {
+              "type": "object"
+            },
+            "model": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "title": "Response Item Payload",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "content": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "input_text": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "arguments": {
+              "type": "object"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "title": "Event Message Payload",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "info": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "total_token_usage": {
+                      "$ref": "#/$defs/tokenUsage"
+                    },
+                    "last_token_usage": {
+                      "$ref": "#/$defs/tokenUsage"
+                    },
+                    "model_context_window": {
+                      "type": "integer"
+                    },
+                    "model": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rate_limits": {
+              "type": "object"
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "required": ["timestamp", "type", "payload"],
+  "$defs": {
+    "tokenUsage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cached_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reasoning_output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

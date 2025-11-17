@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Piebald-AI/splitrail/schemas/claude-code/schema.json",
+  "title": "Claude Code JSONL Schema",
+  "description": "Schema for Claude Code JSONL log files",
+  "type": "object",
+  "oneOf": [
+    {
+      "title": "Message Entry",
+      "allOf": [
+        { "$ref": "#/$defs/messageEntry" }
+      ]
+    },
+    {
+      "title": "Summary Entry",
+      "allOf": [
+        { "$ref": "#/$defs/summaryEntry" }
+      ]
+    },
+    {
+      "title": "File History Snapshot Entry",
+      "allOf": [
+        { "$ref": "#/$defs/fileHistorySnapshotEntry" }
+      ]
+    },
+    {
+      "title": "Queue Operation Entry", 
+      "allOf": [
+        { "$ref": "#/$defs/queueOperationEntry" }
+      ]
+    }
+  ],
+  "required": ["type"],
+  "$defs": {
+    "messageEntry": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["user", "assistant", "system"]
+        },
+        "parentUuid": {
+          "type": ["string", "null"]
+        },
+        "isSidechain": {
+          "type": "boolean"
+        },
+        "userType": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Current working directory when message was created"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "gitBranch": {
+          "type": "string"
+        },
+        "message": {
+          "$ref": "#/$defs/message"
+        },
+        "uuid": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "thinkingMetadata": {
+          "$ref": "#/$defs/thinkingMetadata"
+        },
+        "toolUseResult": {
+          "type": "object"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": ["type", "sessionId", "uuid", "timestamp"]
+    },
+    "summaryEntry": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "summary"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "leafUuid": {
+          "type": "string"
+        }
+      },
+      "required": ["type", "summary", "leafUuid"]
+    },
+    "fileHistorySnapshotEntry": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "file-history-snapshot"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "snapshot": {
+          "type": "object"
+        },
+        "isSnapshotUpdate": {
+          "type": "boolean"
+        }
+      },
+      "required": ["type", "messageId", "snapshot", "isSnapshotUpdate"]
+    },
+    "queueOperationEntry": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "queue-operation"
+        },
+        "operation": {
+          "type": "string",
+          "enum": ["enqueue", "dequeue"]
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "content": {
+          "type": ["string", "null"]
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": ["type", "operation", "timestamp", "sessionId"]
+    },
+    "message": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "content": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "tool_use_id": {
+                    "type": "string"
+                  },
+                  "tool_use": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "stop_reason": {
+          "type": ["string", "null"]
+        },
+        "stop_sequence": {
+          "type": ["string", "null"]
+        },
+        "usage": {
+          "$ref": "#/$defs/usage"
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer", 
+          "minimum": 0
+        },
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_creation": {
+          "type": "object"
+        },
+        "service_tier": {
+          "type": "string"
+        }
+      }
+    },
+    "thinkingMetadata": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        },
+        "disabled": {
+          "type": "boolean"
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

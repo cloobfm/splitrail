@@ -1,0 +1,22 @@
+[
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "text",
+        "text": "can you provide some feedback on how to improve the search functionality for amplify that is included in the session event modal?"
+      }
+    ],
+    "ts": 1762564951219
+  },
+  {
+    "role": "assistant", 
+    "content": [
+      {
+        "type": "text",
+        "text": "I'll analyze the search functionality for the session event modal in the Amplify integration."
+      }
+    ],
+    "ts": 1762565031704
+  }
+]

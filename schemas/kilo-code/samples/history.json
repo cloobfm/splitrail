@@ -1,0 +1,13 @@
+{
+  "version": "1.0.0",
+  "entries": [
+    {
+      "prompt": "can you provide some feedback on how to improve the search functionality for amplify that is included in the session event modal?  there are a number of issues with it like can't click and select the session, search is not accurately finding results that match the string",
+      "timestamp": 1762544201476
+    },
+    {
+      "prompt": "/config",
+      "timestamp": 1762544225183
+    }
+  ]
+}

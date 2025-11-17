@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Piebald-AI/splitrail/schemas/amazon-q/schema.json",
+  "title": "Amazon Q SQLite Database Schema",
+  "description": "Schema for Amazon Q SQLite database file structure",
+  "type": "object",
+  "properties": {
+    "database_file": {
+      "type": "string",
+      "description": "Path to the Amazon Q SQLite database file",
+      "example": "/Users/bzl/Library/Application Support/amazon-q/data.sqlite3"
+    },
+    "tables": {
+      "type": "object",
+      "properties": {
+        "migrations": {
+          "type": "object",
+          "description": "Table tracking database migrations",
+          "properties": {
+            "columns": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Primary key for migration records"
+                },
+                "version": {
+                  "type": "string",
+                  "description": "Migration version number"
+                },
+                "migration_time": {
+                  "type": "string",
+                  "description": "Timestamp of when migration was applied"
+                }
+              }
+            }
+          }
+        },
+        "history": {
+          "type": "object",
+          "description": "Table storing shell command history",
+          "properties": {
+            "columns": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Primary key for history records"
+                },
+                "command": {
+                  "type": "string",
+                  "description": "The shell command that was executed"
+                },
+                "shell": {
+                  "type": "string",
+                  "description": "The shell used to execute the command"
+                },
+                "pid": {
+                  "type": "string",
+                  "description": "Process ID of the command"
+                },
+                "session_id": {
+                  "type": "string",
+                  "description": "Session identifier for the command"
+                },
+                "cwd": {
+                  "type": "string",
+                  "description": "Current working directory when command was executed"
+                },
+                "start_time": {
+                  "type": "string",
+                  "description": "When the command started executing"
+                },
+                "hostname": {
+                  "type": "string",
+                  "description": "Hostname where the command was executed"
+                },
+                "exit_code": {
+                  "type": "string",
+                  "description": "Exit code of the command"
+                },
+                "end_time": {
+                  "type": "string",
+                  "description": "When the command finished executing"
+                },
+                "duration": {
+                  "type": "string",
+                  "description": "Duration of command execution in seconds"
+                }
+              }
+            }
+          }
+        },
+        "auth_kv": {
+          "type": "object",
+          "description": "Table storing authentication key-value pairs",
+          "properties": {
+            "columns": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Authentication key (primary key)"
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Authentication value"
+                }
+              }
+            }
+          }
+        },
+        "state": {
+          "type": "object",
+          "description": "Table storing application state as key-value pairs",
+          "properties": {
+            "columns": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "State key (primary key)"
+                },
+                "value": {
+                  "type": "string",
+                  "description": "State value (BLOB)"
+                }
+              }
+            }
+          }
+        },
+        "conversations": {
+          "type": "object",
+          "description": "Table storing conversation data with project path as key and JSON conversation as value",
+          "properties": {
+            "columns": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Project path and path as key (primary key)"
+                },
+                "value": {
+                  "type": "string",
+                  "description": "JSON conversation data containing messages, tool uses, and metadata"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": ["database_file", "tables"],
+  "definitions": {
+    "conversation_entry": {
+      "type": "object",
+      "description": "Structure of a conversation entry in the conversations table value",
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "description": "Unique identifier for the conversation"
+        },
+        "next_message": {
+          "type": "object",
+          "description": "Next message in the conversation flow"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "user": {
+                "type": "object",
+                "properties": {
+                  "timestamp": {
+                    "type": "string",
+                    "description": "When the user message was sent"
+                  },
+                  "content": {
+                    "type": "object",
+                    "description": "User message content with prompt or tool use results"
+                  },
+                  "env_context": {
+                    "type": "object",
+                    "properties": {
+                      "env_state": {
+                        "type": "object",
+                        "properties": {
+                          "current_working_directory": {
+                            "type": "string",
+                            "description": "Working directory when message was sent"
+                          },
+                          "operating_system": {
+                            "type": "string",
+                            "description": "Operating system context"
+                          },
+                          "environment_variables": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "assistant": {
+                "type": "object",
+                "description": "Assistant message with response or tool use"
+              },
+              "request_metadata": {
+                "type": "object",
+                "properties": {
+                  "request_id": {
+                    "type": "string",
+                    "description": "Unique ID for the request"
+                  },
+                  "message_id": {
+                    "type": "string",
+                    "description": "ID for this specific message"
+                  },
+                  "model_id": {
+                    "type": "string",
+                    "description": "Model used for this response"
+                  },
+                  "request_start_timestamp_ms": {
+                    "type": "integer",
+                    "description": "Request start time in milliseconds"
+                  },
+                  "response_size": {
+                    "type": "integer",
+                    "description": "Size of the response"
+                  },
+                  "user_prompt_length": {
+                    "type": "integer",
+                    "description": "Length of the user prompt"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

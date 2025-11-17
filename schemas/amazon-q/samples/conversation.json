@@ -1,0 +1,131 @@
+{
+  "conversation_id": "1f5438ac-1162-489e-82e6-1ae2c1f8869d",
+  "next_message": null,
+  "history": [
+    {
+      "user": {
+        "additional_context": "",
+        "env_context": {
+          "env_state": {
+            "operating_system": "macos",
+            "current_working_directory": "/Users/bzl/Virtius/virtius-platform/mt-competitions/_worktrees/bugfixes/mt-competitions",
+            "environment_variables": []
+          }
+        },
+        "content": {
+          "Prompt": {
+            "prompt": "usage"
+          }
+        },
+        "timestamp": "2025-09-07T05:15:54.759722-07:00",
+        "images": null
+      },
+      "assistant": {
+        "ToolUse": {
+          "message_id": "a1f113a2-f483-4e0a-b21f-33f431c6b09e",
+          "content": "",
+          "tool_uses": [
+            {
+              "id": "tooluse_99QNL1KYRU6npKEndtxRXQ",
+              "name": "introspect",
+              "orig_name": "introspect",
+              "args": {
+                "query": "usage"
+              },
+              "orig_args": {
+                "query": "usage"
+              }
+            }
+          ]
+        }
+      },
+      "request_metadata": {
+        "request_id": "9e7ed7e7-c570-42e0-81bb-60283ca71690",
+        "message_id": "a1f113a2-f483-4e0a-b21f-33f431c6b09e",
+        "request_start_timestamp_ms": 1757247354761,
+        "stream_end_timestamp_ms": 1757247357419,
+        "time_to_first_chunk": {
+          "secs": 2,
+          "nanos": 123636083
+        },
+        "time_between_chunks": [
+          {
+            "secs": 0,
+            "nanos": 168541
+          },
+          {
+            "secs": 0,
+            "nanos": 13519708
+          }
+        ],
+        "user_prompt_length": 163,
+        "response_size": 18,
+        "chat_conversation_type": "ToolUse",
+        "tool_use_ids_and_names": [
+          [
+            "tooluse_99QNL1KYRU6npKEndtxRXQ",
+            "introspect"
+          ]
+        ],
+        "model_id": "claude-sonnet-4",
+        "message_meta_tags": []
+      }
+    }
+  ],
+  "valid_history_range": [
+    0,
+    47
+  ],
+  "transcript": [
+    "> /help",
+    "> usage",
+    "\n[Tool uses: introspect]"
+  ],
+  "tools": {
+    "native___": [
+      {
+        "ToolSpecification": {
+          "name": "use_aws",
+          "description": "Make an AWS CLI api call with the specified service, operation, and parameters...",
+          "input_schema": {
+            "json": {
+              "required": [
+                "region",
+                "service_name",
+                "operation_name",
+                "label"
+              ],
+              "type": "object",
+              "properties": {
+                "parameters": {
+                  "type": "object",
+                  "description": "The parameters for the operation..."
+                },
+                "region": {
+                  "description": "Region name for calling the operation on AWS.",
+                  "type": "string"
+                },
+                "service_name": {
+                  "description": "The name of the AWS service.",
+                  "type": "string"
+                },
+                "profile_name": {
+                  "description": "Optional: AWS profile name to use from ~/.aws/credentials.",
+                  "type": "string"
+                },
+                "label": {
+                  "description": "Human readable description of the api that is being called.",
+                  "type": "string"
+                },
+                "operation_name": {
+                  "description": "The name of the operation to perform.",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

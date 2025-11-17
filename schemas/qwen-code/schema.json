@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Piebald-AI/splitrail/schemas/qwen-code/schema.json",
+  "title": "Qwen Code JSON Schema",
+  "description": "Schema for Qwen Code JSON session files",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Unique identifier for the session"
+    },
+    "project_hash": {
+      "type": "string",
+      "description": "Hash of the project identifier"
+    },
+    "start_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the session started"
+    },
+    "last_updated": {
+      "type": "string", 
+      "format": "date-time",
+      "description": "When the session was last updated"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "title": "User Message",
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "User"
+              },
+              "id": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "id", "timestamp", "content"]
+          },
+          {
+            "title": "Qwen Assistant Message",
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "Qwen"
+              },
+              "id": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "content": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "thoughts": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "tokens": {
+                "$ref": "#/$defs/tokens"
+              },
+              "toolCalls": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            },
+            "required": ["type", "id", "timestamp", "content", "model"]
+          },
+          {
+            "title": "System Message",
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "System"
+              },
+              "id": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "id", "timestamp", "content"]
+          },
+          {
+            "title": "Error Message", 
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "Error"
+              },
+              "id": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "id", "timestamp", "content"]
+          }
+        ]
+      }
+    }
+  },
+  "required": ["session_id", "project_hash", "start_time", "last_updated", "messages"],
+  "$defs": {
+    "tokens": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer", 
+          "minimum": 0
+        },
+        "cached": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "thoughts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

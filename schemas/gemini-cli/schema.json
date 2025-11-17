@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Piebald-AI/splitrail/schemas/gemini-cli/schema.json",
+  "title": "Gemini CLI JSON Schema",
+  "description": "Schema for Gemini CLI JSON session files",
+  "type": "object",
+  "properties": {
+    "sessionId": {
+      "type": "string",
+      "description": "Unique identifier for the session"
+    },
+    "projectHash": {
+      "type": "string",
+      "description": "Hash of the project identifier"
+    },
+    "startTime": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the session started"
+    },
+    "lastUpdated": {
+      "type": "string", 
+      "format": "date-time",
+      "description": "When the session was last updated"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "title": "User Message",
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "user"
+              },
+              "id": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "id", "timestamp", "content"]
+          },
+          {
+            "title": "Gemini Assistant Message",
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "gemini"
+              },
+              "id": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "content": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "thoughts": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "tokens": {
+                "$ref": "#/$defs/tokens"
+              },
+              "toolCalls": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            },
+            "required": ["type", "id", "timestamp", "content", "model"]
+          },
+          {
+            "title": "System Message",
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "system"
+              },
+              "id": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "id", "timestamp", "content"]
+          },
+          {
+            "title": "Error Message", 
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "error"
+              },
+              "id": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "id", "timestamp", "content"]
+          }
+        ]
+      }
+    }
+  },
+  "required": ["sessionId", "projectHash", "startTime", "lastUpdated", "messages"],
+  "$defs": {
+    "tokens": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer", 
+          "minimum": 0
+        },
+        "cached": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "thoughts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

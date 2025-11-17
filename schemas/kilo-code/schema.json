@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Piebald-AI/splitrail/schemas/kilo-code/schema.json",
+  "title": "Kilo Code Schema",
+  "description": "Schema for Kilo Code configuration and history files",
+  "type": "object",
+  "oneOf": [
+    {
+      "title": "Configuration File",
+      "allOf": [
+        { "$ref": "#/$defs/configFile" }
+      ]
+    },
+    {
+      "title": "History File",
+      "allOf": [
+        { "$ref": "#/$defs/historyFile" }
+      ]
+    },
+    {
+      "title": "Task File",
+      "allOf": [
+        { "$ref": "#/$defs/taskFile" }
+      ]
+    }
+  ],
+  "$defs": {
+    "configFile": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "telemetry": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/provider"
+          }
+        },
+        "autoApproval": {
+          "$ref": "#/$defs/autoApproval"
+        },
+        "theme": {
+          "type": "string"
+        },
+        "customThemes": {
+          "type": "object"
+        },
+        "editingThroughDiffs": {
+          "type": "boolean"
+        }
+      },
+      "required": ["version", "mode", "telemetry", "provider", "providers", "autoApproval"]
+    },
+    "historyFile": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/historyEntry"
+          }
+        }
+      },
+      "required": ["version", "entries"]
+    },
+    "taskFile": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/contentItem"
+          }
+        },
+        "ts": {
+          "type": "integer"
+        }
+      },
+      "required": ["role", "content", "ts"]
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "kilocodeToken": {
+          "type": "string"
+        },
+        "kilocodeModel": {
+          "type": "string"
+        },
+        "kilocodePosthogApiKey": {
+          "type": "string"
+        },
+        "ollamaBaseUrl": {
+          "type": "string"
+        },
+        "ollamaModelId": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": "integer"
+        }
+      }
+    },
+    "autoApproval": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "read": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "outside": {
+              "type": "boolean"
+            }
+          }
+        },
+        "write": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "outside": {
+              "type": "boolean"
+            },
+            "protected": {
+              "type": "boolean"
+            }
+          }
+        },
+        "execute": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "denied": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "historyEntry": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "integer"
+        }
+      },
+      "required": ["prompt", "timestamp"]
+    },
+    "contentItem": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": ["type"]
+    }
+  }
+}

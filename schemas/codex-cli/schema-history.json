@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Piebald-AI/splitrail/schemas/codex-cli/history-schema.json",
+  "title": "Codex CLI History JSONL Schema",
+  "description": "Schema for Codex CLI history JSONL log files (summary commands)",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Unique identifier for the session"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix timestamp for when the command was executed"
+    },
+    "text": {
+      "type": "string",
+      "description": "The command text that was executed"
+    }
+  },
+  "required": ["session_id", "ts", "text"]
+}
