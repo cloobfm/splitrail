@@ -229,7 +229,6 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
 
     let mut session_model: Option<SessionModel> = None;
     let mut previous_total_usage: Option<CodexCliTokenUsage> = None;
-    let mut saw_token_usage = false;
     let mut _turn_context: Option<CodexCliTurnContext> = None;
     let mut current_tool_call_ids: HashSet<String> = HashSet::new();
 
@@ -320,10 +319,6 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                             });
                         }
                         "assistant" => {
-                            // Token usage is now emitted immediately when processing token_count
-                            // events. We still track assistant messages without additional stats
-                            // to avoid double-counting when Codex emits separate reasoning/tool
-                            // outputs.
                             let content = message
                                 .content
                                 .as_ref()
@@ -331,7 +326,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                 .map(|text| text.trim().to_string())
                                 .filter(|text| !text.is_empty());
 
-                            if !saw_token_usage {
+                            if let Some(content) = content {
                                 let model_state = session_model.clone().unwrap_or_else(|| {
                                     let fallback = SessionModel::inferred(
                                         DEFAULT_FALLBACK_MODEL.to_string(),
@@ -358,7 +353,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                     project_hash: "".to_string(),
                                     stats: Stats::default(),
                                     role: MessageRole::Assistant,
-                                    content,
+                                    content: Some(content),
                                 });
                             }
                         }
@@ -421,8 +416,6 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                 role: MessageRole::Assistant,
                                 content: None,
                             });
-
-                            saw_token_usage = true;
                         }
                     }
                 }
@@ -624,6 +617,10 @@ fn parse_codex_cli_history_file(path: &Path) -> Result<Vec<ConversationMessage>>
             continue;
         }
 
+        if rollout_exists_for_session(&entry.session_id) {
+            continue;
+        }
+
         let counter = session_counts
             .entry(entry.session_id.clone())
             .and_modify(|c| *c += 1)
@@ -653,4 +650,15 @@ fn parse_codex_cli_history_file(path: &Path) -> Result<Vec<ConversationMessage>>
     }
 
     Ok(messages)
+}
+
+fn rollout_exists_for_session(session_id: &str) -> bool {
+    std::env::home_dir().map_or(false, |home| {
+        let home_str = home.to_string_lossy();
+        let pattern = format!("{home_str}/.codex/sessions/*/*/*/*{session_id}.jsonl");
+        glob::glob(&pattern)
+            .ok()
+            .and_then(|mut paths| paths.next())
+            .is_some()
+    })
 }
