@@ -1469,7 +1469,9 @@ fn draw_summary_view(
         u64,
         String,
     )> = Vec::new();
+    let mut cli_meta: Vec<(i64, u8)> = Vec::new();
     for analyzer_stats in filtered_stats {
+        let now_utc = chrono::Utc::now();
         let mut cached = 0u64;
         let mut input = 0u64;
         let mut output = 0u64;
@@ -1492,7 +1494,7 @@ fn draw_summary_view(
         let last_activity = analyzer_stats.messages.iter().map(|msg| msg.date).max();
 
         let idle_time = if let Some(last_msg_time) = last_activity {
-            let duration = chrono::Utc::now().signed_duration_since(last_msg_time);
+            let duration = now_utc.signed_duration_since(last_msg_time);
             if duration.num_days() > 0 {
                 format!("{}d ago", duration.num_days())
             } else if duration.num_hours() > 0 {
@@ -1553,45 +1555,47 @@ fn draw_summary_view(
         };
 
         // Determine CLI state based on last message and recent activity
-        let state =
+        let (state, activity_age, activity_bucket) =
             if let Some(last_message) = analyzer_stats.messages.iter().max_by_key(|msg| msg.date) {
-                let time_since_last = chrono::Utc::now().signed_duration_since(last_message.date);
-                let seconds_since_last = time_since_last.num_seconds();
+                let mut seconds_since_last = now_utc
+                    .signed_duration_since(last_message.date)
+                    .num_seconds();
+                if seconds_since_last < 0 {
+                    seconds_since_last = 0;
+                }
 
                 // Check for recent consecutive assistant messages (indicates active work)
                 let recent_assistant_messages = analyzer_stats
                     .messages
                     .iter()
                     .filter(|msg| {
-                        let age = chrono::Utc::now()
-                            .signed_duration_since(msg.date)
-                            .num_seconds();
+                        let age = now_utc.signed_duration_since(msg.date).num_seconds();
                         age < 60 && matches!(msg.role, crate::types::MessageRole::Assistant)
                     })
                     .count();
 
                 if seconds_since_last < 30 && recent_assistant_messages > 1 {
                     // Multiple recent assistant messages = actively working
-                    "🟢 Active".to_string()
+                    ("🟢 Active".to_string(), seconds_since_last, 0)
                 } else if matches!(last_message.role, crate::types::MessageRole::Assistant)
                     && seconds_since_last < 120
                 {
                     // Last message from assistant, recent = waiting for input
-                    "🟡 Waiting".to_string()
+                    ("🟡 Waiting".to_string(), seconds_since_last, 0)
                 } else if matches!(last_message.role, crate::types::MessageRole::User)
                     && seconds_since_last < 120
                 {
                     // Last message from user, recent = processing
-                    "🔵 Processing".to_string()
+                    ("🔵 Processing".to_string(), seconds_since_last, 0)
                 } else if seconds_since_last < 900 {
                     // No activity in last 15 min but recent = idle
-                    "● Idle".to_string()
+                    ("● Idle".to_string(), seconds_since_last, 1)
                 } else {
                     // Old activity = inactive
-                    "○ Inactive".to_string()
+                    ("○ Inactive".to_string(), seconds_since_last, 2)
                 }
             } else {
-                "○ No data".to_string()
+                ("○ No data".to_string(), i64::MAX / 4, 2)
             };
 
         cli_data.push((
@@ -1607,15 +1611,25 @@ fn draw_summary_view(
             message_count,
             state,
         ));
+        cli_meta.push((activity_age, activity_bucket));
     }
 
     // Build CLI breakdown table with metrics as rows and CLIs as columns
+    let mut cli_order: Vec<usize> = (0..cli_data.len()).collect();
+    cli_order.sort_by_key(|&idx| {
+        let (age, bucket) = cli_meta[idx];
+        (bucket, age, idx)
+    });
+
     let max_visible_cols = ((area.width - 15) / 15).max(1) as usize;
-    let end_col = (tui_state.cli_table_scroll_offset + max_visible_cols).min(cli_data.len());
-    let visible_cli_data = &cli_data[tui_state.cli_table_scroll_offset..end_col];
+    let total_clis = cli_data.len();
+    let start_col = tui_state.cli_table_scroll_offset.min(total_clis);
+    let end_col = (start_col + max_visible_cols).min(total_clis);
+    let visible_indices = &cli_order[start_col..end_col];
 
     let mut cli_header_cells = vec![Cell::new("")];
-    for (cli_name, _, _, _, _, _, _, _, _, _, _) in visible_cli_data {
+    for &idx in visible_indices {
+        let (cli_name, _, _, _, _, _, _, _, _, _, _) = &cli_data[idx];
         cli_header_cells.push(Cell::new(Text::from(cli_name.clone()).right_aligned()));
     }
     let cli_header = Row::new(cli_header_cells)
@@ -1623,7 +1637,7 @@ fn draw_summary_view(
         .height(1);
 
     let mut cli_constraints = vec![Constraint::Length(15)]; // Metric label
-    for _ in 0..visible_cli_data.len() {
+    for _ in 0..visible_indices.len() {
         cli_constraints.push(Constraint::Length(13)); // Each CLI column
     }
 
@@ -1633,7 +1647,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta)),
             )];
-            for (_, cached, _, _, _, _, _, _, _, _, _) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, cached, _, _, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*cached, format_options)).right_aligned(),
                 ));
@@ -1645,7 +1660,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue)),
             )];
-            for (_, _, input, _, _, _, _, _, _, _, _) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, _, input, _, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*input, format_options)).right_aligned(),
                 ));
@@ -1657,7 +1673,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan)),
             )];
-            for (_, _, _, output, _, _, _, _, _, _, _) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, _, _, output, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*output, format_options)).right_aligned(),
                 ));
@@ -1669,7 +1686,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red)),
             )];
-            for (_, _, _, _, reasoning, _, _, _, _, _, _) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, _, _, _, reasoning, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*reasoning, format_options)).right_aligned(),
                 ));
@@ -1681,7 +1699,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("💬 Sessions").style(Style::default().fg(Color::Cyan)),
             )];
-            for (_, _, _, _, _, _, _, _, sessions, _, _) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, _, _, _, _, _, _, _, sessions, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*sessions, format_options)).right_aligned(),
                 ));
@@ -1693,7 +1712,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📨 Messages").style(Style::default().fg(Color::LightYellow)),
             )];
-            for (_, _, _, _, _, _, _, _, _, messages, _) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, _, _, _, _, _, _, _, _, messages, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*messages, format_options)).right_aligned(),
                 ));
@@ -1705,7 +1725,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("⏱️ Active Time").style(Style::default().fg(Color::LightGreen)),
             )];
-            for (_, _, _, _, _, _, _, active_time, _, _, _) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, _, _, _, _, _, _, active_time, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(Line::from(active_time.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -1715,7 +1736,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("⏰ Idle Time").style(Style::default().fg(Color::DarkGray)),
             )];
-            for (_, _, _, _, _, _, idle_time, _, _, _, _) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, _, _, _, _, _, idle_time, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(Line::from(idle_time.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -1725,7 +1747,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("💰 Cost").style(Style::default().fg(Color::Yellow)),
             )];
-            for (_, _, _, _, _, cost, _, _, _, _, _) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, _, _, _, _, cost, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format!("${:.2}", cost)).right_aligned(),
                 ));
@@ -1737,7 +1760,8 @@ fn draw_summary_view(
             let mut cells = vec![Cell::new(
                 Line::from("📡 Status").style(Style::default().fg(Color::White).bold()),
             )];
-            for (_, _, _, _, _, _, _, _, _, _, state) in visible_cli_data {
+            for &idx in visible_indices {
+                let (_, _, _, _, _, _, _, _, _, _, state) = &cli_data[idx];
                 cells.push(Cell::new(Line::from(state.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -1775,6 +1799,7 @@ fn draw_summary_view(
         chunks[5],
         filtered_stats,
         &cli_data,
+        &cli_order,
         format_options,
         tui_state,
     );
@@ -1964,6 +1989,7 @@ fn draw_visual_cli_panels(
         u64,
         String,
     )],
+    cli_order: &[usize],
     _format_options: &NumberFormatOptions,
     tui_state: &mut TuiState,
 ) {
@@ -1984,17 +2010,16 @@ fn draw_visual_cli_panels(
     let available_height = area.height.saturating_sub(2) as usize; // Account for title/borders
     let max_visible_clis = (available_height / lines_per_cli.max(1)).max(1);
 
+    let total_clis = cli_order.len();
+    let start = tui_state.cli_scroll_offset.min(total_clis);
+    let end = (start + max_visible_clis).min(total_clis);
+
     // Render visible CLI entries with scrolling support
-    for (actual_idx, stats) in filtered_stats
-        .iter()
-        .enumerate()
-        .skip(tui_state.cli_scroll_offset)
-        .take(max_visible_clis)
-    {
-        // Check bounds to avoid out of bounds access
-        if actual_idx >= cli_data.len() {
-            break;
+    for &ordered_idx in &cli_order[start..end] {
+        if ordered_idx >= filtered_stats.len() || ordered_idx >= cli_data.len() {
+            continue;
         }
+        let stats = filtered_stats[ordered_idx];
         let (
             cli_name,
             _cached,
@@ -2007,7 +2032,7 @@ fn draw_visual_cli_panels(
             sessions,
             messages,
             state,
-        ) = &cli_data[actual_idx];
+        ) = &cli_data[ordered_idx];
 
         // Line 1: CLI name, state, activity sparkline
         let sparkline = create_activity_sparkline(stats);
