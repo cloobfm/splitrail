@@ -295,6 +295,13 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                 {
                     match role.as_str() {
                         "user" => {
+                            let content = message
+                                .content
+                                .as_ref()
+                                .and_then(extract_text_from_message_content)
+                                .map(|text| text.trim().to_string())
+                                .filter(|text| !text.is_empty());
+
                             entries.push(ConversationMessage {
                                 date: wrapper.timestamp,
                                 global_hash: hash_text(&format!(
@@ -309,7 +316,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                 model: None,
                                 stats: Stats::default(),
                                 role: MessageRole::User,
-                                content: None,
+                                content,
                             });
                         }
                         "assistant" => {
@@ -317,6 +324,13 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                             // events. We still track assistant messages without additional stats
                             // to avoid double-counting when Codex emits separate reasoning/tool
                             // outputs.
+                            let content = message
+                                .content
+                                .as_ref()
+                                .and_then(extract_text_from_message_content)
+                                .map(|text| text.trim().to_string())
+                                .filter(|text| !text.is_empty());
+
                             if !saw_token_usage {
                                 let model_state = session_model.clone().unwrap_or_else(|| {
                                     let fallback = SessionModel::inferred(
@@ -344,7 +358,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                     project_hash: "".to_string(),
                                     stats: Stats::default(),
                                     role: MessageRole::Assistant,
-                                    content: None,
+                                    content,
                                 });
                             }
                         }
@@ -532,6 +546,35 @@ fn normalize_model_name(raw: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+fn extract_text_from_message_content(value: &simd_json::OwnedValue) -> Option<String> {
+    match value {
+        simd_json::OwnedValue::String(s) => Some(s.clone()),
+        simd_json::OwnedValue::Array(items) => {
+            let mut parts = Vec::new();
+            for item in items.iter() {
+                if let Some(text) = extract_text_from_message_content(item) {
+                    parts.push(text);
+                }
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        }
+        simd_json::OwnedValue::Object(map) => {
+            if let Some(simd_json::OwnedValue::String(text)) = map.get("text") {
+                return Some(text.clone());
+            }
+            if let Some(nested) = map.get("content") {
+                return extract_text_from_message_content(nested);
+            }
+            None
+        }
+        _ => None,
     }
 }
 

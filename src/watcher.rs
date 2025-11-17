@@ -264,21 +264,10 @@ impl RealtimeStatsManager {
                 // Update last reload time
                 self.last_reload_times.insert(analyzer_name.clone(), now);
 
-                // Only log Codex CLI reloads to reduce noise
-                if analyzer_name == "Codex CLI" {
-                    eprintln!("🔄 Reloading Codex CLI...");
-                }
-
                 // Reload data for the specific analyzer
                 if let Some(analyzer) = self.registry.get_analyzer_by_display_name(&analyzer_name) {
                     match analyzer.get_stats().await {
                         Ok(new_stats) => {
-                            if analyzer_name == "Codex CLI" {
-                                eprintln!(
-                                    "✅ Codex CLI updated - {} messages",
-                                    new_stats.messages.len()
-                                );
-                            }
                             // Update the stats for this analyzer
                             let mut updated_analyzer_stats =
                                 self.current_stats.analyzer_stats.clone();
