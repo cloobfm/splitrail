@@ -44,16 +44,17 @@ enum KiloCodeUiMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct KiloCodeApiRequest {
-    #[serde(rename = "apiProtocol")]
+    #[serde(default, rename = "apiProtocol")]
     api_protocol: String,
-    #[serde(rename = "tokensIn")]
+    #[serde(default, rename = "tokensIn")]
     tokens_in: u64,
-    #[serde(rename = "tokensOut")]
+    #[serde(default, rename = "tokensOut")]
     tokens_out: u64,
-    #[serde(rename = "cacheWrites")]
+    #[serde(default, rename = "cacheWrites")]
     cache_writes: u64,
-    #[serde(rename = "cacheReads")]
+    #[serde(default, rename = "cacheReads")]
     cache_reads: u64,
+    #[serde(default)]
     cost: f64,
     #[serde(default)]
     usage_missing: bool,
@@ -92,6 +93,65 @@ fn extract_model_from_text(text: &str) -> Option<String> {
         return Some(model.to_string());
     }
     None
+}
+
+// Helper function to clean up message text (similar to Claude Code's clean_message_text)
+fn clean_message_text(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Remove "Caveat:" messages and everything after until the next paragraph
+    if let Some(caveat_pos) = result.find("Caveat:") {
+        if let Some(double_newline) = result[caveat_pos..].find("\n\n") {
+            result.replace_range(caveat_pos..caveat_pos + double_newline + 2, "");
+        } else {
+            // If no double newline, remove everything from Caveat to the end
+            result.truncate(caveat_pos);
+        }
+    }
+
+    // Parse command tags like <command-name>/clear</command-name> to just /clear
+    while let Some(start_tag_pos) = result.find("<command-name>") {
+        if let Some(end_tag_pos) = result[start_tag_pos..].find("</command-name>") {
+            let command_start = start_tag_pos + "<command-name>".len();
+            let command_end = start_tag_pos + end_tag_pos;
+            let command = result[command_start..command_end].to_string();
+            result.replace_range(
+                start_tag_pos..command_end + "</command-name>".len(),
+                &command,
+            );
+        } else {
+            break;
+        }
+    }
+
+    // Remove other common tags
+    result = result.replace("<command-message>", "");
+    result = result.replace("</command-message>", "");
+    result = result.replace("<command-args>", "");
+    result = result.replace("</command-args>", "");
+    result = result.replace("<local-command-stdout>", "");
+    result = result.replace("</local-command-stdout>", "");
+
+    // Clean up extra whitespace
+    result.trim().to_string()
+}
+
+// Determine if a reasoning message will be followed by an assistant response
+fn reasoning_followed_by_non_empty_text(
+    messages: &[KiloCodeUiMessage],
+    current_index: usize,
+) -> bool {
+    for message in messages.iter().skip(current_index + 1) {
+        match message {
+            KiloCodeUiMessage::Say { say, .. } => match say.as_str() {
+                "text" | "completion_result" | "error" => return true,
+                "api_req_started" | "user_feedback" => return false,
+                _ => continue,
+            },
+            KiloCodeUiMessage::Ask { .. } => continue,
+        }
+    }
+    false
 }
 
 // Parse a single Kilo Code task directory
@@ -143,27 +203,18 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
     let mut message_index = 0;
 
     // Process ui_messages to extract API requests with token/cost data
-    for message in ui_messages {
+    let mut pending_api_stats: Option<Stats> = None;
+    let mut last_role: Option<MessageRole> = None;
+
+    for (idx, message) in ui_messages.iter().enumerate() {
         match message {
-            KiloCodeUiMessage::Say { ts, say, text, .. } => {
-                // We're interested in "api_req_started" messages which contain token/cost data
-                if say == "api_req_started" && !text.is_empty() {
-                    let text_clone = text.clone(); // Clone to avoid move issue
-                    // Parse the embedded JSON in the text field
-                    let mut text_bytes = text.into_bytes();
+            KiloCodeUiMessage::Say { ts, say, text, .. } => match say.as_str() {
+                "api_req_started" => {
+                    let mut text_bytes = text.clone().into_bytes();
                     if let Ok(api_req) =
                         simd_json::from_slice::<KiloCodeApiRequest>(&mut text_bytes)
                     {
-                        // Create a message entry for this API request
-                        let date = DateTime::from_timestamp_millis(ts).unwrap_or_else(Utc::now);
-
-                        let local_hash = format!("{}-{}", conversation_hash, message_index);
-                        let global_hash = hash_text(&format!(
-                            "{}:{}:{}:{}",
-                            project_hash, conversation_hash, message_index, ts
-                        ));
-
-                        let stats = Stats {
+                        pending_api_stats = Some(Stats {
                             input_tokens: api_req.tokens_in,
                             output_tokens: api_req.tokens_out,
                             cache_creation_tokens: api_req.cache_writes,
@@ -172,15 +223,48 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                             cost: api_req.cost,
                             tool_calls: if api_req.tokens_out > 0 { 1 } else { 0 },
                             ..Default::default()
-                        };
+                        });
+                    } else {
+                        // If the embedded JSON can't be parsed, treat it as a regular assistant message
+                        let cleaned = clean_message_text(text);
+                        if cleaned.is_empty() {
+                            continue;
+                        }
+                        let date = DateTime::from_timestamp_millis(*ts).unwrap_or_else(Utc::now);
+                        let local_hash = format!("{}-{}", conversation_hash, message_index);
+                        let global_hash = hash_text(&format!(
+                            "{}:{}:{}:{}",
+                            project_hash, conversation_hash, message_index, ts
+                        ));
+                        entries.push(ConversationMessage {
+                            application: Application::KiloCode,
+                            date,
+                            project_hash: project_hash.clone(),
+                            conversation_hash: conversation_hash.clone(),
+                            local_hash: Some(local_hash),
+                            global_hash,
+                            model: current_model.clone(),
+                            stats: Stats::default(),
+                            role: MessageRole::Assistant,
+                            content: Some(cleaned),
+                        });
+                        message_index += 1;
+                        last_role = Some(MessageRole::Assistant);
+                    }
+                }
+                "checkpoint_saved" | "condense_context" | "command_output" => continue,
+                "reasoning" => {
+                    if reasoning_followed_by_non_empty_text(&ui_messages, idx) {
+                        continue;
+                    }
 
-                        // Include the original text content if it's not just JSON for API request
-                        let content = if !api_req.usage_missing {
-                            None // This message is primarily for API stats, content might be JSON
-                        } else {
-                            Some(text_clone) // Include text if usage is missing
-                        };
-
+                    if let Some(stats) = pending_api_stats.take() {
+                        let date = DateTime::from_timestamp_millis(*ts).unwrap_or_else(Utc::now);
+                        let local_hash = format!("{}-{}", conversation_hash, message_index);
+                        let global_hash = hash_text(&format!(
+                            "{}:{}:{}:{}",
+                            project_hash, conversation_hash, message_index, ts
+                        ));
                         entries.push(ConversationMessage {
                             application: Application::KiloCode,
                             date,
@@ -190,88 +274,131 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                             global_hash,
                             model: current_model.clone(),
                             stats,
-                            role: MessageRole::Assistant, // API requests are from the assistant
-                            content,
-                        });
-
-                        message_index += 1;
-                    } else {
-                        // If parsing fails, treat as a regular Say message with text content
-                        let date = DateTime::from_timestamp_millis(ts).unwrap_or_else(Utc::now);
-
-                        let local_hash = format!("{}-{}", conversation_hash, message_index);
-                        let global_hash = hash_text(&format!(
-                            "{}:{}:{}:{}",
-                            project_hash, conversation_hash, message_index, ts
-                        ));
-
-                        entries.push(ConversationMessage {
-                            application: Application::KiloCode,
-                            date,
-                            project_hash: project_hash.clone(),
-                            conversation_hash: conversation_hash.clone(),
-                            local_hash: Some(local_hash),
-                            global_hash,
-                            model: current_model.clone(),
-                            stats: Stats::default(),
                             role: MessageRole::Assistant,
-                            content: Some(text_clone), // Use the text as content
+                            content: None,
                         });
-
                         message_index += 1;
-                    }
-                } else {
-                    // For other Say messages, include content for meaningful conversation messages
-                    // Preserve important messages like reasoning, user feedback, etc.
-                    // Filter out system messages like "checkpoint_saved" that just contain hashes
-                    let is_system_notification = say.contains("checkpoint") ||
-                                                say.contains("saved") ||
-                                                text.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') ||
-                                                text.len() < 10 && text.chars().filter(|c| c.is_alphanumeric()).count() > 8; // Likely a hash
-
-                    // Preserve important message types even if they might look like system messages
-                    let is_important_conversation = say.contains("reasoning") ||
-                                                  say.contains("feedback") ||
-                                                  text.contains("reasoning") ||
-                                                  text.contains("feedback");
-
-                    if !is_system_notification || is_important_conversation {
-                        let date = DateTime::from_timestamp_millis(ts).unwrap_or_else(Utc::now);
-
-                        let local_hash = format!("{}-{}", conversation_hash, message_index);
-                        let global_hash = hash_text(&format!(
-                            "{}:{}:{}:{}",
-                            project_hash, conversation_hash, message_index, ts
-                        ));
-
-                        entries.push(ConversationMessage {
-                            application: Application::KiloCode,
-                            date,
-                            project_hash: project_hash.clone(),
-                            conversation_hash: conversation_hash.clone(),
-                            local_hash: Some(local_hash),
-                            global_hash,
-                            model: current_model.clone(),
-                            stats: Stats::default(),
-                            role: MessageRole::Assistant,
-                            content: Some(text), // Include important text content
-                        });
-
-                        message_index += 1;
+                        last_role = Some(MessageRole::Assistant);
                     }
                 }
-            }
-            KiloCodeUiMessage::Ask { ts, ask, .. } => {
-                // Track user interactions (followup questions, confirmations)
-                if matches!(
-                    ask.as_str(),
-                    "followup" | "command" | "tool" | "completion_result"
-                ) {
-                    let date = DateTime::from_timestamp_millis(ts).unwrap_or_else(Utc::now);
+                "completion_result" | "error" => {
+                    let cleaned = clean_message_text(text);
+                    if cleaned.is_empty() {
+                        continue;
+                    }
 
-                    let local_hash = format!("{}-user-{}", conversation_hash, message_index);
+                    let stats = pending_api_stats.take().unwrap_or_default();
+                    let date = DateTime::from_timestamp_millis(*ts).unwrap_or_else(Utc::now);
+                    let local_hash = format!("{}-{}", conversation_hash, message_index);
                     let global_hash = hash_text(&format!(
-                        "{}:{}:user:{}:{}",
+                        "{}:{}:{}:{}",
+                        project_hash, conversation_hash, message_index, ts
+                    ));
+
+                    entries.push(ConversationMessage {
+                        application: Application::KiloCode,
+                        date,
+                        project_hash: project_hash.clone(),
+                        conversation_hash: conversation_hash.clone(),
+                        local_hash: Some(local_hash),
+                        global_hash,
+                        model: current_model.clone(),
+                        stats,
+                        role: MessageRole::Assistant,
+                        content: Some(cleaned),
+                    });
+
+                    message_index += 1;
+                    last_role = Some(MessageRole::Assistant);
+                }
+                "text" => {
+                    let cleaned = clean_message_text(text);
+                    if cleaned.is_empty() {
+                        if let Some(stats) = pending_api_stats.take() {
+                            let date =
+                                DateTime::from_timestamp_millis(*ts).unwrap_or_else(Utc::now);
+                            let local_hash = format!("{}-{}", conversation_hash, message_index);
+                            let global_hash = hash_text(&format!(
+                                "{}:{}:{}:{}",
+                                project_hash, conversation_hash, message_index, ts
+                            ));
+                            entries.push(ConversationMessage {
+                                application: Application::KiloCode,
+                                date,
+                                project_hash: project_hash.clone(),
+                                conversation_hash: conversation_hash.clone(),
+                                local_hash: Some(local_hash),
+                                global_hash,
+                                model: current_model.clone(),
+                                stats,
+                                role: MessageRole::Assistant,
+                                content: None,
+                            });
+                            message_index += 1;
+                            last_role = Some(MessageRole::Assistant);
+                        }
+                        continue;
+                    }
+
+                    let next_is_api = ui_messages.get(idx + 1).map_or(false, |next| match next {
+                        KiloCodeUiMessage::Say { say, .. } => say == "api_req_started",
+                        KiloCodeUiMessage::Ask { ask, .. } => ask == "api_req_failed",
+                    });
+
+                    let role = if pending_api_stats.is_some() {
+                        MessageRole::Assistant
+                    } else if next_is_api {
+                        MessageRole::User
+                    } else if matches!(last_role, Some(MessageRole::Assistant)) {
+                        MessageRole::Assistant
+                    } else if last_role.is_none() {
+                        MessageRole::User
+                    } else {
+                        MessageRole::Assistant
+                    };
+
+                    let stats = if role == MessageRole::Assistant {
+                        pending_api_stats.take().unwrap_or_default()
+                    } else {
+                        Stats::default()
+                    };
+
+                    let date = DateTime::from_timestamp_millis(*ts).unwrap_or_else(Utc::now);
+                    let local_hash = format!("{}-{}", conversation_hash, message_index);
+                    let global_hash = hash_text(&format!(
+                        "{}:{}:{}:{}",
+                        project_hash, conversation_hash, message_index, ts
+                    ));
+
+                    entries.push(ConversationMessage {
+                        application: Application::KiloCode,
+                        date,
+                        project_hash: project_hash.clone(),
+                        conversation_hash: conversation_hash.clone(),
+                        local_hash: Some(local_hash),
+                        global_hash,
+                        model: if role == MessageRole::Assistant {
+                            current_model.clone()
+                        } else {
+                            None
+                        },
+                        stats,
+                        role: role.clone(),
+                        content: Some(cleaned),
+                    });
+
+                    message_index += 1;
+                    last_role = Some(role);
+                }
+                "user_feedback" => {
+                    let cleaned = clean_message_text(text);
+                    if cleaned.is_empty() {
+                        continue;
+                    }
+                    let date = DateTime::from_timestamp_millis(*ts).unwrap_or_else(Utc::now);
+                    let local_hash = format!("{}-{}", conversation_hash, message_index);
+                    let global_hash = hash_text(&format!(
+                        "{}:{}:{}:{}",
                         project_hash, conversation_hash, message_index, ts
                     ));
 
@@ -283,14 +410,17 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                         local_hash: Some(local_hash),
                         global_hash,
                         model: None,
-                        stats: Stats::default(), // User messages don't have token costs
+                        stats: Stats::default(),
                         role: MessageRole::User,
-                        content: Some(ask), // Include the user's ask/question
+                        content: Some(cleaned),
                     });
 
                     message_index += 1;
+                    last_role = Some(MessageRole::User);
                 }
-            }
+                _ => {}
+            },
+            KiloCodeUiMessage::Ask { .. } => continue,
         }
     }
 
@@ -321,7 +451,9 @@ impl Analyzer for KiloCodeAnalyzer {
             let home_str = home_dir.to_string_lossy();
 
             // Kilo Code CLI path
-            patterns.push(format!("{home_str}/.kilocode/cli/global/tasks/*/ui_messages.json"));
+            patterns.push(format!(
+                "{home_str}/.kilocode/cli/global/tasks/*/ui_messages.json"
+            ));
 
             // Linux paths for all VSCode GUI forks
             for fork in &vscode_gui_forks {
