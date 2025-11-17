@@ -48,21 +48,31 @@ cd "$TEMP_DIR"
 
 echo " ↓ Downloading Splitrail Dashboard binary..."
 
-# Download the binary
+# Check if the binary exists at the download URL first
 if command -v curl &> /dev/null; then
-    curl -L -o splitrail-dashboard "$DOWNLOAD_URL" || {
-        echo "❌ Failed to download binary from $DOWNLOAD_URL"
-        echo "💡 Precompiled binaries are available at: https://github.com/cloobfm/splitrail/releases"
-        echo "💡 Or build from source following the README instructions"
+    if curl -sfI "$DOWNLOAD_URL" > /dev/null; then
+        echo " ↓ Downloading Splitrail Dashboard binary..."
+        curl -L -o splitrail-dashboard "$DOWNLOAD_URL"
+    else
+        echo "⚠️  Precompiled binary not found at $DOWNLOAD_URL"
+        echo "💡 Please create a GitHub release with the binary first, or build from source:"
+        echo "   1. Clone the repo: git clone https://github.com/cloobfm/splitrail.git -b dashboard"
+        echo "   2. Build: cd splitrail && cargo build --release"
+        echo "   3. Install: sudo cp target/release/splitrail /usr/local/bin/"
         exit 1
-    }
+    fi
 elif command -v wget &> /dev/null; then
-    wget -O splitrail-dashboard "$DOWNLOAD_URL" || {
-        echo "❌ Failed to download binary from $DOWNLOAD_URL"
-        echo "💡 Precompiled binaries are available at: https://github.com/cloobfm/splitrail/releases"
-        echo "💡 Or build from source following the README instructions"
+    if wget --spider --quiet "$DOWNLOAD_URL" 2>/dev/null; then
+        echo " ↓ Downloading Splitrail Dashboard binary..."
+        wget -O splitrail-dashboard "$DOWNLOAD_URL"
+    else
+        echo "⚠️  Precompiled binary not found at $DOWNLOAD_URL"
+        echo "💡 Please create a GitHub release with the binary first, or build from source:"
+        echo "   1. Clone the repo: git clone https://github.com/cloobfm/splitrail.git -b dashboard"
+        echo "   2. Build: cd splitrail && cargo build --release"
+        echo "   3. Install: sudo cp target/release/splitrail /usr/local/bin/"
         exit 1
-    }
+    fi
 else
     echo "❌ Neither curl nor wget is available. Please install one and try again."
     exit 1
