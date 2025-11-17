@@ -7,16 +7,23 @@ set -e  # Exit on any error
 
 echo "🔍 Installing Splitrail Dashboard..."
 
-# Check if Rust is installed
-if ! command -v rustc &> /dev/null; then
-    echo "❌ Rust is not installed. Please install Rust first:"
-    echo "   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-    exit 1
-fi
-
 # Check if Git is installed
 if ! command -v git &> /dev/null; then
     echo "❌ Git is not installed. Please install Git first."
+    exit 1
+fi
+
+# Check if Rust is installed
+if ! command -v rustc &> /dev/null; then
+    echo "📦 Installing Rust (required for Splitrail)..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    # Source the Rust environment
+    source "$HOME/.cargo/env" || export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+# Check if rustup is available
+if ! command -v rustup &> /dev/null; then
+    echo "❌ rustup is not available. Please install Rust from https://rust-lang.org/tools/install"
     exit 1
 fi
 
