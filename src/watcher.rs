@@ -1,5 +1,5 @@
 use anyhow::Result;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher, Config as NotifyConfig};
+use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use notify_types::event::{Event, EventKind};
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -95,8 +95,8 @@ impl FileWatcher {
             .collect();
 
         // Use RecommendedWatcher (FSEvents on macOS) with default config
-        let mut watcher = notify::recommended_watcher(
-            move |res: Result<Event, notify::Error>| match res {
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<Event, notify::Error>| match res {
                 Ok(event) => {
                     if let Err(e) = handle_fs_event(
                         event,
@@ -111,8 +111,7 @@ impl FileWatcher {
                 Err(e) => {
                     let _ = event_tx.send(WatcherEvent::Error(format!("Watch error: {e}")));
                 }
-            }
-        )?;
+            })?;
 
         // Start watching all directories
         for dir in &watched_dirs {
@@ -275,7 +274,10 @@ impl RealtimeStatsManager {
                     match analyzer.get_stats().await {
                         Ok(new_stats) => {
                             if analyzer_name == "Codex CLI" {
-                                eprintln!("✅ Codex CLI updated - {} messages", new_stats.messages.len());
+                                eprintln!(
+                                    "✅ Codex CLI updated - {} messages",
+                                    new_stats.messages.len()
+                                );
                             }
                             // Update the stats for this analyzer
                             let mut updated_analyzer_stats =

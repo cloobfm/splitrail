@@ -36,14 +36,22 @@ impl Analyzer for CodexCliAnalyzer {
 
             // Watch today's session directory directly (no deep recursion!)
             let today = chrono::Local::now();
-            let today_dir = format!("{home_str}/.codex/sessions/{}/{:02}/{:02}/*.jsonl",
-                today.format("%Y"), today.format("%m"), today.format("%d"));
+            let today_dir = format!(
+                "{home_str}/.codex/sessions/{}/{:02}/{:02}/*.jsonl",
+                today.format("%Y"),
+                today.format("%m"),
+                today.format("%d")
+            );
             patterns.push(today_dir);
 
             // Also watch yesterday's directory for edge cases around midnight
             let yesterday = today - chrono::Duration::days(1);
-            let yesterday_dir = format!("{home_str}/.codex/sessions/{}/{:02}/{:02}/*.jsonl",
-                yesterday.format("%Y"), yesterday.format("%m"), yesterday.format("%d"));
+            let yesterday_dir = format!(
+                "{home_str}/.codex/sessions/{}/{:02}/{:02}/*.jsonl",
+                yesterday.format("%Y"),
+                yesterday.format("%m"),
+                yesterday.format("%d")
+            );
             patterns.push(yesterday_dir);
         }
 
@@ -298,7 +306,8 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                 model: None,
                                 stats: Stats::default(),
                                 role: MessageRole::User,
-            content: None,                            });
+                                content: None,
+                            });
                         }
                         "assistant" => {
                             // Token usage is now emitted immediately when processing token_count
@@ -332,7 +341,8 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                     project_hash: "".to_string(),
                                     stats: Stats::default(),
                                     role: MessageRole::Assistant,
-            content: None,                                });
+                                    content: None,
+                                });
                             }
                         }
                         _ => {}
@@ -392,7 +402,8 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                 project_hash: "".to_string(),
                                 stats,
                                 role: MessageRole::Assistant,
-            content: None,                            });
+                                content: None,
+                            });
 
                             saw_token_usage = true;
                         }

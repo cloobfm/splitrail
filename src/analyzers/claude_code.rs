@@ -472,8 +472,17 @@ where
 
         // Parse the line, filtering various invalid scenarios.
         let parsed_line = simd_json::from_slice::<ClaudeCodeEntry>(&mut line.clone().into_bytes());
-        let (message_id, model, content, usage, timestamp, request_id, tool_use_result, uuid, entry) =
-            match parsed_line {
+        let (
+            message_id,
+            model,
+            content,
+            usage,
+            timestamp,
+            request_id,
+            tool_use_result,
+            uuid,
+            entry,
+        ) = match parsed_line {
                 // Only get real user/AI messages; filter out summaries and any garbage message entries.
                 Ok(ClaudeCodeEntry::Message(ref entry @ ClaudeCodeMessageEntry {
                                                 message:
@@ -578,7 +587,11 @@ where
             project_hash: project_hash.clone(),
             conversation_hash: hash_text(&file_path_str),
             stats,
-            role: if is_assistant { MessageRole::Assistant } else { MessageRole::User },
+            role: if is_assistant {
+                MessageRole::Assistant
+            } else {
+                MessageRole::User
+            },
             content: content_opt,
         };
         entries.push(msg);
@@ -751,7 +764,8 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                content: None,
+                stats: Stats {
                     input_tokens: 10, // Different from others
                     output_tokens: 2, // thinking block
                     tool_calls: 0,
@@ -767,7 +781,8 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                content: None,
+                stats: Stats {
                     input_tokens: 5,  // Different from others
                     output_tokens: 2, // text block
                     tool_calls: 0,
@@ -783,7 +798,8 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                content: None,
+                stats: Stats {
                     input_tokens: 0,    // Different from others
                     output_tokens: 447, // tool_use block
                     tool_calls: 1,
@@ -822,7 +838,8 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                content: None,
+                stats: Stats {
                     output_tokens: 4, // All blocks report same total
                     input_tokens: 100,
                     tool_calls: 2,
@@ -838,7 +855,8 @@ mod tests {
                 project_hash: "proj1".to_string(),
                 conversation_hash: "conv1".to_string(),
                 role: MessageRole::Assistant,
-            content: None,                stats: Stats {
+                content: None,
+                stats: Stats {
                     output_tokens: 4,  // Identical
                     input_tokens: 100, // Identical
                     tool_calls: 2,     // Not checked for identity, but will be kept
@@ -874,7 +892,8 @@ mod tests {
             project_hash: "proj".to_string(),
             conversation_hash: "conv".to_string(),
             role: MessageRole::Assistant,
-            content: None,            stats: Stats {
+            content: None,
+            stats: Stats {
                 input_tokens: 100,
                 output_tokens: 4,
                 cache_creation_tokens: 0,
@@ -894,7 +913,8 @@ mod tests {
             project_hash: "proj".to_string(),
             conversation_hash: "conv".to_string(),
             role: MessageRole::Assistant,
-            content: None,            stats: Stats {
+            content: None,
+            stats: Stats {
                 input_tokens: 100,
                 output_tokens: 4,
                 cache_creation_tokens: 0,
@@ -928,7 +948,8 @@ mod tests {
             project_hash: "proj".to_string(),
             conversation_hash: "conv".to_string(),
             role: MessageRole::Assistant,
-            content: None,            stats: Stats {
+            content: None,
+            stats: Stats {
                 input_tokens: 10,
                 output_tokens: 2,
                 ..Default::default()
@@ -950,7 +971,8 @@ mod tests {
             project_hash: "proj".to_string(),
             conversation_hash: "conv".to_string(),
             role: MessageRole::Assistant,
-            content: None,            stats: Stats {
+            content: None,
+            stats: Stats {
                 input_tokens: 0,
                 output_tokens: 447,
                 tool_calls: 1,

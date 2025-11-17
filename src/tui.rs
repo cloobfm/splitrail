@@ -3,13 +3,10 @@ use crate::utils::{NumberFormatOptions, format_date_for_display, format_number};
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::Result;
 use chrono::Duration as ChronoDuration;
-use crossterm::event::{self, Event, KeyCode, EnableMouseCapture, DisableMouseCapture};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
-    EnterAlternateScreen,
-    LeaveAlternateScreen,
-    disable_raw_mode,
-    enable_raw_mode,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{ExecutableCommand, execute};
 use ratatui::backend::CrosstermBackend;
@@ -118,7 +115,11 @@ async fn run_app(
     let mut current_stats = stats_receiver.borrow().clone();
 
     // Initialize table states for current stats
-    update_table_states(&mut table_states, &current_stats, &mut tui_state.selected_tab);
+    update_table_states(
+        &mut table_states,
+        &current_stats,
+        &mut tui_state.selected_tab,
+    );
 
     let mut needs_redraw = true;
     let mut last_upload_status = {
@@ -135,14 +136,20 @@ async fn run_app(
         .collect();
 
     // Cache summary data to avoid recalculating on every redraw
-    let mut cached_summary_data: Option<SummaryData> =
-        Some(calculate_summary_data(&filtered_stats, tui_state.summary_day_offset));
+    let mut cached_summary_data: Option<SummaryData> = Some(calculate_summary_data(
+        &filtered_stats,
+        tui_state.summary_day_offset,
+    ));
 
     loop {
         // Check for stats updates
         if stats_receiver.has_changed()? {
             current_stats = stats_receiver.borrow_and_update().clone();
-            update_table_states(&mut table_states, &current_stats, &mut tui_state.selected_tab);
+            update_table_states(
+                &mut table_states,
+                &current_stats,
+                &mut tui_state.selected_tab,
+            );
             // Recalculate filtered stats only when stats change
             filtered_stats = current_stats
                 .analyzer_stats
@@ -150,8 +157,10 @@ async fn run_app(
                 .filter(|stats| has_data(stats))
                 .collect();
             // Recalculate summary data when stats change
-            cached_summary_data =
-                Some(calculate_summary_data(&filtered_stats, tui_state.summary_day_offset));
+            cached_summary_data = Some(calculate_summary_data(
+                &filtered_stats,
+                tui_state.summary_day_offset,
+            ));
             needs_redraw = true;
         }
 
@@ -172,8 +181,8 @@ async fn run_app(
             let mut status = upload_status.lock().unwrap();
             // Advance dots animation for uploading status every 500ms (5 frames at 100ms)
             if let UploadStatus::Uploading {
-                current: _, 
-                total: _, 
+                current: _,
+                total: _,
                 dots,
             } = &mut *status
             {
@@ -279,7 +288,9 @@ async fn run_app(
                             }
                             // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            else if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                            else if tui_state.selected_tab > 0
+                                && tui_state.selected_tab <= filtered_stats.len()
+                            {
                                 let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
                                     && let Some(current_stats) = filtered_stats.get(analyzer_index)
@@ -316,13 +327,13 @@ async fn run_app(
                             }
                             // Only handle table navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            else if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                            else if tui_state.selected_tab > 0
+                                && tui_state.selected_tab <= filtered_stats.len()
+                            {
                                 let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(current_stats) = 
-                                        filtered_stats.get(analyzer_index)
-                                    && let Some(table_state) = 
-                                        table_states.get_mut(analyzer_index)
+                                    && let Some(current_stats) = filtered_stats.get(analyzer_index)
+                                    && let Some(table_state) = table_states.get_mut(analyzer_index)
                                     && let Some(selected) = table_state.selected()
                                     && selected > 0
                                 {
@@ -340,11 +351,12 @@ async fn run_app(
                         KeyCode::Home => {
                             // Only handle navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                            if tui_state.selected_tab > 0
+                                && tui_state.selected_tab <= filtered_stats.len()
+                            {
                                 let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(table_state) = 
-                                        table_states.get_mut(analyzer_index)
+                                    && let Some(table_state) = table_states.get_mut(analyzer_index)
                                 {
                                     table_state.select(Some(0));
                                     needs_redraw = true;
@@ -354,15 +366,16 @@ async fn run_app(
                         KeyCode::End => {
                             // Only handle navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                            if tui_state.selected_tab > 0
+                                && tui_state.selected_tab <= filtered_stats.len()
+                            {
                                 let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(current_stats) = 
-                                        filtered_stats.get(analyzer_index)
+                                    && let Some(current_stats) = filtered_stats.get(analyzer_index)
                                 {
                                     let total_rows = current_stats.daily_stats.len() + 2;
-                                    if let Some(table_state) = 
-                                        table_states.get_mut(analyzer_index) {
+                                    if let Some(table_state) = table_states.get_mut(analyzer_index)
+                                    {
                                         table_state.select(Some(total_rows.saturating_sub(1)));
                                         needs_redraw = true;
                                     }
@@ -372,17 +385,18 @@ async fn run_app(
                         KeyCode::PageDown => {
                             // Only handle navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                            if tui_state.selected_tab > 0
+                                && tui_state.selected_tab <= filtered_stats.len()
+                            {
                                 let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(current_stats) = 
-                                        filtered_stats.get(analyzer_index)
+                                    && let Some(current_stats) = filtered_stats.get(analyzer_index)
                                 {
                                     let total_rows = current_stats.daily_stats.len() + 2;
-                                    if let Some(table_state) = 
-                                        table_states.get_mut(analyzer_index)
-                                        && let Some(selected) = table_state.selected() {
-                                        let new_selected = 
+                                    if let Some(table_state) = table_states.get_mut(analyzer_index)
+                                        && let Some(selected) = table_state.selected()
+                                    {
+                                        let new_selected =
                                             (selected + 10).min(total_rows.saturating_sub(1));
                                         table_state.select(Some(new_selected));
                                         needs_redraw = true;
@@ -393,12 +407,14 @@ async fn run_app(
                         KeyCode::PageUp => {
                             // Only handle navigation on individual analyzer tabs (selected_tab > 0)
                             // Summary tab is at index 0, so only process for tabs 1+
-                            if tui_state.selected_tab > 0 && tui_state.selected_tab <= filtered_stats.len() {
+                            if tui_state.selected_tab > 0
+                                && tui_state.selected_tab <= filtered_stats.len()
+                            {
                                 let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(table_state) = 
-                                        table_states.get_mut(analyzer_index)
-                                    && let Some(selected) = table_state.selected() {
+                                    && let Some(table_state) = table_states.get_mut(analyzer_index)
+                                    && let Some(selected) = table_state.selected()
+                                {
                                     let new_selected = selected.saturating_sub(10);
                                     table_state.select(Some(new_selected));
                                     needs_redraw = true;
@@ -417,17 +433,23 @@ async fn run_app(
                     if tui_state.selected_tab == 0 {
                         let mouse_y = mouse_event.row;
 
-                        let today_by_cli_rect = tui_state.layout.today_by_cli_rect.unwrap_or_default();
-                        let live_activity_rect = tui_state.layout.live_activity_rect.unwrap_or_default();
+                        let today_by_cli_rect =
+                            tui_state.layout.today_by_cli_rect.unwrap_or_default();
+                        let live_activity_rect =
+                            tui_state.layout.live_activity_rect.unwrap_or_default();
 
                         match mouse_event.kind {
                             crossterm::event::MouseEventKind::ScrollUp => {
-                                if mouse_y >= live_activity_rect.y && mouse_y < live_activity_rect.y + live_activity_rect.height {
+                                if mouse_y >= live_activity_rect.y
+                                    && mouse_y < live_activity_rect.y + live_activity_rect.height
+                                {
                                     if tui_state.cli_scroll_offset > 0 {
                                         tui_state.cli_scroll_offset -= 1;
                                         needs_redraw = true;
                                     }
-                                } else if mouse_y >= today_by_cli_rect.y && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height {
+                                } else if mouse_y >= today_by_cli_rect.y
+                                    && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height
+                                {
                                     if tui_state.cli_table_scroll_offset > 0 {
                                         tui_state.cli_table_scroll_offset -= 1;
                                         needs_redraw = true;
@@ -435,14 +457,22 @@ async fn run_app(
                                 }
                             }
                             crossterm::event::MouseEventKind::ScrollDown => {
-                                if mouse_y >= live_activity_rect.y && mouse_y < live_activity_rect.y + live_activity_rect.height {
-                                    if tui_state.cli_scroll_offset < filtered_stats.len().saturating_sub(1) {
+                                if mouse_y >= live_activity_rect.y
+                                    && mouse_y < live_activity_rect.y + live_activity_rect.height
+                                {
+                                    if tui_state.cli_scroll_offset
+                                        < filtered_stats.len().saturating_sub(1)
+                                    {
                                         tui_state.cli_scroll_offset += 1;
                                         needs_redraw = true;
                                     }
-                                } else if mouse_y >= today_by_cli_rect.y && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height {
+                                } else if mouse_y >= today_by_cli_rect.y
+                                    && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height
+                                {
                                     // Arbitrary limit, can be improved
-                                    if tui_state.cli_table_scroll_offset < filtered_stats.len().saturating_sub(1) {
+                                    if tui_state.cli_table_scroll_offset
+                                        < filtered_stats.len().saturating_sub(1)
+                                    {
                                         tui_state.cli_table_scroll_offset += 1;
                                         needs_redraw = true;
                                     }
@@ -523,8 +553,7 @@ fn draw_ui(
         tab_titles.extend(filtered_stats.iter().map(|stats| {
             Line::from(format!(
                 " {} ({}) ",
-                stats.analyzer_name,
-                stats.num_conversations,
+                stats.analyzer_name, stats.num_conversations,
             ))
         }));
 
@@ -591,13 +620,17 @@ fn draw_ui(
         };
 
         let help = if tui_state.selected_tab == 0 {
-            Paragraph::new(
-                format!("←/→ or h/l: tabs, ↑/↓ or j/k: navigate days, m: toggle {} mode, q/Esc: quit", mouse_mode_indicator),
-            )
+            Paragraph::new(format!(
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate days, m: toggle {} mode, q/Esc: quit",
+                mouse_mode_indicator
+            ))
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
-            Paragraph::new(format!("←/→ or h/l: tabs, ↑/↓ or j/k: navigate, m: toggle {} mode, q/Esc: quit", mouse_mode_indicator))
-                .style(Style::default().add_modifier(Modifier::DIM))
+            Paragraph::new(format!(
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, m: toggle {} mode, q/Esc: quit",
+                mouse_mode_indicator
+            ))
+            .style(Style::default().add_modifier(Modifier::DIM))
         };
         frame.render_widget(help, help_chunks[0]);
 
@@ -671,8 +704,11 @@ fn draw_ui(
         } else {
             "📝 Select"
         };
-        let help = Paragraph::new(format!("m: toggle {} mode, q/Esc: quit", mouse_mode_indicator))
-            .style(Style::default().add_modifier(Modifier::DIM));
+        let help = Paragraph::new(format!(
+            "m: toggle {} mode, q/Esc: quit",
+            mouse_mode_indicator
+        ))
+        .style(Style::default().add_modifier(Modifier::DIM));
         frame.render_widget(help, chunks[2]);
     }
 }
@@ -1420,7 +1456,19 @@ fn draw_summary_view(
     let selected_day_date = (now - ChronoDuration::days(*selected_day_offset as i64)).date_naive();
 
     // Collect data for the selected day for each CLI
-    let mut cli_data: Vec<(String, u64, u64, u64, u64, f64, String, String, u64, u64, String)> = Vec::new();
+    let mut cli_data: Vec<(
+        String,
+        u64,
+        u64,
+        u64,
+        u64,
+        f64,
+        String,
+        String,
+        u64,
+        u64,
+        String,
+    )> = Vec::new();
     for analyzer_stats in filtered_stats {
         let mut cached = 0u64;
         let mut input = 0u64;
@@ -1706,9 +1754,7 @@ fn draw_summary_view(
         let formatted_date = selected_date_with_tz.format("%B %d, %Y").to_string(); // November 15, 2025
         format!(
             "📊 {} ({}, {} days ago) by CLI",
-            weekday,
-            formatted_date,
-            selected_day_offset,
+            weekday, formatted_date, selected_day_offset,
         )
     };
 
@@ -1724,7 +1770,14 @@ fn draw_summary_view(
     frame.render_widget(cli_table, chunks[3]);
 
     // Draw visual CLI panels
-    draw_visual_cli_panels(frame, chunks[5], filtered_stats, &cli_data, format_options, tui_state);
+    draw_visual_cli_panels(
+        frame,
+        chunks[5],
+        filtered_stats,
+        &cli_data,
+        format_options,
+        tui_state,
+    );
 }
 
 // Helper function to create a horizontal bar visualization
@@ -1747,7 +1800,12 @@ fn create_bar(value: u64, max_value: u64, width: usize, color: Color) -> Line<'s
 }
 
 // Helper function to create a percentage display
-fn create_percentage_bar(value: u64, total: u64, width: usize, color: Color) -> (Line<'static>, String) {
+fn create_percentage_bar(
+    value: u64,
+    total: u64,
+    width: usize,
+    color: Color,
+) -> (Line<'static>, String) {
     let percentage = if total > 0 {
         (value as f64 / total as f64) * 100.0
     } else {
@@ -1782,7 +1840,9 @@ fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> Vec<Span<'static
 
     // Create sparkline with tiny dots like btop (truncate to 80 most recent)
     let chars = [' ', '⡀', '⡄', '⡆', '⡇', '⣇', '⣧', '⣷', '⣿'];
-    buckets.iter().take(80)
+    buckets
+        .iter()
+        .take(80)
         .map(|&count| {
             if count == 0 {
                 Span::raw(" ")
@@ -1830,12 +1890,17 @@ fn simplify_analyzer_name(name: &str) -> &str {
 }
 
 // Get last message preview
-fn get_last_message_preview(stats: &AgenticCodingToolStats, max_len: usize) -> (String, Vec<(crate::types::MessageRole, String, String)>) {
+fn get_last_message_preview(
+    stats: &AgenticCodingToolStats,
+    max_len: usize,
+) -> (String, Vec<(crate::types::MessageRole, String, String)>) {
     let username = get_username();
     let simplified_name = simplify_analyzer_name(&stats.analyzer_name);
 
     // First, filter messages to only those with displayable content
-    let mut messages_with_content: Vec<_> = stats.messages.iter()
+    let mut messages_with_content: Vec<_> = stats
+        .messages
+        .iter()
         .filter_map(|msg| {
             if let Some(content) = &msg.content {
                 let single_line_content = content.replace('\n', " ").replace('\r', "");
@@ -1844,7 +1909,12 @@ fn get_last_message_preview(stats: &AgenticCodingToolStats, max_len: usize) -> (
                         crate::types::MessageRole::User => username.as_str(),
                         crate::types::MessageRole::Assistant => simplified_name,
                     };
-                    return Some((msg.date, msg.role.clone(), msg_role_name.to_string(), single_line_content));
+                    return Some((
+                        msg.date,
+                        msg.role.clone(),
+                        msg_role_name.to_string(),
+                        single_line_content,
+                    ));
                 }
             }
             None
@@ -1859,7 +1929,8 @@ fn get_last_message_preview(stats: &AgenticCodingToolStats, max_len: usize) -> (
     messages_with_content.reverse();
 
     // Convert to the expected format
-    let message_lines: Vec<_> = messages_with_content.into_iter()
+    let message_lines: Vec<_> = messages_with_content
+        .into_iter()
         .map(|(_, role, role_name, content)| (role, role_name, content))
         .collect();
 
@@ -1880,7 +1951,19 @@ fn draw_visual_cli_panels(
     frame: &mut Frame,
     area: Rect,
     filtered_stats: &[&AgenticCodingToolStats],
-    cli_data: &[(String, u64, u64, u64, u64, f64, String, String, u64, u64, String)],
+    cli_data: &[(
+        String,
+        u64,
+        u64,
+        u64,
+        u64,
+        f64,
+        String,
+        String,
+        u64,
+        u64,
+        String,
+    )],
     _format_options: &NumberFormatOptions,
     tui_state: &mut TuiState,
 ) {
@@ -1912,7 +1995,19 @@ fn draw_visual_cli_panels(
         if actual_idx >= cli_data.len() {
             break;
         }
-        let (cli_name, _cached, _input, _output, _reasoning, cost, _idle, _active, sessions, messages, state) = &cli_data[actual_idx];
+        let (
+            cli_name,
+            _cached,
+            _input,
+            _output,
+            _reasoning,
+            cost,
+            _idle,
+            _active,
+            sessions,
+            messages,
+            state,
+        ) = &cli_data[actual_idx];
 
         // Line 1: CLI name, state, activity sparkline
         let sparkline = create_activity_sparkline(stats);
@@ -1928,13 +2023,19 @@ fn draw_visual_cli_panels(
 
         // Build the line with colored sparkline spans
         let mut line_spans = vec![
-            Span::styled(format!("{:12}", cli_name), Style::default().fg(name_color).bold()),
+            Span::styled(
+                format!("{:12}", cli_name),
+                Style::default().fg(name_color).bold(),
+            ),
             Span::raw(" "),
         ];
         line_spans.extend(sparkline);
         line_spans.extend(vec![
             Span::raw("   "),
-            Span::styled(state.chars().next().unwrap_or('⚫').to_string(), Style::default()),
+            Span::styled(
+                state.chars().next().unwrap_or('⚫').to_string(),
+                Style::default(),
+            ),
             Span::raw(" "),
             Span::styled(_idle.clone(), Style::default().fg(Color::DarkGray)),
         ]);
@@ -1943,9 +2044,10 @@ fn draw_visual_cli_panels(
         // Add separator line below the sparkline graph (to end of content)
         // CLI name (12) + space + sparkline (80) + spacing + status + timestamp = ~109
         let line_width = 109;
-        lines.push(Line::from(
-            Span::styled("─".repeat(line_width), Style::default().fg(Color::DarkGray))
-        ));
+        lines.push(Line::from(Span::styled(
+            "─".repeat(line_width),
+            Style::default().fg(Color::DarkGray),
+        )));
 
         // Show messages, each limited to first line only
         let preview_width = area.width.saturating_sub(15) as usize;
@@ -1955,12 +2057,12 @@ fn draw_visual_cli_panels(
             // Different styling for user vs assistant messages
             let (role_color, content_style) = match role {
                 crate::types::MessageRole::User => (
-                    Color::Cyan,  // Bright cyan for user name
-                    Style::default().fg(Color::White),  // White for user message content
+                    Color::Cyan,                       // Bright cyan for user name
+                    Style::default().fg(Color::White), // White for user message content
                 ),
                 crate::types::MessageRole::Assistant => (
-                    Color::DarkGray,  // Dim gray for assistant name
-                    Style::default().fg(Color::DarkGray).italic(),  // Dim italic for assistant content
+                    Color::DarkGray,                               // Dim gray for assistant name
+                    Style::default().fg(Color::DarkGray).italic(), // Dim italic for assistant content
                 ),
             };
 
@@ -1990,13 +2092,11 @@ fn draw_visual_cli_panels(
         lines.push(Line::from(""));
     }
 
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title("📊 Live Activity")
-                .title_style(Style::default().bold().fg(Color::Cyan)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .title("📊 Live Activity")
+            .title_style(Style::default().bold().fg(Color::Cyan)),
+    );
 
     frame.render_widget(paragraph, area);
 }
@@ -2261,7 +2361,8 @@ pub fn show_upload_success(total: usize, format_options: &NumberFormatOptions) {
         stdout(),
         Print("\r"),
         SetForegroundColor(crossterm::style::Color::DarkGreen),
-        Print(format!("✓ Successfully uploaded {} messages\n",
+        Print(format!(
+            "✓ Successfully uploaded {} messages\n",
             format_number(total as u64, format_options)
         )),
         ResetColor

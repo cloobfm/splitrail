@@ -198,7 +198,8 @@ fn parse_cline_task_directory(task_dir: &Path) -> Result<Vec<ConversationMessage
                             model,
                             stats,
                             role: MessageRole::Assistant, // API requests are from the assistant
-            content: None,                        });
+                            content: None,
+                        });
                     }
                 }
             }
@@ -229,7 +230,8 @@ fn parse_cline_task_directory(task_dir: &Path) -> Result<Vec<ConversationMessage
                         model: None,
                         stats: Stats::default(), // User messages don't have token costs
                         role: MessageRole::User,
-            content: None,                    });
+                        content: None,
+                    });
                 }
             }
         }

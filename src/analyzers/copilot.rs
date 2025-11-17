@@ -315,7 +315,8 @@ pub(crate) fn parse_copilot_session_file(session_file: &Path) -> Result<Vec<Conv
             model: None,
             stats: Stats::default(),
             role: MessageRole::User,
-            content: None,        });
+            content: None,
+        });
 
         // Create assistant message
         let assistant_date = user_date; // Use same timestamp as user message
@@ -359,7 +360,8 @@ pub(crate) fn parse_copilot_session_file(session_file: &Path) -> Result<Vec<Conv
             model,
             stats,
             role: MessageRole::Assistant,
-            content: None,        });
+            content: None,
+        });
     }
 
     Ok(entries)

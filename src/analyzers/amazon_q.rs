@@ -72,11 +72,15 @@ struct QUserMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum QUserContent {
-    Prompt { prompt: String },
-    ToolUseResults { tool_use_results: Vec<QToolUseResult> },
+    Prompt {
+        prompt: String,
+    },
+    ToolUseResults {
+        tool_use_results: Vec<QToolUseResult>,
+    },
     CancelledToolUses {
         prompt: String,
-        tool_use_results: Vec<QToolUseResult>
+        tool_use_results: Vec<QToolUseResult>,
     },
 }
 
@@ -216,7 +220,8 @@ pub(crate) fn parse_amazon_q_conversation(
             model: None,
             stats: Stats::default(),
             role: MessageRole::User,
-            content: None,        });
+            content: None,
+        });
 
         // Create assistant message with stats
         let assistant_local_hash = format!("{}-assistant-{}", conversation_hash, idx);
@@ -270,7 +275,8 @@ pub(crate) fn parse_amazon_q_conversation(
             model,
             stats,
             role: MessageRole::Assistant,
-            content: None,        });
+            content: None,
+        });
     }
 
     Ok(entries)
@@ -316,8 +322,8 @@ impl Analyzer for AmazonQAnalyzer {
         let db_path = &sources[0].path;
 
         // Open SQLite connection using rusqlite
-        let conn = rusqlite::Connection::open(db_path)
-            .context("Failed to open Amazon Q database")?;
+        let conn =
+            rusqlite::Connection::open(db_path).context("Failed to open Amazon Q database")?;
 
         // Query all conversations
         let mut stmt = conn
@@ -326,10 +332,7 @@ impl Analyzer for AmazonQAnalyzer {
 
         let conversations: Vec<(String, String)> = stmt
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .context("Failed to query conversations")?
             .filter_map(|r| r.ok())

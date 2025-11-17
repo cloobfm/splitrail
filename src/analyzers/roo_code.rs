@@ -178,7 +178,8 @@ fn parse_roo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMess
                             model: current_model.clone(),
                             stats,
                             role: MessageRole::Assistant, // API requests are from the assistant
-            content: None,                        });
+                            content: None,
+                        });
 
                         message_index += 1;
                     }
@@ -208,7 +209,8 @@ fn parse_roo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMess
                         model: None,
                         stats: Stats::default(), // User messages don't have token costs
                         role: MessageRole::User,
-            content: None,                    });
+                        content: None,
+                    });
 
                     message_index += 1;
                 }
