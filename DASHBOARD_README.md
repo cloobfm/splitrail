@@ -76,13 +76,15 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-### Method 3: Quick Install Script
+### Method 3: Quick Install Script (Download Precompiled Binary)
 
-Run this one-liner to install automatically:
+Run this one-liner to download and install a precompiled Splitrail Dashboard binary:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cloobfm/splitrail/dashboard/scripts/install.sh | bash
 ```
+
+⚠️ **Note**: This script downloads precompiled binaries from GitHub releases. If binaries for your platform aren't available, you'll need to build from source using Method 1.
 
 ## Features of This Custom Fork
 
