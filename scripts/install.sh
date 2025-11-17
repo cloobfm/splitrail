@@ -37,8 +37,8 @@ else
     exit 1
 fi
 
-BINARY_NAME="splitrail-$ARCH-$OS"
-DOWNLOAD_URL="https://github.com/cloobfm/splitrail/releases/download/v2.0.0/$BINARY_NAME"
+BINARY_NAME="splitrail-dashboard-$PLATFORM_NAME-$ARCH"
+DOWNLOAD_URL="https://github.com/cloobfm/splitrail/releases/download/v2.0.0-dashboard.1/$BINARY_NAME"
 
 echo "📦 Detected platform: $PLATFORM_NAME ($ARCH)"
 
@@ -50,14 +50,14 @@ echo " ↓ Downloading Splitrail Dashboard binary..."
 
 # Download the binary
 if command -v curl &> /dev/null; then
-    curl -L -o splitrail "$DOWNLOAD_URL" || {
+    curl -L -o splitrail-dashboard "$DOWNLOAD_URL" || {
         echo "❌ Failed to download binary from $DOWNLOAD_URL"
         echo "💡 Precompiled binaries are available at: https://github.com/cloobfm/splitrail/releases"
         echo "💡 Or build from source following the README instructions"
         exit 1
     }
 elif command -v wget &> /dev/null; then
-    wget -O splitrail "$DOWNLOAD_URL" || {
+    wget -O splitrail-dashboard "$DOWNLOAD_URL" || {
         echo "❌ Failed to download binary from $DOWNLOAD_URL"
         echo "💡 Precompiled binaries are available at: https://github.com/cloobfm/splitrail/releases"
         echo "💡 Or build from source following the README instructions"
@@ -69,18 +69,18 @@ else
 fi
 
 # Make the binary executable
-chmod +x splitrail
+chmod +x splitrail-dashboard
 
 echo "💾 Installing Splitrail Dashboard to /usr/local/bin..."
 
 # Install to system
 if [ -w /usr/local/bin ]; then
-    sudo cp splitrail /usr/local/bin/
+    sudo cp splitrail-dashboard /usr/local/bin/splitrail
 else
     # If we can't write to /usr/local/bin, suggest user installation
     echo "⚠️  Cannot write to /usr/local/bin. Installing to ~/.local/bin instead..."
     mkdir -p ~/.local/bin
-    cp splitrail ~/.local/bin/
+    cp splitrail-dashboard ~/.local/bin/splitrail
     echo "💡 Add ~/.local/bin to your PATH to use splitrail:"
     echo "   echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
     echo "   source ~/.zshrc"
