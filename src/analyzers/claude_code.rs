@@ -359,42 +359,42 @@ pub fn extract_text_content(content: &Content) -> Option<String> {
     match content {
         Content::String(bytes) => {
             // Try to decode as UTF-8, fallback to lossy conversion
-            String::from_utf8(bytes.to_vec()).ok()
+            let text = String::from_utf8(bytes.to_vec()).ok()?;
+            Some(clean_message_text(&text))
         }
         Content::Blocks(blocks) => {
-            // For debugging: show ALL content blocks to see what's available
             let mut all_content = Vec::new();
             for block in blocks {
                 match block {
                     ContentBlock::Text { text } => {
                         if let Ok(text_str) = String::from_utf8(text.to_vec()) {
-                            if !text_str.trim().is_empty() {
-                                all_content.push(format!("TEXT: {}", text_str));
+                            let cleaned = clean_message_text(&text_str);
+                            if !cleaned.trim().is_empty() {
+                                all_content.push(cleaned);
                             }
                         }
                     }
                     ContentBlock::Thinking { thinking, .. } => {
+                        // Show thinking content without the "THINKING:" label
                         if let Ok(thinking_str) = String::from_utf8(thinking.to_vec()) {
-                            all_content.push(format!("THINKING: {}", thinking_str));
+                            let cleaned = clean_message_text(&thinking_str);
+                            if !cleaned.trim().is_empty() {
+                                all_content.push(cleaned);
+                            }
                         }
                     }
                     ContentBlock::ToolUse { name, .. } => {
-                        all_content.push(format!("TOOL_USE: {}", name));
-                    }
-                    ContentBlock::ToolResult { content: tool_content, .. } => {
-                        match tool_content {
-                            Content::String(bytes) => {
-                                if let Ok(result_str) = String::from_utf8(bytes.to_vec()) {
-                                    all_content.push(format!("TOOL_RESULT: {}", result_str));
-                                }
-                            }
-                            Content::Blocks(_) => {
-                                all_content.push("TOOL_RESULT: complex output".to_string());
-                            }
+                        // Skip Bash commands - they're too verbose and not user-facing
+                        if name != "Bash" {
+                            all_content.push(name.clone());
                         }
                     }
+                    ContentBlock::ToolResult { .. } => {
+                        // Skip tool results - they're usually verbose command outputs
+                        // and not useful for message previews
+                    }
                     ContentBlock::Image { .. } => {
-                        all_content.push("IMAGE".to_string());
+                        all_content.push("Image".to_string());
                     }
                 }
             }
@@ -406,6 +406,47 @@ pub fn extract_text_content(content: &Content) -> Option<String> {
             }
         }
     }
+}
+
+// Helper function to clean up message text
+fn clean_message_text(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Remove "Caveat:" messages and everything after until the next paragraph
+    if let Some(caveat_pos) = result.find("Caveat:") {
+        if let Some(double_newline) = result[caveat_pos..].find("\n\n") {
+            result.replace_range(caveat_pos..caveat_pos + double_newline + 2, "");
+        } else {
+            // If no double newline, remove everything from Caveat to the end
+            result.truncate(caveat_pos);
+        }
+    }
+
+    // Parse command tags like <command-name>/clear</command-name> to just /clear
+    while let Some(start_tag_pos) = result.find("<command-name>") {
+        if let Some(end_tag_pos) = result[start_tag_pos..].find("</command-name>") {
+            let command_start = start_tag_pos + "<command-name>".len();
+            let command_end = start_tag_pos + end_tag_pos;
+            let command = result[command_start..command_end].to_string();
+            result.replace_range(
+                start_tag_pos..command_end + "</command-name>".len(),
+                &command,
+            );
+        } else {
+            break;
+        }
+    }
+
+    // Remove other common tags
+    result = result.replace("<command-message>", "");
+    result = result.replace("</command-message>", "");
+    result = result.replace("<command-args>", "");
+    result = result.replace("</command-args>", "");
+    result = result.replace("<local-command-stdout>", "");
+    result = result.replace("</local-command-stdout>", "");
+
+    // Clean up extra whitespace
+    result.trim().to_string()
 }
 
 pub fn parse_jsonl_file<T>(

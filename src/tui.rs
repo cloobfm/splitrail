@@ -2,7 +2,7 @@ use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats};
 use crate::utils::{NumberFormatOptions, format_date_for_display, format_number};
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::Result;
-use chrono::{Duration as ChronoDuration, Local};
+use chrono::Duration as ChronoDuration;
 use crossterm::event::{self, Event, KeyCode, EnableMouseCapture, DisableMouseCapture};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
@@ -16,7 +16,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs};
+use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs};
 use ratatui::{Frame, Terminal};
 use std::io::{Write, stdout};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -1546,7 +1546,8 @@ fn draw_summary_view(
                 "○ No data".to_string()
             };
 
-        cli_data.push(( (analyzer_stats.analyzer_name.clone(),
+        cli_data.push((
+            analyzer_stats.analyzer_name.clone(),
             cached,
             input,
             output,
@@ -1557,7 +1558,7 @@ fn draw_summary_view(
             session_count,
             message_count,
             state,
-        )));
+        ));
     }
 
     // Build CLI breakdown table with metrics as rows and CLIs as columns
@@ -1829,49 +1830,48 @@ fn simplify_analyzer_name(name: &str) -> &str {
 }
 
 // Get last message preview
-fn get_last_message_preview(stats: &AgenticCodingToolStats, max_len: usize) -> (String, Vec<String>) {
-    // Get last 5 messages (all roles)
-    let mut recent_messages: Vec<_> = stats.messages.iter().collect();
-    recent_messages.sort_by_key(|msg| std::cmp::Reverse(msg.date));
-    recent_messages.truncate(5);
+fn get_last_message_preview(stats: &AgenticCodingToolStats, max_len: usize) -> (String, Vec<(crate::types::MessageRole, String, String)>) {
+    let username = get_username();
+    let simplified_name = simplify_analyzer_name(&stats.analyzer_name);
+
+    // First, filter messages to only those with displayable content
+    let mut messages_with_content: Vec<_> = stats.messages.iter()
+        .filter_map(|msg| {
+            if let Some(content) = &msg.content {
+                let single_line_content = content.replace('\n', " ").replace('\r', "");
+                if !single_line_content.trim().is_empty() {
+                    let msg_role_name = match msg.role {
+                        crate::types::MessageRole::User => username.as_str(),
+                        crate::types::MessageRole::Assistant => simplified_name,
+                    };
+                    return Some((msg.date, msg.role.clone(), msg_role_name.to_string(), single_line_content));
+                }
+            }
+            None
+        })
+        .collect();
+
+    // Sort by date (newest first) and take last 5
+    messages_with_content.sort_by_key(|(date, _, _, _)| std::cmp::Reverse(*date));
+    messages_with_content.truncate(5);
 
     // Reverse to show oldest to newest
-    recent_messages.reverse();
+    messages_with_content.reverse();
 
+    // Convert to the expected format
+    let message_lines: Vec<_> = messages_with_content.into_iter()
+        .map(|(_, role, role_name, content)| (role, role_name, content))
+        .collect();
+
+    // Get the role of the last message for status display
     if let Some(last_msg) = stats.messages.iter().max_by_key(|msg| msg.date) {
-        let username = get_username();
-        let simplified_name = simplify_analyzer_name(&stats.analyzer_name);
         let role = match last_msg.role {
             crate::types::MessageRole::User => username.as_str(),
             crate::types::MessageRole::Assistant => simplified_name,
         };
-
-        // Collect last 5 messages as individual strings, ordered oldest to newest
-        let mut message_lines = Vec::new();
-        for (i, msg) in recent_messages.iter().enumerate() {
-            let msg_role = match msg.role {
-                crate::types::MessageRole::User => username.as_str(),
-                crate::types::MessageRole::Assistant => simplified_name,
-            };
-
-            if let Some(content) = &msg.content {
-                // Show content as single line (remove newlines)
-                let single_line_content = content.replace('\n', " ").replace('\r', "");
-                message_lines.push(format!("{}: {}", msg_role, single_line_content));
-            } else {
-                // Show more debug info for missing content
-                let debug_details = format!(
-                    "role={}, tokens={}, cost=${:.4}, tools={}",
-                    msg.role.clone() as u8, msg.stats.input_tokens + msg.stats.output_tokens,
-                    msg.stats.cost, msg.stats.tool_calls
-                );
-                message_lines.push(format!("{}: [no content] {}", msg_role, debug_details));
-            }
-        }
-
         (role.to_string(), message_lines)
     } else {
-        ("—".to_string(), vec!["No activity".to_string()])
+        ("—".to_string(), vec![])
     }
 }
 
@@ -1950,17 +1950,39 @@ fn draw_visual_cli_panels(
         // Show messages, each limited to first line only
         let preview_width = area.width.saturating_sub(15) as usize;
 
-        // Show messages based on dynamic limit
-        for message_line in last_time.iter().take(messages_per_cli) {
-            let line_content = if message_line.len() > preview_width {
-                format!("{}…", &message_line[..preview_width.saturating_sub(1)])
+        // Show messages based on dynamic limit with role-based styling
+        for (role, role_name, content) in last_time.iter().take(messages_per_cli) {
+            // Different styling for user vs assistant messages
+            let (role_color, content_style) = match role {
+                crate::types::MessageRole::User => (
+                    Color::Cyan,  // Bright cyan for user name
+                    Style::default().fg(Color::White),  // White for user message content
+                ),
+                crate::types::MessageRole::Assistant => (
+                    Color::DarkGray,  // Dim gray for assistant name
+                    Style::default().fg(Color::DarkGray).italic(),  // Dim italic for assistant content
+                ),
+            };
+
+            // Format role and content separately
+            let role_with_colon = format!("{}: ", role_name);
+            let full_text_len = role_with_colon.len() + content.len();
+
+            let content_text = if full_text_len > preview_width {
+                let available_for_content = preview_width.saturating_sub(role_with_colon.len() + 1);
+                if available_for_content > 0 && content.len() > available_for_content {
+                    format!("{}…", &content[..available_for_content])
+                } else {
+                    content.clone()
+                }
             } else {
-                message_line.clone()
+                content.clone()
             };
 
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(line_content, Style::default().fg(Color::DarkGray).italic()),
+                Span::styled(role_with_colon, Style::default().fg(role_color).bold()),
+                Span::styled(content_text, content_style),
             ]));
         }
 
