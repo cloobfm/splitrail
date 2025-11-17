@@ -210,6 +210,7 @@ pub(crate) fn parse_amazon_q_conversation(
             timestamp.timestamp_millis()
         ));
 
+        let user_content = format_q_user_message(&history_entry.user);
         entries.push(ConversationMessage {
             application: Application::AmazonQ,
             date: timestamp,
@@ -220,7 +221,7 @@ pub(crate) fn parse_amazon_q_conversation(
             model: None,
             stats: Stats::default(),
             role: MessageRole::User,
-            content: None,
+            content: user_content,
         });
 
         // Create assistant message with stats
@@ -265,6 +266,7 @@ pub(crate) fn parse_amazon_q_conversation(
             }
         }
 
+        let assistant_content = format_q_assistant_message(&history_entry.assistant);
         entries.push(ConversationMessage {
             application: Application::AmazonQ,
             date: timestamp,
@@ -275,11 +277,98 @@ pub(crate) fn parse_amazon_q_conversation(
             model,
             stats,
             role: MessageRole::Assistant,
-            content: None,
+            content: assistant_content,
         });
     }
 
     Ok(entries)
+}
+
+fn format_q_user_message(message: &QUserMessage) -> Option<String> {
+    let mut parts = Vec::new();
+
+    if let Some(content) = format_q_user_content(&message.content) {
+        if !content.is_empty() {
+            parts.push(content);
+        }
+    }
+
+    if let Some(context) = message
+        .additional_context
+        .as_deref()
+        .filter(|ctx| !ctx.trim().is_empty())
+    {
+        parts.push(format!("Context:\n{context}"));
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
+fn format_q_user_content(content: &QUserContent) -> Option<String> {
+    match content {
+        QUserContent::Prompt { prompt } => {
+            let trimmed = prompt.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        QUserContent::ToolUseResults { .. } | QUserContent::CancelledToolUses { .. } => None,
+    }
+}
+
+fn format_q_assistant_message(message: &QAssistantMessage) -> Option<String> {
+    match message {
+        QAssistantMessage::Response { content, .. } => {
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        QAssistantMessage::ToolUse {
+            content, tool_uses, ..
+        } => {
+            let mut parts = Vec::new();
+            if !content.trim().is_empty() {
+                parts.push(content.trim().to_string());
+            }
+
+            if !tool_uses.is_empty() {
+                parts.push(format_tool_use_summary(tool_uses));
+            }
+
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n\n"))
+            }
+        }
+    }
+}
+
+fn format_tool_use_summary(tool_uses: &[QToolUse]) -> String {
+    let mut lines = Vec::new();
+    lines.push("Tool calls:".to_string());
+    for tool in tool_uses {
+        let mut entry = format!("- {}", tool.name);
+        if let Some(orig) = &tool.orig_name {
+            if orig != &tool.name {
+                entry.push_str(&format!(" (source: {orig})"));
+            }
+        }
+        if !tool.args.is_null() {
+            entry.push_str(&format!(" args: {}", tool.args));
+        }
+        lines.push(entry);
+    }
+    lines.join("\n")
 }
 
 #[async_trait]
