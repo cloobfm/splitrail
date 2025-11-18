@@ -1,5 +1,7 @@
 use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats};
-use crate::utils::{NumberFormatOptions, format_date_for_display, format_number};
+use crate::utils::{
+    format_date_for_display, format_number, format_timestamp_for_live_view, NumberFormatOptions,
+};
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::Result;
 use chrono::Duration as ChronoDuration;
@@ -36,6 +38,7 @@ pub struct TuiState {
     pub cli_table_scroll_offset: usize, // For horizontal scroll
     pub layout: UiLayout,
     pub mouse_mode_enabled: bool, // Toggle between mouse scroll and text selection
+    pub summary_verbose_mode: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -55,12 +58,17 @@ pub enum UploadStatus {
 
 fn has_data(stats: &AgenticCodingToolStats) -> bool {
     stats.num_conversations > 0
-        || stats.daily_stats.values().any(|day| {
+        ||
+        stats.daily_stats.values().any(|day| {
             day.stats.cost > 0.0
-                || day.stats.input_tokens > 0
-                || day.stats.output_tokens > 0
-                || day.stats.reasoning_tokens > 0
-                || day.stats.tool_calls > 0
+                ||
+                day.stats.input_tokens > 0
+                ||
+                day.stats.output_tokens > 0
+                ||
+                day.stats.reasoning_tokens > 0
+                ||
+                day.stats.tool_calls > 0
         })
 }
 
@@ -141,7 +149,14 @@ async fn run_app(
         tui_state.summary_day_offset,
     ));
 
+    let mut clock_timer = std::time::Instant::now();
+
     loop {
+        if clock_timer.elapsed() >= Duration::from_secs(1) {
+            needs_redraw = true;
+            clock_timer = std::time::Instant::now();
+        }
+
         // Check for stats updates
         if stats_receiver.has_changed()? {
             current_stats = stats_receiver.borrow_and_update().clone();
@@ -181,11 +196,10 @@ async fn run_app(
             let mut status = upload_status.lock().unwrap();
             // Advance dots animation for uploading status every 500ms (5 frames at 100ms)
             if let UploadStatus::Uploading {
-                current: _,
-                total: _,
+                current: _, 
+                total: _, 
                 dots,
-            } = &mut *status
-            {
+            } = &mut *status {
                 // Always animate dots during upload
                 dots_counter += 1;
                 if dots_counter >= 5 {
@@ -257,6 +271,12 @@ async fn run_app(
 
                     // Only handle navigation keys if we have data (`filtered_stats` is non-empty).
                     if filtered_stats.is_empty() {
+                        continue;
+                    }
+
+                    if key.code == KeyCode::Char('v') && tui_state.selected_tab == 0 {
+                        tui_state.summary_verbose_mode = !tui_state.summary_verbose_mode;
+                        needs_redraw = true;
                         continue;
                     }
 
@@ -466,7 +486,8 @@ async fn run_app(
                                         tui_state.cli_scroll_offset += 1;
                                         needs_redraw = true;
                                     }
-                                } else if mouse_y >= today_by_cli_rect.y
+                                }
+                                else if mouse_y >= today_by_cli_rect.y
                                     && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height
                                 {
                                     // Arbitrary limit, can be improved
@@ -518,17 +539,17 @@ fn draw_ui(
         // For Summary view (tui_state.selected_tab == 0), give more space to main table since no totals shown
         let summary_stats_height = if tui_state.selected_tab == 0 { 0 } else { 9 };
         Layout::vertical([
-            Constraint::Length(3),                             // Header
-            Constraint::Length(1),                             // Tabs
-            Constraint::Min(3),                                // Main table
-            Constraint::Length(summary_stats_height),          // Summary stats (0 for Summary tab)
+            Constraint::Length(3), // Header
+            Constraint::Length(1), // Tabs
+            Constraint::Min(3), // Main table
+            Constraint::Length(summary_stats_height), // Summary stats (0 for Summary tab)
             Constraint::Length(if has_error { 3 } else { 1 }), // Help text
         ])
         .split(frame.area())
     } else {
         Layout::vertical([
             Constraint::Length(3), // Header
-            Constraint::Min(3),    // No-data message
+            Constraint::Min(3), // No-data message
             Constraint::Length(1), // Help text
         ])
         .split(frame.area())
@@ -553,7 +574,8 @@ fn draw_ui(
         tab_titles.extend(filtered_stats.iter().map(|stats| {
             Line::from(format!(
                 " {} ({}) ",
-                stats.analyzer_name, stats.num_conversations,
+                stats.analyzer_name,
+                stats.num_conversations,
             ))
         }));
 
@@ -609,7 +631,7 @@ fn draw_ui(
         // Split help area horizontally: help text on left, upload status on right
         let help_chunks = Layout::horizontal([
             Constraint::Min(0),
-            Constraint::Min(20), // Allow flexible space for error messages
+            Constraint::Max(40), // Allow flexible space for error messages
         ])
         .split(help_area);
 
@@ -621,7 +643,7 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate days, m: toggle {} mode, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, m: {} mode, q/Esc: quit",
                 mouse_mode_indicator
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
@@ -989,7 +1011,7 @@ fn draw_daily_stats_table(
             Line::from(Span::raw(""))
         };
 
-        let row = Row::new(vec![
+        let row = Row::new(vec![ 
             arrow_cell,
             date_cell,
             cost_cell,
@@ -1021,7 +1043,7 @@ fn draw_daily_stats_table(
     let all_models_text = all_models_vec.join(", ");
 
     // Add separator row before totals
-    let separator_row = Row::new(vec![
+    let separator_row = Row::new(vec![ 
         Line::from(Span::styled(
             "",
             Style::default().add_modifier(Modifier::DIM),
@@ -1088,7 +1110,7 @@ fn draw_daily_stats_table(
         .map(|s| s.stats.lines_added)
         .sum::<u64>();
 
-    let totals_row = Row::new(vec![
+    let totals_row = Row::new(vec![ 
         // Arrow indicator for totals row when selected
         if table_state.selected() == Some(rows.len()) {
             Line::from(Span::styled(
@@ -1283,7 +1305,7 @@ fn draw_summary_view(
     tui_state.layout.live_activity_rect = Some(chunks[5]);
 
     // Create table rows
-    let header = Row::new(vec![
+    let header = Row::new(vec![ 
         Cell::new(""),
         Cell::new(Text::from("Today").right_aligned()),
         Cell::new(Text::from("Yesterday").right_aligned()),
@@ -1293,8 +1315,8 @@ fn draw_summary_view(
     .style(Style::default().add_modifier(Modifier::BOLD))
     .height(1);
 
-    let rows = vec![
-        Row::new(vec![
+    let rows = vec![ 
+        Row::new(vec![ 
             Cell::new(Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta))),
             Cell::new(
                 Line::from(format_number(today_stats.cached_tokens, format_options))
@@ -1312,7 +1334,7 @@ fn draw_summary_view(
                     .right_aligned(),
             ),
         ]),
-        Row::new(vec![
+        Row::new(vec![ 
             Cell::new(Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue))),
             Cell::new(
                 Line::from(format_number(today_stats.input_tokens, format_options)).right_aligned(),
@@ -1329,7 +1351,7 @@ fn draw_summary_view(
                     .right_aligned(),
             ),
         ]),
-        Row::new(vec![
+        Row::new(vec![ 
             Cell::new(Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan))),
             Cell::new(
                 Line::from(format_number(today_stats.output_tokens, format_options))
@@ -1347,7 +1369,7 @@ fn draw_summary_view(
                     .right_aligned(),
             ),
         ]),
-        Row::new(vec![
+        Row::new(vec![ 
             Cell::new(Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red))),
             Cell::new(
                 Line::from(format_number(today_stats.reasoning_tokens, format_options))
@@ -1372,7 +1394,7 @@ fn draw_summary_view(
                 .right_aligned(),
             ),
         ]),
-        Row::new(vec![
+        Row::new(vec![ 
             Cell::new(Line::from("🛠️ Tool Calls").style(Style::default().fg(Color::LightGreen))),
             Cell::new(
                 Line::from(format_number(today_stats.tool_calls, format_options)).right_aligned(),
@@ -1389,7 +1411,7 @@ fn draw_summary_view(
                     .right_aligned(),
             ),
         ]),
-        Row::new(vec![
+        Row::new(vec![ 
             Cell::new(Line::from("💬 Conversations").style(Style::default().fg(Color::Cyan))),
             Cell::new(
                 Line::from(format_number(today_stats.conversations, format_options))
@@ -1407,7 +1429,7 @@ fn draw_summary_view(
                     .right_aligned(),
             ),
         ]),
-        Row::new(vec![
+        Row::new(vec![ 
             Cell::new(Line::from("📊 CLIs Active").style(Style::default().fg(Color::Magenta))),
             Cell::new(
                 Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
@@ -1422,7 +1444,7 @@ fn draw_summary_view(
                 Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
             ),
         ]),
-        Row::new(vec![
+        Row::new(vec![ 
             Cell::new(Line::from("💰 Cost").style(Style::default().fg(Color::Yellow))),
             Cell::new(Line::from(format!("${:.2}", today_stats.cost)).right_aligned()),
             Cell::new(Line::from(format!("${:.2}", yesterday_stats.cost)).right_aligned()),
@@ -1598,7 +1620,7 @@ fn draw_summary_view(
                 ("○ No data".to_string(), i64::MAX / 4, 2)
             };
 
-        cli_data.push((
+        cli_data.push(( 
             analyzer_stats.analyzer_name.clone(),
             cached,
             input,
@@ -1641,7 +1663,7 @@ fn draw_summary_view(
         cli_constraints.push(Constraint::Length(13)); // Each CLI column
     }
 
-    let cli_rows = vec![
+    let cli_rows = vec![ 
         // Cached Tokens row
         {
             let mut cells = vec![Cell::new(
@@ -1778,7 +1800,9 @@ fn draw_summary_view(
         let formatted_date = selected_date_with_tz.format("%B %d, %Y").to_string(); // November 15, 2025
         format!(
             "📊 {} ({}, {} days ago) by CLI",
-            weekday, formatted_date, selected_day_offset,
+            weekday,
+            formatted_date,
+            selected_day_offset,
         )
     };
 
@@ -1818,7 +1842,7 @@ fn create_bar(value: u64, max_value: u64, width: usize, color: Color) -> Line<'s
     let filled_chars = "█".repeat(filled);
     let empty_chars = "░".repeat(empty);
 
-    Line::from(vec![
+    Line::from(vec![ 
         Span::styled(filled_chars, Style::default().fg(color)),
         Span::styled(empty_chars, Style::default().fg(Color::DarkGray)),
     ])
@@ -1914,7 +1938,7 @@ fn simplify_analyzer_name(name: &str) -> &str {
         "Codex CLI" => "Codex",
         "Gemini CLI" => "Gemini",
         "GitHub Copilot" => "Copilot",
-        "Cline" => "Cline",
+        " Cline" => "Cline",
         "Roo Code" => "Roo",
         "Kilo Code" => "Kilo",
         "Qwen Code" => "Qwen",
@@ -1927,7 +1951,15 @@ fn simplify_analyzer_name(name: &str) -> &str {
 fn get_last_message_preview(
     stats: &AgenticCodingToolStats,
     max_len: usize,
-) -> (String, Vec<(crate::types::MessageRole, String, String)>) {
+) -> (
+    String,
+    Vec<(
+        chrono::DateTime<chrono::Utc>,
+        crate::types::MessageRole,
+        String,
+        String,
+    )>,
+) {
     let username = get_username();
     let simplified_name = simplify_analyzer_name(&stats.analyzer_name);
 
@@ -1943,7 +1975,7 @@ fn get_last_message_preview(
                         crate::types::MessageRole::User => username.as_str(),
                         crate::types::MessageRole::Assistant => simplified_name,
                     };
-                    return Some((
+                    return Some(( 
                         msg.date,
                         msg.role.clone(),
                         msg_role_name.to_string(),
@@ -1965,7 +1997,7 @@ fn get_last_message_preview(
     // Convert to the expected format
     let message_lines: Vec<_> = messages_with_content
         .into_iter()
-        .map(|(_, role, role_name, content)| (role, role_name, content))
+        .map(|(date, role, role_name, content)| (date, role, role_name, content))
         .collect();
 
     // Get the role of the last message for status display
@@ -1985,7 +2017,7 @@ fn draw_visual_cli_panels(
     frame: &mut Frame,
     area: Rect,
     filtered_stats: &[&AgenticCodingToolStats],
-    cli_data: &[(
+    cli_data: &[( 
         String,
         u64,
         u64,
@@ -2045,7 +2077,7 @@ fn draw_visual_cli_panels(
 
         // Line 1: CLI name, state, activity sparkline
         let sparkline = create_activity_sparkline(stats);
-        let (last_role, last_time) = get_last_message_preview(stats, 50);
+        let (_last_role, message_lines) = get_last_message_preview(stats, 50);
 
         let name_color = match state.as_str() {
             s if s.contains("Active") => Color::Green,
@@ -2056,7 +2088,7 @@ fn draw_visual_cli_panels(
         };
 
         // Build the line with colored sparkline spans
-        let mut line_spans = vec![
+        let mut line_spans = vec![ 
             Span::styled(
                 format!("{:12}", cli_name),
                 Style::default().fg(name_color).bold(),
@@ -2064,7 +2096,7 @@ fn draw_visual_cli_panels(
             Span::raw(" "),
         ];
         line_spans.extend(sparkline);
-        line_spans.extend(vec![
+        line_spans.extend(vec![ 
             Span::raw("   "),
             Span::styled(
                 state.chars().next().unwrap_or('⚫').to_string(),
@@ -2077,7 +2109,7 @@ fn draw_visual_cli_panels(
 
         // Add separator line below the sparkline graph (to end of content)
         // CLI name (12) + space + sparkline (80) + spacing + status + timestamp = ~109
-        let line_width = 109;
+        let line_width = area.width.saturating_sub(2) as usize;
         lines.push(Line::from(Span::styled(
             "─".repeat(line_width),
             Style::default().fg(Color::DarkGray),
@@ -2087,7 +2119,7 @@ fn draw_visual_cli_panels(
         let preview_width = area.width.saturating_sub(15) as usize;
 
         // Show messages based on dynamic limit with role-based styling
-        for (role, role_name, content) in last_time.iter().take(messages_per_cli) {
+        for (timestamp, role, role_name, content) in message_lines.iter().take(messages_per_cli) {
             // Different styling for user vs assistant messages
             let (role_color, content_style) = match role {
                 crate::types::MessageRole::User => (
@@ -2100,12 +2132,21 @@ fn draw_visual_cli_panels(
                 ),
             };
 
+            let timestamp_str = if tui_state.summary_verbose_mode {
+                format!(
+                    "{} ",
+                    format_timestamp_for_live_view(timestamp)
+                )
+            } else {
+                String::new()
+            };
+
             // Format role and content separately
             let role_with_colon = format!("{}: ", role_name);
-            let full_text_len = role_with_colon.len() + content.len();
+            let full_text_len = timestamp_str.len() + role_with_colon.len() + content.len();
 
             let content_text = if full_text_len > preview_width {
-                let available_for_content = preview_width.saturating_sub(role_with_colon.len() + 1);
+                let available_for_content = preview_width.saturating_sub(timestamp_str.len() + role_with_colon.len() + 1);
                 if available_for_content > 0 && content.len() > available_for_content {
                     format!("{}…", &content[..available_for_content])
                 } else {
@@ -2115,8 +2156,12 @@ fn draw_visual_cli_panels(
                 content.clone()
             };
 
-            lines.push(Line::from(vec![
+            lines.push(Line::from(vec![ 
                 Span::raw("  "),
+                Span::styled(
+                    timestamp_str,
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled(role_with_colon, Style::default().fg(role_color).bold()),
                 Span::styled(content_text, content_style),
             ]));
@@ -2126,9 +2171,13 @@ fn draw_visual_cli_panels(
         lines.push(Line::from(""));
     }
 
+    let now = chrono::Local::now();
+    let clock_text = now.format("%H:%M:%S").to_string();
+    let title = format!("📊 Live Activity: {}", clock_text);
+
     let paragraph = Paragraph::new(lines).block(
         Block::default()
-            .title("📊 Live Activity")
+            .title(title)
             .title_style(Style::default().bold().fg(Color::Cyan)),
     );
 
@@ -2220,13 +2269,20 @@ fn draw_summary_stats(
         // Collect unique days across all tools that have actual data
         for (day, day_stats) in &stats.daily_stats {
             if day_stats.stats.cost > 0.0
-                || day_stats.stats.input_tokens > 0
-                || day_stats.stats.output_tokens > 0
-                || day_stats.stats.reasoning_tokens > 0
-                || day_stats.stats.cached_tokens > 0
-                || day_stats.stats.tool_calls > 0
-                || day_stats.ai_messages > 0
-                || day_stats.conversations > 0
+                ||
+                day_stats.stats.input_tokens > 0
+                ||
+                day_stats.stats.output_tokens > 0
+                ||
+                day_stats.stats.reasoning_tokens > 0
+                ||
+                day_stats.stats.cached_tokens > 0
+                ||
+                day_stats.stats.tool_calls > 0
+                ||
+                day_stats.ai_messages > 0
+                ||
+                day_stats.conversations > 0
             {
                 all_days.insert(day);
             }
@@ -2240,7 +2296,7 @@ fn draw_summary_stats(
         let tools_count = filtered_stats.len();
 
         // Define summary rows with labels and values
-        let summary_rows = vec![
+        let summary_rows = vec![ 
             ("Tools:", format!("{tools_count} tracked"), Color::Cyan),
             (
                 "Tokens:",
@@ -2272,7 +2328,7 @@ fn draw_summary_stats(
         summary_lines = summary_rows
             .into_iter()
             .map(|(label, value, color)| {
-                Line::from(vec![
+                Line::from(vec![ 
                     Span::raw(format!("{label:<max_label_width$}")),
                     Span::raw("      "), // 6 spaces between label and value
                     Span::styled(value, Style::new().fg(color).bold()),
@@ -2314,7 +2370,7 @@ fn update_table_states(
     let filtered_count = filtered_analyzers.len();
 
     // Create a map of analyzer name to old table state
-    let mut old_states_by_name: std::collections::HashMap<String, TableState> =
+    let mut old_states_by_name: std::collections::HashMap<String, TableState> = 
         std::collections::HashMap::new();
     for (i, analyzer) in filtered_analyzers.iter().enumerate() {
         if i < table_states.len() {

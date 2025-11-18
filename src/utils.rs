@@ -101,6 +101,16 @@ pub fn format_date_for_display(date: &str) -> String {
     }
 }
 
+pub fn format_timestamp_for_live_view(timestamp: &DateTime<Utc>) -> String {
+    let now = Local::now();
+    let local_timestamp = timestamp.with_timezone(&Local);
+    if local_timestamp.date_naive() == now.date_naive() {
+        local_timestamp.format("%H:%M:%S").to_string()
+    } else {
+        local_timestamp.format("%y-%m-%d %H:%M").to_string()
+    }
+}
+
 pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, DailyStats> {
     let mut daily_stats: BTreeMap<String, DailyStats> = BTreeMap::new();
     let mut conversation_start_dates: BTreeMap<String, String> = BTreeMap::new();
