@@ -37,7 +37,7 @@ impl Analyzer for CodexCliAnalyzer {
             // Codex CLI history file contains summary commands sent via the CLI prompt
             patterns.push(format!("{home_str}/.codex/history.jsonl"));
 
-            // Watch today's session directory directly (no deep recursion!)
+            // Watch today's session directory directly for real-time updates (no deep recursion!)
             let today = chrono::Local::now();
             let today_dir = format!(
                 "{home_str}/.codex/sessions/{}/{:02}/{:02}/*.jsonl",
@@ -62,11 +62,22 @@ impl Analyzer for CodexCliAnalyzer {
     }
 
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
-        let patterns = self.get_data_glob_patterns();
         let mut sources = Vec::new();
 
-        for pattern in patterns {
-            for entry in glob::glob(&pattern)? {
+        if let Some(home_dir) = std::env::home_dir() {
+            let home_str = home_dir.to_string_lossy();
+
+            // Add history file
+            let history_path = format!("{home_str}/.codex/history.jsonl");
+            if std::path::Path::new(&history_path).exists() {
+                sources.push(DataSource {
+                    path: std::path::PathBuf::from(history_path),
+                });
+            }
+
+            // Add ALL historical session files (not just today/yesterday)
+            let historical_pattern = format!("{home_str}/.codex/sessions/**/*.jsonl");
+            for entry in glob::glob(&historical_pattern)? {
                 let path = entry?;
                 if path.is_file() {
                     sources.push(DataSource { path });
