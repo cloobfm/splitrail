@@ -11,7 +11,8 @@ use glob::glob;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::io::BufRead;
 use std::path::Path;
 
 pub struct QwenCodeAnalyzer;
@@ -20,6 +21,97 @@ impl QwenCodeAnalyzer {
     pub fn new() -> Self {
         Self
     }
+}
+
+// Data structures for auto-stats JSONL files (requests and stats)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum QwenAutoStatsData {
+    RequestLog(QwenRequestLogEntry),
+    StatsLog(QwenStatsLogEntry),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QwenRequestLogEntry {
+    #[serde(deserialize_with = "deserialize_utc_timestamp")]
+    timestamp: DateTime<Utc>,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+    event: String,
+    data: QwenRequestData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QwenRequestData {
+    #[serde(rename = "userPromptId")]
+    user_prompt_id: Option<String>,
+    model: Option<String>,
+    method: Option<String>,
+    #[serde(rename = "contentLength")]
+    content_length: Option<u64>,
+    timestamp: String,
+    streaming: Option<bool>,
+    config: Option<simd_json::OwnedValue>,
+    #[serde(rename = "durationMs")]
+    duration_ms: Option<u64>,
+    success: Option<bool>,
+    #[serde(rename = "chunkCount")]
+    chunk_count: Option<u64>,
+    #[serde(rename = "candidatesCount")]
+    candidates_count: Option<u64>,
+    #[serde(rename = "usageMetadata")]
+    usage_metadata: Option<QwenUsageMetadata>,
+    #[serde(rename = "finishReason")]
+    finish_reason: Option<String>,
+    #[serde(rename = "totalResponseLength")]
+    total_response_length: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QwenUsageMetadata {
+    #[serde(rename = "promptTokenCount")]
+    prompt_token_count: u64,
+    #[serde(rename = "candidatesTokenCount")]
+    candidates_token_count: u64,
+    #[serde(rename = "totalTokenCount")]
+    total_token_count: u64,
+    #[serde(rename = "cachedContentTokenCount")]
+    cached_content_token_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QwenStatsLogEntry {
+    #[serde(deserialize_with = "deserialize_utc_timestamp")]
+    timestamp: DateTime<Utc>,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+    stats: QwenAggregatedStats,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QwenAggregatedStats {
+    models: Option<HashMap<String, QwenModelStats>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QwenModelStats {
+    requests: u64,
+    errors: u64,
+    #[serde(rename = "latency_ms")]
+    latency_ms: u64,
+    tokens: QwenTokenCounts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QwenTokenCounts {
+    prompt: u64,
+    candidates: u64,
+    total: u64,
+    cached: u64,
 }
 
 // Qwen Code-specific data structures (identical to Gemini CLI format)
@@ -187,6 +279,235 @@ fn calculate_qwen_cost(tokens: &QwenCodeTokens, model_name: &str) -> f64 {
     let cache_cost = calculate_cache_cost(model_name, 0, tokens.cached); // Qwen Code doesn't have cache creation
 
     input_cost + output_cost + cache_cost
+}
+
+// Parse JSONL stats files (requests and stats logs)
+fn parse_jsonl_stats_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
+    let mut entries = Vec::new();
+    let file_path_str = file_path.to_string_lossy();
+
+    let file = std::fs::File::open(file_path)?;
+    let reader = std::io::BufReader::new(file);
+
+    for line_result in reader.lines() {
+        let line = line_result?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        // Try to parse as either request log or stats log entry
+        let mut line_bytes = line.as_bytes().to_vec();
+        match simd_json::from_slice::<simd_json::OwnedValue>(&mut line_bytes) {
+            Ok(json_value) => {
+                // Try to parse as request log first
+                if let Ok(request_entry) = parse_request_log_from_json_value(&json_value, &file_path_str) {
+                    entries.extend(request_entry);
+                }
+                // If not a request log, try to parse as stats log
+                else if let Ok(stats_entry) = parse_stats_log_from_json_value(&json_value, &file_path_str) {
+                    entries.extend(stats_entry);
+                }
+            }
+            Err(_) => continue, // Skip malformed lines
+        }
+    }
+
+    Ok(entries)
+}
+
+// Helper function to parse a request log entry from JSON value
+fn parse_request_log_from_json_value(
+    json_value: &simd_json::OwnedValue,
+    file_path_str: &str,
+) -> Result<Vec<ConversationMessage>, ()> {
+    // Check if this looks like a request log entry
+    if let Some(obj) = json_value.as_object() {
+        if let Some(session_id_val) = obj.get("sessionId") {
+            if let Some(session_id) = session_id_val.as_str() {
+                if let Some(type_val) = obj.get("type").and_then(|v| v.as_str()) {
+                    if type_val == "auto_request_log" {
+                        let timestamp = if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
+                            chrono::DateTime::parse_from_rfc3339(ts_str).map(|dt| dt.with_timezone(&chrono::Utc)).ok()
+                        } else {
+                            None
+                        };
+
+                        let event = obj.get("event").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                        if let Some(data_obj) = obj.get("data").and_then(|v| v.as_object()) {
+                            let model = data_obj.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                            if let Some(timestamp) = timestamp {
+                                let mut stats = Stats::default();
+
+                                // Extract token stats if available
+                                if let Some(usage_obj) = data_obj.get("usageMetadata").and_then(|v| v.as_object()) {
+                                    let prompt_tokens = usage_obj.get("promptTokenCount").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let candidates_tokens = usage_obj.get("candidatesTokenCount").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let cached_tokens = usage_obj.get("cachedContentTokenCount").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                                    stats.input_tokens = prompt_tokens;
+                                    stats.output_tokens = candidates_tokens;
+                                    stats.cached_tokens = cached_tokens;
+                                    if let Some(ref model_name) = model {
+                                        stats.cost = calculate_input_cost(model_name, prompt_tokens)
+                                            + calculate_output_cost(model_name, candidates_tokens)
+                                            + calculate_cache_cost(model_name, 0, cached_tokens);
+                                    }
+                                }
+
+                                let role = if event == "request" {
+                                    MessageRole::User
+                                } else {
+                                    MessageRole::Assistant
+                                };
+
+                                // Extract content if available
+                                let content = if let Some(user_prompt_id) = data_obj.get("userPromptId").and_then(|v| v.as_str()) {
+                                    Some(user_prompt_id.chars().take(200).collect())
+                                } else {
+                                    None
+                                };
+
+                                let msg = ConversationMessage {
+                                    date: timestamp,
+                                    application: Application::QwenCode,
+                                    project_hash: String::new(), // Not available in request logs
+                                    local_hash: Some(format!("req-{}-{}", session_id, event)),
+                                    global_hash: hash_text(&format!(
+                                        "{}:{}:{}:{}",
+                                        file_path_str,
+                                        session_id,
+                                        timestamp.to_rfc3339(),
+                                        event
+                                    )),
+                                    conversation_hash: hash_text(&session_id),
+                                    model,
+                                    stats,
+                                    role,
+                                    content,
+                                };
+
+                                return Ok(vec![msg]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err(())
+}
+
+// Helper function to parse a stats log entry from JSON value
+fn parse_stats_log_from_json_value(
+    json_value: &simd_json::OwnedValue,
+    file_path_str: &str,
+) -> Result<Vec<ConversationMessage>, ()> {
+    // Check if this looks like a stats log entry
+    if let Some(obj) = json_value.as_object() {
+        if let Some(session_id_val) = obj.get("sessionId") {
+            if let Some(session_id) = session_id_val.as_str() {
+                if let Some(type_val) = obj.get("type").and_then(|v| v.as_str()) {
+                    if type_val == "auto_stats" {
+                        let timestamp = if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
+                            chrono::DateTime::parse_from_rfc3339(ts_str).map(|dt| dt.with_timezone(&chrono::Utc)).ok()
+                        } else {
+                            None
+                        };
+
+                        if let Some(stats_obj) = obj.get("stats").and_then(|v| v.as_object()) {
+                            let mut messages = Vec::new();
+
+                            // Process model-specific stats if available
+                            if let Some(models_obj) = stats_obj.get("models").and_then(|v| v.as_object()) {
+                                for (model_name, model_value) in models_obj {
+                                    if let Some(model_obj) = model_value.as_object() {
+                                        let requests = model_obj.get("requests").and_then(|v| v.as_u64()).unwrap_or(0);
+                                        let errors = model_obj.get("errors").and_then(|v| v.as_u64()).unwrap_or(0);
+                                        let latency_ms = model_obj.get("latency_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                                        if let Some(tokens_obj) = model_obj.get("tokens").and_then(|v| v.as_object()) {
+                                            let prompt_tokens = tokens_obj.get("prompt").and_then(|v| v.as_u64()).unwrap_or(0);
+                                            let candidates_tokens = tokens_obj.get("candidates").and_then(|v| v.as_u64()).unwrap_or(0);
+                                            let cached_tokens = tokens_obj.get("cached").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                                            let stats = Stats {
+                                                tool_calls: requests as u32,
+                                                cost: if !model_name.is_empty() {
+                                                    calculate_input_cost(&model_name, prompt_tokens)
+                                                        + calculate_output_cost(&model_name, candidates_tokens)
+                                                        + calculate_cache_cost(&model_name, 0, cached_tokens)
+                                                } else {
+                                                    0.0
+                                                },
+                                                cached_tokens,
+                                                input_tokens: prompt_tokens,
+                                                output_tokens: candidates_tokens,
+                                                files_read: 0,
+                                                files_edited: 0,
+                                                lines_read: 0,
+                                                lines_edited: 0,
+                                                lines_added: 0,
+                                                lines_deleted: 0,
+                                                docs_lines: 0,
+                                                code_lines: 0,
+                                                data_lines: 0,
+                                                media_lines: 0,
+                                                config_lines: 0,
+                                                other_lines: 0,
+                                                terminal_commands: 0,
+                                                reasoning_tokens: 0,
+                                                cache_creation_tokens: 0,
+                                                cache_read_tokens: 0,
+                                                bytes_read: 0,
+                                                bytes_edited: 0,
+                                            };
+
+                                            if let Some(timestamp) = timestamp {
+                                                let msg = ConversationMessage {
+                                                    date: timestamp,
+                                                    application: Application::QwenCode,
+                                                    project_hash: String::new(), // Not available in stats logs
+                                                    local_hash: Some(format!("stats-{}-{}", session_id, model_name)),
+                                                    global_hash: hash_text(&format!(
+                                                        "{}:{}:stats:{}",
+                                                        file_path_str,
+                                                        session_id,
+                                                        model_name
+                                                    )),
+                                                    conversation_hash: hash_text(&session_id),
+                                                    model: Some(model_name.clone()),
+                                                    stats,
+                                                    role: MessageRole::Assistant, // Treat stats as system info
+                                                    content: Some(format!(
+                                                        "Session stats: {} requests, {} errors, {}ms latency, {} total tokens",
+                                                        requests,
+                                                        errors,
+                                                        latency_ms,
+                                                        prompt_tokens + candidates_tokens
+                                                    )),
+                                                };
+
+                                                messages.push(msg);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !messages.is_empty() {
+                                return Ok(messages);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err(())
 }
 
 // JSON session parsing (not JSONL)
@@ -359,18 +680,33 @@ impl Analyzer for QwenCodeAnalyzer {
 
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
+            // Chat files (traditional format)
             patterns.push(format!("{home_str}/.qwen/tmp/*/chats/*.json"));
+            // Auto-stats files (historical data)
+            patterns.push(format!("{home_str}/.qwen/auto_stats/*.jsonl"));
         }
 
         patterns
     }
 
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
-        let patterns = self.get_data_glob_patterns();
         let mut sources = Vec::new();
 
-        for pattern in patterns {
-            for entry in glob(&pattern)? {
+        if let Some(home_dir) = std::env::home_dir() {
+            let home_str = home_dir.to_string_lossy();
+
+            // Add chat session files (traditional location)
+            let chat_pattern = format!("{home_str}/.qwen/tmp/*/chats/*.json");
+            for entry in glob(&chat_pattern)? {
+                let path = entry?;
+                if path.is_file() {
+                    sources.push(DataSource { path });
+                }
+            }
+
+            // Add auto-stats files (historical data)
+            let auto_stats_pattern = format!("{home_str}/.qwen/auto_stats/*.jsonl");
+            for entry in glob(&auto_stats_pattern)? {
                 let path = entry?;
                 if path.is_file() {
                     sources.push(DataSource { path });
@@ -385,33 +721,50 @@ impl Analyzer for QwenCodeAnalyzer {
         &self,
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
-        // Parse all session files in parallel
+        // Parse all session files in parallel, handling both JSON and JSONL formats
         let all_entries: Vec<ConversationMessage> = sources
             .into_par_iter()
-            .filter_map(|source| match parse_json_session_file(&source.path) {
-                Ok(messages) => Some(messages),
-                Err(e) => {
-                    eprintln!(
-                        "Failed to parse Qwen Code session file {}: {e:#}",
-                        source.path.display(),
-                    );
-                    None
+            .flat_map(|source| {
+                if source.path.extension().map_or(false, |ext| ext == "json") {
+                    // Handle traditional JSON chat files
+                    match parse_json_session_file(&source.path) {
+                        Ok(messages) => messages,
+                        Err(e) => {
+                            eprintln!(
+                                "Failed to parse Qwen Code session file {}: {e:#}",
+                                source.path.display(),
+                            );
+                            Vec::new()
+                        }
+                    }
+                } else if source.path.extension().map_or(false, |ext| ext == "jsonl") {
+                    // Handle auto-stats JSONL files (requests and stats)
+                    match parse_jsonl_stats_file(&source.path) {
+                        Ok(messages) => messages,
+                        Err(e) => {
+                            eprintln!(
+                                "Failed to parse Qwen Code stats file {}: {e:#}",
+                                source.path.display(),
+                            );
+                            Vec::new()
+                        }
+                    }
+                } else {
+                    // Unknown file type
+                    Vec::new()
                 }
             })
-            .flat_map(|messages| messages)
             .collect();
 
-        // Deduplicate based on hash
-        let mut seen_hashes = HashSet::new();
+        // Deduplicate based on global hash to avoid duplicates from overlapping data sources
+        let mut seen_global_hashes = HashSet::new();
         let deduplicated_entries: Vec<ConversationMessage> = all_entries
             .into_iter()
             .filter(|entry| {
-                if let Some(local_hash) = &entry.local_hash {
-                    if seen_hashes.contains(local_hash) {
-                        return false;
-                    }
-                    seen_hashes.insert(local_hash.clone());
+                if seen_global_hashes.contains(&entry.global_hash) {
+                    return false;
                 }
+                seen_global_hashes.insert(entry.global_hash.clone());
                 true
             })
             .collect();
