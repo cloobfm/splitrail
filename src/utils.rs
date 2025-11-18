@@ -10,16 +10,30 @@ use sha2::{Digest, Sha256};
 use crate::types::{ConversationMessage, DailyStats};
 
 static WARNED_MESSAGES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static WARNINGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
 pub fn warn_once(message: impl Into<String>) {
     let message = message.into();
     let cache = WARNED_MESSAGES.get_or_init(|| Mutex::new(HashSet::new()));
+    let warnings = WARNINGS.get_or_init(|| Mutex::new(Vec::new()));
 
     if let Ok(mut warned) = cache.lock()
         && warned.insert(message.clone())
     {
-        eprintln!("{message}");
+        if let Ok(mut warns) = warnings.lock() {
+            warns.push(message);
+        }
     }
+}
+
+pub fn get_warnings() -> Vec<String> {
+    WARNINGS.get().map_or(Vec::new(), |w| {
+        if let Ok(warns) = w.lock() {
+            warns.clone()
+        } else {
+            Vec::new()
+        }
+    })
 }
 
 #[derive(Clone)]

@@ -375,6 +375,35 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             ],
         },
     },
+    "gemini-3-pro-preview" => ModelInfo {
+        pricing: PricingStructure::Tiered {
+            tiers: &[
+                PricingTier {
+                    max_tokens: Some(200_000),
+                    input_per_1m: 2.0,
+                    output_per_1m: 12.0,
+                },
+                PricingTier {
+                    max_tokens: None,
+                    input_per_1m: 4.0,
+                    output_per_1m: 18.0,
+                },
+            ],
+        },
+        caching: CachingSupport::Google {
+            tiers: &[
+                CachingTier {
+                    max_tokens: Some(200_000),
+                    cached_input_per_1m: 0.25,
+                },
+                CachingTier {
+                    max_tokens: None,
+                    cached_input_per_1m: 0.4,
+                },
+            ],
+        },
+    },
+
     "gemini-2.5-pro" => ModelInfo {
         pricing: PricingStructure::Tiered {
             tiers: &[

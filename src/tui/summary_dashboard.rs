@@ -1,5 +1,5 @@
 use crate::types::{AgenticCodingToolStats, Application};
-use crate::utils::{format_number, format_timestamp_for_live_view, NumberFormatOptions};
+use crate::utils::{format_number, format_timestamp_for_live_view, get_warnings, NumberFormatOptions};
 use chrono::Duration as ChronoDuration;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -871,6 +871,28 @@ pub fn draw_visual_cli_panels(
     }
 
     let mut lines = Vec::new();
+
+    // Add warnings if any
+    let warnings = get_warnings();
+    if !warnings.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "⚠️ Warnings:",
+            Style::default().fg(Color::Yellow).bold(),
+        )));
+        for warning in warnings.iter().take(5) {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", warning),
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+        if warnings.len() > 5 {
+            lines.push(Line::from(Span::styled(
+                format!("  ... and {} more warnings", warnings.len() - 5),
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
 
     // Add blank line for spacing
     lines.push(Line::from(""));
