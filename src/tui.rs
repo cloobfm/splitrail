@@ -1,4 +1,4 @@
-use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats};
+use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats, Application};
 use crate::utils::{
     format_date_for_display, format_number, format_timestamp_for_live_view, NumberFormatOptions,
 };
@@ -8,7 +8,10 @@ use chrono::Duration as ChronoDuration;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    EnterAlternateScreen,
+    LeaveAlternateScreen,
+    disable_raw_mode,
+    enable_raw_mode,
 };
 use crossterm::{ExecutableCommand, execute};
 use ratatui::backend::CrosstermBackend;
@@ -17,7 +20,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs};
 use ratatui::{Frame, Terminal};
-use std::io::{Write, stdout};
+use std::io::{stdout, Write};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -467,7 +470,8 @@ async fn run_app(
                                         tui_state.cli_scroll_offset -= 1;
                                         needs_redraw = true;
                                     }
-                                } else if mouse_y >= today_by_cli_rect.y
+                                }
+                                else if mouse_y >= today_by_cli_rect.y
                                     && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height
                                 {
                                     if tui_state.cli_table_scroll_offset > 0 {
@@ -1226,7 +1230,7 @@ fn calculate_summary_data(
     // Calculate date ranges
     let now = chrono::Local::now();
     let today_start = now.date_naive();
-    let yesterday_start = (now - ChronoDuration::days(1)).date_naive();
+    let yesterday_start = (now - ChronoDuration::days(day_offset as i64)).date_naive();
     let week_ago = (now - ChronoDuration::days(7)).date_naive();
     let two_weeks_ago = (now - ChronoDuration::days(14)).date_naive();
     let selected_day = (now - ChronoDuration::days(day_offset as i64)).date_naive();
@@ -1938,7 +1942,7 @@ fn simplify_analyzer_name(name: &str) -> &str {
         "Codex CLI" => "Codex",
         "Gemini CLI" => "Gemini",
         "GitHub Copilot" => "Copilot",
-        " Cline" => "Cline",
+        " Cline" => " Cline",
         "Roo Code" => "Roo",
         "Kilo Code" => "Kilo",
         "Qwen Code" => "Qwen",
@@ -1958,6 +1962,8 @@ fn get_last_message_preview(
         crate::types::MessageRole,
         String,
         String,
+        String,
+        crate::types::Application,
     )>,
 ) {
     let username = get_username();
@@ -1975,11 +1981,13 @@ fn get_last_message_preview(
                         crate::types::MessageRole::User => username.as_str(),
                         crate::types::MessageRole::Assistant => simplified_name,
                     };
-                    return Some(( 
+                    return Some((
                         msg.date,
                         msg.role.clone(),
                         msg_role_name.to_string(),
                         single_line_content,
+                        msg.project_hash.clone(),
+                        msg.application.clone(),
                     ));
                 }
             }
@@ -1988,7 +1996,7 @@ fn get_last_message_preview(
         .collect();
 
     // Sort by date (newest first) and take last 5
-    messages_with_content.sort_by_key(|(date, _, _, _)| std::cmp::Reverse(*date));
+    messages_with_content.sort_by_key(|(date, _, _, _, _, _)| std::cmp::Reverse(*date));
     messages_with_content.truncate(5);
 
     // Reverse to show oldest to newest
@@ -1997,7 +2005,9 @@ fn get_last_message_preview(
     // Convert to the expected format
     let message_lines: Vec<_> = messages_with_content
         .into_iter()
-        .map(|(date, role, role_name, content)| (date, role, role_name, content))
+        .map(|(date, role, role_name, content, project_hash, application)| {
+            (date, role, role_name, content, project_hash, application)
+        })
         .collect();
 
     // Get the role of the last message for status display
@@ -2011,7 +2021,6 @@ fn get_last_message_preview(
         ("—".to_string(), vec![])
     }
 }
-
 // Draw visual CLI panels section (compact 2-line design)
 fn draw_visual_cli_panels(
     frame: &mut Frame,
@@ -2119,7 +2128,11 @@ fn draw_visual_cli_panels(
         let preview_width = area.width.saturating_sub(15) as usize;
 
         // Show messages based on dynamic limit with role-based styling
-        for (timestamp, role, role_name, content) in message_lines.iter().take(messages_per_cli) {
+        let mut last_project_hash_displayed: Option<String> = None;
+
+        for (timestamp, role, role_name, content, project_hash, application) in
+            message_lines.iter().take(messages_per_cli)
+        {
             // Different styling for user vs assistant messages
             let (role_color, content_style) = match role {
                 crate::types::MessageRole::User => (
@@ -2132,6 +2145,29 @@ fn draw_visual_cli_panels(
                 ),
             };
 
+            let project_span = if tui_state.summary_verbose_mode && !project_hash.is_empty() {
+                let project_label_text = if *application == crate::types::Application::ClaudeCode {
+                    // For Claude Code, just truncate without adding a hash
+                    let mut truncated = project_hash.chars().take(8).collect::<String>();
+                    // Pad with spaces to ensure fixed width
+                    format!("{:width$}", truncated, width = 8)
+                } else {
+                    crate::utils::truncate_project_label(project_hash, 8)
+                };
+
+                let is_changed = last_project_hash_displayed.as_ref().map_or(false, |last| last != project_hash);
+                last_project_hash_displayed = Some(project_hash.clone());
+
+                let project_style = if is_changed {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) // Highlight color
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Span::styled(format!("#{} ", project_label_text), project_style) // Add space after hashtag
+            } else {
+                Span::raw("")
+            };
+
             let timestamp_str = if tui_state.summary_verbose_mode {
                 format!(
                     "{} ",
@@ -2141,12 +2177,24 @@ fn draw_visual_cli_panels(
                 String::new()
             };
 
+            let timestamp_style = if tui_state.summary_verbose_mode {
+                match role {
+                    crate::types::MessageRole::User => Style::default().fg(Color::White), // White for user timestamps
+                    _ => Style::default().fg(Color::DarkGray),
+                }
+            } else {
+                Style::default()
+            };
+
             // Format role and content separately
             let role_with_colon = format!("{}: ", role_name);
-            let full_text_len = timestamp_str.len() + role_with_colon.len() + content.len();
+            let full_text_len =
+                project_span.width() + timestamp_str.len() + role_with_colon.len() + content.len();
 
             let content_text = if full_text_len > preview_width {
-                let available_for_content = preview_width.saturating_sub(timestamp_str.len() + role_with_colon.len() + 1);
+                let available_for_content = preview_width.saturating_sub(
+                    project_span.width() + timestamp_str.len() + role_with_colon.len() + 1,
+                );
                 if available_for_content > 0 && content.len() > available_for_content {
                     format!("{}…", &content[..available_for_content])
                 } else {
@@ -2158,15 +2206,12 @@ fn draw_visual_cli_panels(
 
             lines.push(Line::from(vec![ 
                 Span::raw("  "),
-                Span::styled(
-                    timestamp_str,
-                    Style::default().fg(Color::DarkGray),
-                ),
+                project_span,
+                Span::styled(timestamp_str, timestamp_style),
                 Span::styled(role_with_colon, Style::default().fg(role_color).bold()),
                 Span::styled(content_text, content_style),
             ]));
         }
-
         // Add blank line for spacing between CLI entries
         lines.push(Line::from(""));
     }
