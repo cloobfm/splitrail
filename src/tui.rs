@@ -566,11 +566,11 @@ fn draw_ui(
     // Header
     let header = Paragraph::new(Text::from(vec![
         Line::styled(
-            "CLI Agent Dashboard",
+            "dash-0.1",
             Style::new().cyan().bold(),
         ),
         Line::styled(
-            "===================",
+            "========",
             Style::new().cyan().bold(),
         ),
     ]));
