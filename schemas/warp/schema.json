@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Piebald-AI/splitrail/schemas/warp/schema.json",
+  "title": "Warp Log Schema",
+  "description": "Schema for the JSON body of analytics blocks in warp_network.log",
+  "type": "object",
+  "properties": {
+    "command": {
+      "type": ["string", "null"],
+      "description": "The command executed by the user."
+    },
+    "output": {
+      "type": ["string", "null"],
+      "description": "The output of the command."
+    },
+    "start_ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The timestamp when the command started."
+    },
+    "pwd": {
+      "type": "string",
+      "description": "The present working directory where the command was executed."
+    },
+    "was_autosuggestion_from_ai": {
+      "type": ["boolean", "null"],
+      "description": "Whether the executed command was a suggestion from Warp's AI."
+    }
+  },
+  "required": ["start_ts", "pwd"]
+}

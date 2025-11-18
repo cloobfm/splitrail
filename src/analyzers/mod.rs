@@ -7,6 +7,7 @@ pub mod gemini_cli;
 pub mod kilo_code;
 pub mod qwen_code;
 pub mod roo_code;
+pub mod warp_dev;
 
 pub use amazon_q::AmazonQAnalyzer;
 pub use claude_code::ClaudeCodeAnalyzer;

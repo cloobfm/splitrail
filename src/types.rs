@@ -15,6 +15,7 @@ pub enum Application {
     KiloCode,
     Copilot,
     AmazonQ,
+    Warp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
