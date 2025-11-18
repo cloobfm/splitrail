@@ -1,0 +1,218 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Unified Qwen Code Data Schema",
+  "description": "Consolidated schema for Qwen Code data supporting both JSON chat files and JSONL auto-stats logs",
+  "oneOf": [
+    {
+      "title": "Chat Session Format",
+      "allOf": [
+        { "$ref": "#/$defs/chatSession" }
+      ]
+    },
+    {
+      "title": "Request Log Format",
+      "allOf": [
+        { "$ref": "#/$defs/requestLogEntry" }
+      ]
+    },
+    {
+      "title": "Stats Log Format", 
+      "allOf": [
+        { "$ref": "#/$defs/statsLogEntry" }
+      ]
+    }
+  ],
+  "definitions": {
+    "$defs": {
+      "baseFields": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Unique session identifier"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model name used"
+          },
+          "conversationHash": {
+            "type": "string",
+            "description": "Hash for grouping related messages"
+          },
+          "projectHash": {
+            "type": "string", 
+            "description": "Hash identifying the project context"
+          }
+        }
+      },
+      "tokenStats": {
+        "type": "object",
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer", 
+            "minimum": 0
+          },
+          "reasoning_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cached_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tool_calls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lines_read": {
+            "type": "integer", 
+            "minimum": 0
+          },
+          "lines_edited": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lines_added": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "chatSession": {
+        "allOf": [
+          { "$ref": "#/$defs/baseFields" },
+          {
+            "required": ["sessionId", "messages", "meta"],
+            "properties": {
+              "sessionId": { "type": "string" },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["role", "timestamp", "content"],
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": ["user", "assistant", "system"]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "stats": { "$ref": "#/$defs/tokenStats" }
+                  }
+                }
+              },
+              "meta": {
+                "type": "object",
+                "properties": {
+                  "startTime": { "type": "string", "format": "date-time" },
+                  "endTime": { "type": "string", "format": "date-time" },
+                  "model": { "type": "string" },
+                  "project": { "type": "string" }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "requestLogEntry": {
+        "allOf": [
+          { "$ref": "#/$defs/baseFields" },
+          {
+            "required": ["timestamp", "sessionId", "type", "event", "data"],
+            "properties": {
+              "timestamp": { "type": "string", "format": "date-time" },
+              "sessionId": { "type": "string" },
+              "type": { "type": "string", "enum": ["auto_request_log"] },
+              "event": { "type": "string", "enum": ["request", "response"] },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "userPromptId": { "type": "string" },
+                  "model": { "type": "string" },
+                  "method": { "type": "string" },
+                  "contentLength": { "type": "integer" },
+                  "timestamp": { "type": "string", "format": "date-time" },
+                  "streaming": { "type": "boolean" },
+                  "config": { "type": "object" },
+                  "durationMs": { "type": "integer" },
+                  "success": { "type": "boolean" },
+                  "chunkCount": { "type": "integer" },
+                  "candidatesCount": { "type": "integer" },
+                  "usageMetadata": {
+                    "type": "object",
+                    "properties": {
+                      "promptTokenCount": { "type": "integer" },
+                      "candidatesTokenCount": { "type": "integer" },
+                      "totalTokenCount": { "type": "integer" },
+                      "cachedContentTokenCount": { "type": "integer" }
+                    },
+                    "required": ["promptTokenCount", "candidatesTokenCount", "totalTokenCount", "cachedContentTokenCount"]
+                  },
+                  "finishReason": { "type": "string" },
+                  "totalResponseLength": { "type": "integer" }
+                },
+                "required": ["userPromptId", "model", "method", "timestamp"]
+              },
+              "stats": { "$ref": "#/$defs/tokenStats" }
+            }
+          }
+        ]
+      },
+      "statsLogEntry": {
+        "allOf": [
+          { "$ref": "#/$defs/baseFields" },
+          {
+            "required": ["timestamp", "sessionId", "type", "stats"],
+            "properties": {
+              "timestamp": { "type": "string", "format": "date-time" },
+              "sessionId": { "type": "string" },
+              "type": { "type": "string", "enum": ["auto_stats"] },
+              "stats": {
+                "type": "object",
+                "properties": {
+                  "models": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "requests": { "type": "integer" },
+                        "errors": { "type": "integer" },
+                        "latency_ms": { "type": "integer" },
+                        "tokens": {
+                          "type": "object",
+                          "properties": {
+                            "prompt": { "type": "integer" },
+                            "candidates": { "type": "integer" },
+                            "total": { "type": "integer" },
+                            "cached": { "type": "integer" }
+                          },
+                          "required": ["prompt", "candidates", "total", "cached"]
+                        }
+                      },
+                      "required": ["requests", "errors", "latency_ms", "tokens"]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

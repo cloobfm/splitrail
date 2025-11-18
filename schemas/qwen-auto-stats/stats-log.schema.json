@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Qwen Auto Stats Log Entry",
+  "description": "Schema for individual entries in Qwen stats log files (session-*.stats.jsonl)",
+  "required": [
+    "timestamp",
+    "sessionId",
+    "type", 
+    "stats"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of the log entry"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+      "description": "Unique session identifier in UUID format"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["auto_stats"],
+      "description": "Type of log entry"
+    },
+    "stats": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "object",
+          "description": "Statistics aggregated by model",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "requests": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Number of requests made with this model"
+              },
+              "errors": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Number of errors encountered with this model"
+              },
+              "latency_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Total latency in milliseconds for this model"
+              },
+              "tokens": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Input/prompt tokens"
+                  },
+                  "candidates": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Output/candidate tokens"
+                  },
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Total tokens (prompt + candidates)"
+                  },
+                  "cached": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Cached tokens reused"
+                  }
+                },
+                "required": ["prompt", "candidates", "total", "cached"]
+              }
+            },
+            "required": ["requests", "errors", "latency_ms", "tokens"]
+          }
+        }
+      },
+      "required": ["models"]
+    }
+  }
+}

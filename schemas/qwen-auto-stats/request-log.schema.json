@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Qwen Auto Request Log Entry",
+  "description": "Schema for individual entries in Qwen request log files (session-*.requests.jsonl)",
+  "required": [
+    "timestamp",
+    "sessionId",
+    "type", 
+    "event",
+    "data"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of the log entry"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+      "description": "Unique session identifier in UUID format"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["auto_request_log"],
+      "description": "Type of log entry"
+    },
+    "event": {
+      "type": "string",
+      "enum": ["request", "response"],
+      "description": "The type of event (request or response)"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "userPromptId",
+        "model", 
+        "method"
+      ],
+      "properties": {
+        "userPromptId": {
+          "type": "string",
+          "description": "Identifier for the user prompt"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model used for the request"
+        },
+        "method": {
+          "type": "string",
+          "enum": ["generateContentStream"],
+          "description": "API method called"
+        },
+        "contentLength": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Length of content sent in the request"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Specific timestamp for this data point"
+        },
+        "streaming": {
+          "type": "boolean",
+          "description": "Whether the response was streamed"
+        },
+        "config": {
+          "type": "object",
+          "description": "System instruction configuration",
+          "properties": {
+            "systemInstruction": {
+              "type": "string",
+              "description": "Full system instruction text"
+            }
+          },
+          "additionalProperties": true
+        },
+        "durationMs": {
+          "type": "integer", 
+          "minimum": 0,
+          "description": "Duration of the request in milliseconds (response only)"
+        },
+        "success": {
+          "type": "boolean",
+          "description": "Whether the request was successful (response only)"
+        },
+        "chunkCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of response chunks (response only)"
+        },
+        "candidatesCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of candidates in response (response only)"
+        },
+        "usageMetadata": {
+          "type": "object",
+          "description": "Token usage metadata (response only)",
+          "properties": {
+            "promptTokenCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "candidatesTokenCount": {
+              "type": "integer", 
+              "minimum": 0
+            },
+            "totalTokenCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cachedContentTokenCount": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "promptTokenCount",
+            "candidatesTokenCount",
+            "totalTokenCount", 
+            "cachedContentTokenCount"
+          ]
+        },
+        "finishReason": {
+          "type": "string",
+          "description": "Reason why the generation finished (response only)"
+        },
+        "totalResponseLength": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total length of the response (response only)"
+        }
+      }
+    }
+  }
+}
