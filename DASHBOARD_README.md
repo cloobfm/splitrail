@@ -222,6 +222,14 @@ rm -rf ~/.config/splitrail/
 - For this custom fork, please direct questions to the cloobfm repository
 - Check the [main Splitrail Cloud](https://splitrail.dev) for general documentation
 
+## Changelog
+
+### 2.0.0-dashboard.2 - 2025-11-17
+- **Fixed**: The live activity sparkline now reflects token volume instead of message count, providing a more accurate and responsive visualization of real-time AI tool activity.
+
+### 2.0.0-dashboard.1 - 2025-11-10
+- **Added**: Initial release of the enhanced dashboard fork, including support for Qwen Code and an improved TUI.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
