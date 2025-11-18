@@ -52,7 +52,7 @@ pub fn calculate_summary_data(
     // Calculate date ranges
     let now = chrono::Local::now();
     let today_start = now.date_naive();
-    let yesterday_start = (now - ChronoDuration::days(day_offset as i64)).date_naive();
+    let yesterday_start = (now - ChronoDuration::days(1)).date_naive();
     let week_ago = (now - ChronoDuration::days(7)).date_naive();
     let two_weeks_ago = (now - ChronoDuration::days(14)).date_naive();
     let selected_day = (now - ChronoDuration::days(day_offset as i64)).date_naive();
