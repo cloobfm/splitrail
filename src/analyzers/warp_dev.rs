@@ -63,15 +63,34 @@ fn parse_warp_log_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
     let content = std::fs::read_to_string(file_path)?;
     let mut interactions = Vec::new();
 
-    // Find all "Body {" sections in the log - these contain the JSON batch data
-    // Use (?s) for dotall mode so . matches newlines, match until newline followed by }
-    // Allow optional whitespace before the closing brace
-    let re = Regex::new(r"(?s)Body \{(.*?)\n\s*\}")?;
+    // Find all "Body {" positions and extract complete JSON using brace counting
+    let mut pos = 0;
+    while let Some(body_start) = content[pos..].find("Body {") {
+        let absolute_start = pos + body_start + 5; // Position after "Body "
 
-    for cap in re.captures_iter(&content) {
-        let body_content = &cap[1];
-        // Wrap in braces to make valid JSON (regex captures content between Body { and })
-        let mut mutable_content = format!("{{{}}}", body_content);
+        // Count braces to find the matching closing brace
+        let mut brace_count = 0;
+        let mut json_end = absolute_start;
+        let chars: Vec<char> = content[absolute_start..].chars().collect();
+
+        for (i, ch) in chars.iter().enumerate() {
+            match ch {
+                '{' => brace_count += 1,
+                '}' => {
+                    brace_count -= 1;
+                    if brace_count == 0 {
+                        json_end = absolute_start + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if brace_count == 0 && json_end > absolute_start {
+            // Extract the complete JSON (including braces)
+            let mut mutable_content = content[absolute_start..json_end].to_string();
+            pos = json_end;
 
         match unsafe { simd_json::from_str::<WarpLogEntry>(&mut mutable_content) } {
             Ok(log_entry) => {
@@ -275,8 +294,12 @@ fn parse_warp_log_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
             } // End of if let Some(batch)
             }
             Err(_e) => {
-                // Silently skip unparseable Body sections
+                // Skip unparseable Body sections (e.g., GraphQL queries, other telemetry)
             }
+        }
+        } else {
+            // Couldn't find matching closing brace, skip this entry
+            pos = absolute_start + 1;
         }
     }
 

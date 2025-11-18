@@ -123,7 +123,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     registry.register(QwenCodeAnalyzer::new());
     registry.register(CodexCliAnalyzer::new());
     registry.register(AmazonQAnalyzer::new());
-    registry.register(WarpDevAnalyzer::new());
+    // registry.register(WarpDevAnalyzer::new()); // Temporarily disabled - unstable parsing
     // registry.register(CopilotAnalyzer::new()); // Temporarily disabled
 
     registry
