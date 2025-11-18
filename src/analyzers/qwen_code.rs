@@ -159,7 +159,7 @@ fn extract_tool_stats(tool_calls: &[simd_json::OwnedValue]) -> Stats {
 }
 
 // Helper function to extract project ID from Qwen Code file path and hash it
-fn extract_and_hash_project_id_qwen_code(file_path: &Path) -> String {
+fn extract_project_id_qwen_code(file_path: &Path) -> String {
     // Qwen Code path format: ~/.qwen/tmp/{PROJECT_ID}/chats/{session}.json
     // Example: "/home/user/.qwen/tmp/project-abc123/chats/session.json"
 
@@ -171,11 +171,11 @@ fn extract_and_hash_project_id_qwen_code(file_path: &Path) -> String {
             && let std::path::Component::Normal(project_id) = &path_components[i + 1]
             && let Some(project_id_str) = project_id.to_str()
         {
-            return hash_text(project_id_str);
+            return project_id_str.to_string();
         }
     }
 
-    hash_text(&file_path.to_string_lossy())
+    "".to_string()
 }
 
 // Cost calculation using the centralized model system
@@ -191,7 +191,7 @@ fn calculate_qwen_cost(tokens: &QwenCodeTokens, model_name: &str) -> f64 {
 
 // JSON session parsing (not JSONL)
 fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
-    let project_hash = extract_and_hash_project_id_qwen_code(file_path);
+    let project_hash = extract_project_id_qwen_code(file_path);
     let file_path_str = file_path.to_string_lossy();
     let mut entries = Vec::new();
 

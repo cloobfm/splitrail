@@ -228,6 +228,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
     let reader = BufReader::with_capacity(64 * 1024, file);
 
     let mut session_model: Option<SessionModel> = None;
+    let mut project_label: Option<String> = None;
     let mut previous_total_usage: Option<CodexCliTokenUsage> = None;
     let mut _turn_context: Option<CodexCliTurnContext> = None;
     let mut current_tool_call_ids: HashSet<String> = HashSet::new();
@@ -252,9 +253,14 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
             "session_meta" => {
                 // Try to parse the payload as session metadata
                 let mut payload_bytes = simd_json::to_vec(&wrapper.payload)?;
-                if let Ok(_session_meta) =
+                if let Ok(session_meta) =
                     simd_json::from_slice::<CodexCliSessionMeta>(&mut payload_bytes)
                 {
+                    if let Some(cwd) = session_meta.cwd {
+                        if let Some(label) = Path::new(&cwd).file_name().and_then(|n| n.to_str()) {
+                            project_label = Some(label.to_string());
+                        }
+                    }
                     session_model =
                         extract_model_from_value(&wrapper.payload).map(SessionModel::explicit);
                 }
@@ -311,7 +317,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                 local_hash: None,
                                 conversation_hash: hash_text(&file_path_str),
                                 application: Application::CodexCli,
-                                project_hash: "".to_string(),
+                                project_hash: project_label.clone().unwrap_or_default(),
                                 model: None,
                                 stats: Stats::default(),
                                 role: MessageRole::User,
@@ -350,7 +356,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                     local_hash: None,
                                     conversation_hash: hash_text(&file_path_str),
                                     date: wrapper.timestamp,
-                                    project_hash: "".to_string(),
+                                    project_hash: project_label.clone().unwrap_or_default(),
                                     stats: Stats::default(),
                                     role: MessageRole::Assistant,
                                     content: Some(content),
@@ -411,7 +417,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                 local_hash: None,
                                 conversation_hash: hash_text(&file_path_str),
                                 date: wrapper.timestamp,
-                                project_hash: "".to_string(),
+                                project_hash: project_label.clone().unwrap_or_default(),
                                 stats,
                                 role: MessageRole::Assistant,
                                 content: None,

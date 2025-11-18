@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct AmazonQAnalyzer;
 
@@ -172,7 +172,11 @@ pub(crate) fn parse_amazon_q_conversation(
     let conversation: QConversation = unsafe { simd_json::serde::from_str(&mut owned_json) }
         .context("Failed to parse Amazon Q conversation JSON structure")?;
 
-    let project_hash = hash_text(project_path);
+    let project_hash = Path::new(project_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
     let conversation_hash = hash_text(&conversation.conversation_id);
 
     let mut entries = Vec::new();

@@ -284,3 +284,23 @@ where
         .map(|dt| dt.into())
         .map_err(serde::de::Error::custom)
 }
+
+pub fn truncate_project_label(label: &str, max_len: usize) -> String {
+    let mut result = String::new();
+    if label.len() <= max_len {
+        result.push_str(label);
+    } else {
+        let hash = hash_text(label);
+        let short_hash = &hash[..4]; // 4 characters for hash
+
+        // max_len - (ellipsis char + hash chars)
+        let take_chars = max_len.saturating_sub(5);
+        let truncated_prefix = label.chars().take(take_chars).collect::<String>();
+
+        result.push_str(&truncated_prefix);
+        result.push('…');
+        result.push_str(short_hash);
+    }
+    // Pad with spaces to ensure fixed width
+    format!("{:width$}", result, width = max_len)
+}

@@ -109,17 +109,17 @@ impl Analyzer for ClaudeCodeAnalyzer {
 // Claude Code specific implementation functions
 
 // Helper function to extract project ID from Claude Code file path and hash it
-pub fn extract_and_hash_project_id(file_path: &Path) -> String {
+pub fn extract_project_id(file_path: &Path) -> String {
     // Claude Code path format: ~/.claude/projects/{PROJECT_ID}/{conversation_uuid}.jsonl
 
     if let Some(parent) = file_path.parent()
         && let Some(project_id) = parent.file_name().and_then(|name| name.to_str())
     {
-        return hash_text(project_id);
+        return project_id.to_string();
     }
 
-    // Fallback: hash the full file path if we can't extract project ID
-    hash_text(&file_path.to_string_lossy())
+    // Fallback: return empty string if we can't extract project ID
+    "".to_string()
 }
 
 // CLAUDE CODE JSONL FILES SCHEMA
@@ -460,7 +460,8 @@ where
     // forked conversations keep the `sessionId` from the parent.
     let session_id = file_path.file_stem().unwrap().to_str().unwrap();
 
-    let project_hash = extract_and_hash_project_id(file_path);
+    let project_id_from_path = extract_project_id(file_path);
+    let mut project_label: Option<String> = None;
     let mut entries = Vec::new();
     let file_path_str = file_path.to_string_lossy();
 
@@ -502,6 +503,13 @@ where
                                                 // i.e. Claude Code-generated system messages.  These have their token usage all
                                                 // 0 anyway.
                                             })) if !matches!(model.as_deref(), Some("<synthetic>")) => {
+                    if project_label.is_none() {
+                        if let Some(cwd) = &entry.cwd {
+                            if let Some(label) = Path::new(cwd).file_name().and_then(|n| n.to_str()) {
+                                project_label = Some(label.to_string());
+                            }
+                        }
+                    }
                     (
                         message_id.clone(),
                         model.clone(),
@@ -584,7 +592,7 @@ where
             application: Application::ClaudeCode,
             model: model.clone(),
             date: timestamp,
-            project_hash: project_hash.clone(),
+            project_hash: project_label.clone().unwrap_or_else(|| project_id_from_path.clone()),
             conversation_hash: hash_text(&file_path_str),
             stats,
             role: if is_assistant {
