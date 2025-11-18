@@ -11,8 +11,9 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde::Deserialize;
 use simd_json;
+use simd_json::prelude::*;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct WarpDevAnalyzer;
 
@@ -23,64 +24,258 @@ impl WarpDevAnalyzer {
 }
 
 #[derive(Debug, Deserialize)]
-struct WarpBlock {
+struct WarpLogEntry {
+    // For batch telemetry events
+    batch: Option<Vec<WarpBatchItem>>,
+    // For direct command execution logs
     command: Option<String>,
     output: Option<String>,
-    start_ts: String,
-    pwd: String,
-    was_autosuggestion_from_ai: Option<bool>,
+    exit_code: Option<i32>,
+    // For AI context messages
+    context_messages: Option<Vec<String>>,
 }
 
-fn get_warp_log_path() -> Option<PathBuf> {
-    // Use dirs::home_dir() to get the home directory
-    dirs::home_dir().map(|mut path| {
-        path.push("Library/Application Support/dev.warp.Warp-Stable/warp_network.log");
-        path
-    })
+#[derive(Debug, Deserialize)]
+struct WarpBatchItem {
+    #[serde(rename = "type")]
+    event_type: String,
+    properties: Option<WarpProperties>,
+    original_timestamp: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+struct WarpProperties {
+    actual_next_command_run: Option<String>,
+    #[serde(rename = "history_context")]
+    history_context: Option<String>,
+    #[serde(rename = "generate_ai_input_suggestions_request")]
+    ai_suggestions_request: Option<WarpAiSuggestionsRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WarpAiSuggestionsRequest {
+    #[serde(rename = "context_messages")]
+    context_messages: Option<Vec<String>>,
+}
+
 
 fn parse_warp_log_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
     let content = std::fs::read_to_string(file_path)?;
     let mut interactions = Vec::new();
-    let re = Regex::new(r"Body \{\s*(\{[\s\S]*?\})\s*\}")?;
+
+    // Find all "Body {" sections in the log - these contain the JSON batch data
+    // Use (?s) for dotall mode so . matches newlines, match until newline followed by }
+    // Allow optional whitespace before the closing brace
+    let re = Regex::new(r"(?s)Body \{(.*?)\n\s*\}")?;
 
     for cap in re.captures_iter(&content) {
-        let json_body = &cap[1];
-        let mut json_body_mutable = json_body.to_string();
-        if let Ok(block) = unsafe { simd_json::from_str::<WarpBlock>(&mut json_body_mutable) } {
-            if let Some(command) = block.command {
-                if let Ok(timestamp) = DateTime::parse_from_rfc3339(&block.start_ts) {
-                    let timestamp_utc: DateTime<Utc> = timestamp.into();
-                    let is_ai = block.was_autosuggestion_from_ai.unwrap_or(false);
+        let body_content = &cap[1];
+        // Wrap in braces to make valid JSON (regex captures content between Body { and })
+        let mut mutable_content = format!("{{{}}}", body_content);
 
-                    // Create a user message for the command
-                    interactions.push(ConversationMessage {
-                        date: timestamp_utc,
-                        application: Application::Warp,
-                        project_hash: hash_text(&block.pwd),
-                        conversation_hash: hash_text(&block.start_ts), // Use timestamp to group command/output
-                        global_hash: hash_text(&format!("{}_{}", block.start_ts, "user")),
-                        role: MessageRole::User,
-                        content: Some(command),
-                        model: None,
-                        stats: Stats::default(),
-                        local_hash: None,
-                    });
+        match unsafe { simd_json::from_str::<WarpLogEntry>(&mut mutable_content) } {
+            Ok(log_entry) => {
+            // Handle direct command execution logs
+            if let (Some(command), Some(_output)) = (&log_entry.command, &log_entry.output) {
+                let timestamp_utc = chrono::Utc::now(); // TODO: extract from log if available
+                let pwd = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
 
-                    // Create an assistant message for the output
-                    interactions.push(ConversationMessage {
-                        date: timestamp_utc,
-                        application: Application::Warp,
-                        project_hash: hash_text(&block.pwd),
-                        conversation_hash: hash_text(&block.start_ts),
-                        global_hash: hash_text(&format!("{}_{}", block.start_ts, "assistant")),
-                        role: MessageRole::Assistant,
-                        content: block.output,
-                        model: if is_ai { Some("Warp AI".to_string()) } else { None },
-                        stats: Stats::default(),
-                        local_hash: None,
-                    });
+                // Create user message for command
+                interactions.push(ConversationMessage {
+                    date: timestamp_utc,
+                    application: Application::Warp,
+                    project_hash: hash_text(&pwd),
+                    conversation_hash: hash_text(&format!("{}{}", timestamp_utc, command)),
+                    global_hash: hash_text(&format!("warp_cmd_{}_{}", timestamp_utc.timestamp(), &command[..std::cmp::min(command.len(), 20)])),
+                    role: MessageRole::User,
+                    content: Some(command.clone()),
+                    model: None,
+                    stats: Stats::default(),
+                    local_hash: None,
+                });
+
+                // Create assistant message for command execution
+                interactions.push(ConversationMessage {
+                    date: timestamp_utc,
+                    application: Application::Warp,
+                    project_hash: hash_text(&pwd),
+                    conversation_hash: hash_text(&format!("{}{}", timestamp_utc, command)),
+                    global_hash: hash_text(&format!("warp_out_{}_{}", timestamp_utc.timestamp(), &command[..std::cmp::min(command.len(), 20)])),
+                    role: MessageRole::Assistant,
+                    content: Some("Command executed".to_string()),
+                    model: Some("Warp Terminal".to_string()),
+                    stats: Stats {
+                        terminal_commands: 1,
+                        ..Stats::default()
+                    },
+                    local_hash: None,
+                });
+            }
+
+            // Handle batch telemetry events
+            if let Some(batch) = log_entry.batch {
+                for batch_item in batch {
+                if batch_item.event_type != "track" {
+                    continue;
                 }
+
+                if let Some(properties) = batch_item.properties {
+                    // Handle actual command runs
+                    if let Some(command) = properties.actual_next_command_run {
+                        // Extract timestamp from original_timestamp or use current time as fallback
+                        let timestamp_str = batch_item.original_timestamp
+                            .clone()
+                            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+
+                        if let Ok(timestamp) = DateTime::parse_from_rfc3339(&timestamp_str) {
+                            let timestamp_utc: DateTime<Utc> = timestamp.into();
+
+                            // For now, let's just use the home directory as pwd since it might not be in the properties
+                            let pwd = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+
+                            // Create a user message for the command
+                            interactions.push(ConversationMessage {
+                                date: timestamp_utc,
+                                application: Application::Warp,
+                                project_hash: hash_text(&pwd),
+                                conversation_hash: hash_text(&timestamp_str), // Use timestamp to group command/output
+                                global_hash: hash_text(&format!("{}_{}_command", timestamp_str, &command[..std::cmp::min(command.len(), 20)])),
+                                role: MessageRole::User,
+                                content: Some(command.clone()),
+                                model: None,
+                                stats: Stats::default(),
+                                local_hash: None,
+                            });
+
+                            // Create an assistant message for the command execution
+                            interactions.push(ConversationMessage {
+                                date: timestamp_utc,
+                                application: Application::Warp,
+                                project_hash: hash_text(&pwd),
+                                conversation_hash: hash_text(&timestamp_str),
+                                global_hash: hash_text(&format!("{}_{}_output", timestamp_str, &command[..std::cmp::min(command.len(), 20)])),
+                                role: MessageRole::Assistant,
+                                content: Some("Command executed".to_string()), // Placeholder for actual output
+                                model: Some("Warp Terminal".to_string()),
+                                stats: Stats {
+                                    terminal_commands: 1,
+                                    ..Stats::default()
+                                },
+                                local_hash: None,
+                            });
+                        }
+                    }
+
+                    // Handle history_context which contains multiple commands
+                    if let Some(history_str) = properties.history_context {
+                        // History context contains multiple JSON objects as a string, separated by newlines
+                        for line in history_str.lines() {
+                            if !line.trim().is_empty() {
+                                let mut line_mutable = line.to_string();
+                                if let Ok(command_data) = unsafe {
+                                    simd_json::from_str::<simd_json::OwnedValue>(&mut line_mutable)
+                                } {
+                                    if let (Some(command), Some(start_ts)) = (
+                                        command_data.get("command").and_then(|v| v.as_str()),
+                                        command_data.get("start_ts").and_then(|v| v.as_str())
+                                    ) {
+                                        if let Ok(timestamp) = DateTime::parse_from_rfc3339(start_ts) {
+                                            let timestamp_utc: DateTime<Utc> = timestamp.into();
+                                            let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                                            let pwd = command_data.get("pwd")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or(home_dir.as_str());
+
+                                            // Create a user message for the command
+                                            interactions.push(ConversationMessage {
+                                                date: timestamp_utc,
+                                                application: Application::Warp,
+                                                project_hash: hash_text(pwd),
+                                                conversation_hash: hash_text(start_ts),
+                                                global_hash: hash_text(&format!("{}_{}_history", start_ts, &command[..std::cmp::min(command.len(), 20)])),
+                                                role: MessageRole::User,
+                                                content: Some(command.to_string()),
+                                                model: None,
+                                                stats: Stats::default(),
+                                                local_hash: None,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Handle AI context messages
+                    if let Some(ai_request) = properties.ai_suggestions_request {
+                        if let Some(context_messages) = ai_request.context_messages {
+                            for context_str in context_messages {
+                                // These are JSON strings containing input/output pairs
+                                let mut context_mutable = context_str.clone();
+                                if let Ok(context_data) = unsafe {
+                                    simd_json::from_str::<simd_json::OwnedValue>(&mut context_mutable)
+                                } {
+                                    if let (Some(input), Some(output)) = (
+                                        context_data.get("input").and_then(|v| v.as_str()),
+                                        context_data.get("output").and_then(|v| v.as_str())
+                                    ) {
+                                        let timestamp_str = batch_item.original_timestamp
+                                            .clone()
+                                            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+
+                                        if let Ok(timestamp) = DateTime::parse_from_rfc3339(&timestamp_str) {
+                                            let timestamp_utc: DateTime<Utc> = timestamp.into();
+                                            let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                                            let pwd = context_data
+                                                .get("context")
+                                                .and_then(|ctx| ctx.get("pwd"))
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or(home_dir.as_str());
+
+                                            // Create a user message for the input
+                                            interactions.push(ConversationMessage {
+                                                date: timestamp_utc,
+                                                application: Application::Warp,
+                                                project_hash: hash_text(pwd),
+                                                conversation_hash: hash_text(&timestamp_str),
+                                                global_hash: hash_text(&format!("{}_{}_ai_input", timestamp_str, &input[..std::cmp::min(input.len(), 20)])),
+                                                role: MessageRole::User,
+                                                content: Some(input.to_string()),
+                                                model: None,
+                                                stats: Stats::default(),
+                                                local_hash: None,
+                                            });
+
+                                            // Create an assistant message for the output
+                                            if !output.is_empty() {
+                                                interactions.push(ConversationMessage {
+                                                    date: timestamp_utc,
+                                                    application: Application::Warp,
+                                                    project_hash: hash_text(pwd),
+                                                    conversation_hash: hash_text(&timestamp_str),
+                                                    global_hash: hash_text(&format!("{}_{}_ai_output", timestamp_str, &input[..std::cmp::min(input.len(), 20)])),
+                                                    role: MessageRole::Assistant,
+                                                    content: Some(output.to_string()),
+                                                    model: Some("Warp AI".to_string()),
+                                                    stats: Stats {
+                                                        tool_calls: 1,
+                                                        ..Stats::default()
+                                                    },
+                                                    local_hash: None,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            } // End of if let Some(batch)
+            }
+            Err(_e) => {
+                // Silently skip unparseable Body sections
             }
         }
     }
@@ -95,12 +290,24 @@ impl Analyzer for WarpDevAnalyzer {
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
-        if let Some(path) = get_warp_log_path() {
-            if path.exists() {
-                return vec![path.to_string_lossy().into_owned()];
+        // Check multiple possible Warp data directory locations
+        let possible_paths = [
+            "Library/Application Support/Warp/warp_network.log",           // Current Warp version
+            "Library/Application Support/dev.warp.Warp-Stable/warp_network.log", // Older version
+            "Library/Application Support/WarpTerminal/warp_network.log",  // Alternative
+        ];
+
+        let mut existing_paths = Vec::new();
+        for path_str in &possible_paths {
+            if let Some(mut path) = dirs::home_dir() {
+                path.push(path_str);
+                if path.exists() {
+                    existing_paths.push(path.to_string_lossy().into_owned());
+                }
             }
         }
-        vec![]
+
+        existing_paths
     }
 
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
