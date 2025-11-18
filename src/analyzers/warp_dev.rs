@@ -10,6 +10,7 @@ use glob::glob;
 use rayon::prelude::*;
 use regex::Regex;
 use serde::Deserialize;
+use simd_json;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -45,7 +46,8 @@ fn parse_warp_log_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
 
     for cap in re.captures_iter(&content) {
         let json_body = &cap[1];
-        if let Ok(block) = serde_json::from_str::<WarpBlock>(json_body) {
+        let mut json_body_mutable = json_body.to_string();
+        if let Ok(block) = unsafe { simd_json::from_str::<WarpBlock>(&mut json_body_mutable) } {
             if let Some(command) = block.command {
                 if let Ok(timestamp) = DateTime::parse_from_rfc3339(&block.start_ts) {
                     let timestamp_utc: DateTime<Utc> = timestamp.into();
@@ -75,10 +77,7 @@ fn parse_warp_log_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
                         role: MessageRole::Assistant,
                         content: block.output,
                         model: if is_ai { Some("Warp AI".to_string()) } else { None },
-                        stats: Stats {
-                            was_ai_suggestion: Some(is_ai),
-                            ..Default::default()
-                        },
+                        stats: Stats::default(),
                         local_hash: None,
                     });
                 }

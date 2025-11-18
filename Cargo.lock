@@ -1956,6 +1956,7 @@ dependencies = [
  "phf",
  "ratatui",
  "rayon",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

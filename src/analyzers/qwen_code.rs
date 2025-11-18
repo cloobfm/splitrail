@@ -445,24 +445,7 @@ fn parse_stats_log_from_json_value(
                                                 cached_tokens,
                                                 input_tokens: prompt_tokens,
                                                 output_tokens: candidates_tokens,
-                                                files_read: 0,
-                                                files_edited: 0,
-                                                lines_read: 0,
-                                                lines_edited: 0,
-                                                lines_added: 0,
-                                                lines_deleted: 0,
-                                                docs_lines: 0,
-                                                code_lines: 0,
-                                                data_lines: 0,
-                                                media_lines: 0,
-                                                config_lines: 0,
-                                                other_lines: 0,
-                                                terminal_commands: 0,
-                                                reasoning_tokens: 0,
-                                                cache_creation_tokens: 0,
-                                                cache_read_tokens: 0,
-                                                bytes_read: 0,
-                                                bytes_edited: 0,
+                                                ..Default::default()
                                             };
 
                                             if let Some(timestamp) = timestamp {
