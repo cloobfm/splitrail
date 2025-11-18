@@ -17,6 +17,7 @@ pub use codex_cli::CodexCliAnalyzer;
 pub use gemini_cli::GeminiCliAnalyzer;
 pub use kilo_code::KiloCodeAnalyzer;
 pub use qwen_code::QwenCodeAnalyzer;
+pub use warp_dev::WarpDevAnalyzer;
 // pub use roo_code::RooCodeAnalyzer; // Temporarily disabled
 
 #[cfg(test)]
