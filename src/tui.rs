@@ -1848,14 +1848,23 @@ fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> Vec<Span<'static
     let now = chrono::Utc::now();
 
     // Create 120 buckets (30-second intervals for last hour)
-    let mut buckets = vec![0u32; 120];
+    let mut buckets = vec![0u64; 120];
 
     for msg in &stats.messages {
         let age = now.signed_duration_since(msg.date);
         if age.num_seconds() < 3600 && age.num_seconds() >= 0 {
             let bucket_idx = (age.num_seconds() / 30) as usize; // 30 sec intervals
             if bucket_idx < 120 {
-                buckets[119 - bucket_idx] += 1;
+                let total_tokens = msg.stats.input_tokens
+                    + msg.stats.output_tokens
+                    + msg.stats.reasoning_tokens;
+
+                if total_tokens > 0 {
+                    buckets[119 - bucket_idx] += total_tokens;
+                } else {
+                    // If there are no tokens, still count it as a message event
+                    buckets[119 - bucket_idx] += 1;
+                }
             }
         }
     }
@@ -1867,7 +1876,7 @@ fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> Vec<Span<'static
     let chars = [' ', '⡀', '⡄', '⡆', '⡇', '⣇', '⣧', '⣷', '⣿'];
     buckets
         .iter()
-        .take(80)
+        .skip(buckets.len().saturating_sub(80)) // Show the most recent 80 buckets (40 minutes)
         .map(|&count| {
             if count == 0 {
                 Span::raw(" ")
