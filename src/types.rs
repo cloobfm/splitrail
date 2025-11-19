@@ -63,6 +63,14 @@ pub struct DailyStats {
     pub stats: Stats,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitInfo {
+    pub used_percent: f64,
+    pub window_minutes: u64,
+    pub resets_at: u64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
@@ -107,6 +115,10 @@ pub struct Stats {
     pub media_lines: u64,
     pub config_lines: u64,
     pub other_lines: u64,
+
+    // Rate limits
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<std::collections::HashMap<String, RateLimitInfo>>,
 }
 
 #[derive(Debug, Clone, Copy)]

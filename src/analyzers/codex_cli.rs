@@ -2,6 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -204,6 +205,7 @@ struct CodexCliEventMsg {
     message: Option<String>,
     text: Option<String>,
     info: Option<CodexCliTokenCountInfo>,
+    rate_limits: Option<simd_json::OwnedValue>,
 }
 
 // Wrapper structure for all entries
@@ -415,6 +417,16 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
 
                             let mut stats = stats_from_usage(&token_usage, &model_state.name);
                             stats.tool_calls = current_tool_call_ids.len() as u32;
+
+                            // Parse and add rate_limits if present
+                            if let Some(rate_limits_value) = &event.rate_limits {
+                                if let Ok(rate_limits_json) = serde_json::to_value(rate_limits_value) {
+                                    if let Ok(rate_limits) = serde_json::from_value::<std::collections::HashMap<String, crate::types::RateLimitInfo>>(rate_limits_json) {
+                                        stats.rate_limits = Some(rate_limits);
+                                    }
+                                }
+                            }
+
                             current_tool_call_ids.clear();
 
                             entries.push(ConversationMessage {
