@@ -875,6 +875,8 @@ pub fn draw_visual_cli_panels(
     // Add warnings if any
     let warnings = get_warnings();
     if !warnings.is_empty() {
+        // Add blank line before warnings section for extra spacing
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "⚠️ Warnings:",
             Style::default().fg(Color::Yellow).bold(),

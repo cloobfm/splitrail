@@ -9,8 +9,13 @@ use sha2::{Digest, Sha256};
 
 use crate::types::{ConversationMessage, DailyStats};
 
+struct WarningEntry {
+    message: String,
+    timestamp: DateTime<Utc>,
+}
+
 static WARNED_MESSAGES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-static WARNINGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static WARNINGS: OnceLock<Mutex<Vec<WarningEntry>>> = OnceLock::new();
 
 pub fn warn_once(message: impl Into<String>) {
     let message = message.into();
@@ -21,7 +26,10 @@ pub fn warn_once(message: impl Into<String>) {
         && warned.insert(message.clone())
     {
         if let Ok(mut warns) = warnings.lock() {
-            warns.push(message);
+            warns.push(WarningEntry {
+                message,
+                timestamp: Utc::now(),
+            });
         }
     }
 }
@@ -29,11 +37,32 @@ pub fn warn_once(message: impl Into<String>) {
 pub fn get_warnings() -> Vec<String> {
     WARNINGS.get().map_or(Vec::new(), |w| {
         if let Ok(warns) = w.lock() {
-            warns.clone()
+            let now = Utc::now();
+            // Filter out warnings older than 1 minute
+            warns
+                .iter()
+                .filter(|entry| {
+                    let duration = now.signed_duration_since(entry.timestamp);
+                    duration.num_seconds() < 60
+                })
+                .map(|entry| entry.message.clone())
+                .collect()
         } else {
             Vec::new()
         }
     })
+}
+
+pub fn clear_old_warnings() {
+    if let Some(warnings) = WARNINGS.get() {
+        if let Ok(mut warns) = warnings.lock() {
+            let now = Utc::now();
+            warns.retain(|entry| {
+                let duration = now.signed_duration_since(entry.timestamp);
+                duration.num_seconds() < 60
+            });
+        }
+    }
 }
 
 #[derive(Clone)]

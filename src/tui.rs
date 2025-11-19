@@ -1,6 +1,6 @@
 use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats, Application};
 use crate::utils::{
-    format_date_for_display, format_number, format_timestamp_for_live_view, NumberFormatOptions,
+    clear_old_warnings, format_date_for_display, format_number, format_timestamp_for_live_view, NumberFormatOptions,
 };
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::Result;
@@ -224,6 +224,9 @@ async fn run_app(
             last_upload_status = current_upload_status;
             needs_redraw = true;
         }
+
+        // Clean up old warnings (older than 1 minute)
+        clear_old_warnings();
 
         // Only redraw if something has changed
         if needs_redraw {
