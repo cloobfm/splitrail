@@ -580,11 +580,52 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
     },
 
+    // xAI Models
+    "x-ai/grok-code-fast-1" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.20,
+            output_per_1m: 1.50,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.02,
+        },
+    },
+
+    // Minimax Models
+    "minimax/minimax-m2:free" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.00,
+            output_per_1m: 0.00,
+        },
+        caching: CachingSupport::None,
+    },
+
     // Qwen Models
     "coder-model" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 0.40,
             output_per_1m: 1.20,
+        },
+        caching: CachingSupport::None,
+    },
+    "qwen3-coder:latest" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.15,
+            output_per_1m: 0.15,
+        },
+        caching: CachingSupport::None,
+    },
+    "qwen3-coder:30b" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.20,
+            output_per_1m: 0.20,
+        },
+        caching: CachingSupport::None,
+    },
+    "gpt-oss:20b" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.13,
+            output_per_1m: 0.13,
         },
         caching: CachingSupport::None,
     },
