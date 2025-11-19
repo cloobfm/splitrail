@@ -1,4 +1,5 @@
 use crate::analyzer::{Analyzer, DataSource};
+use crate::models::calculate_total_cost;
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
 use crate::utils::hash_text;
 use anyhow::{Context, Result};
@@ -214,13 +215,25 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                     if let Ok(api_req) =
                         simd_json::from_slice::<KiloCodeApiRequest>(&mut text_bytes)
                     {
+                        let cost = if let Some(ref model) = current_model {
+                            calculate_total_cost(
+                                model,
+                                api_req.tokens_in,
+                                api_req.tokens_out,
+                                api_req.cache_writes,
+                                api_req.cache_reads,
+                            )
+                        } else {
+                            api_req.cost // fallback to log cost if no model
+                        };
+
                         pending_api_stats = Some(Stats {
                             input_tokens: api_req.tokens_in,
                             output_tokens: api_req.tokens_out,
                             cache_creation_tokens: api_req.cache_writes,
                             cache_read_tokens: api_req.cache_reads,
                             cached_tokens: api_req.cache_writes + api_req.cache_reads,
-                            cost: api_req.cost,
+                            cost,
                             tool_calls: if api_req.tokens_out > 0 { 1 } else { 0 },
                             ..Default::default()
                         });
