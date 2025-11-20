@@ -631,7 +631,7 @@ pub fn draw_summary_view(
                     // Create horizontal health bar (13 characters wide to fill the full column)
                     let braille_spans = create_braille_health_bar(health, 13);
                     cells.push(Cell::new(
-                        Line::from(braille_spans),
+                        Line::from(braille_spans).right_aligned(),
                     ));
                 } else {
                     // Text display
@@ -745,6 +745,7 @@ pub fn create_percentage_bar(
 }
 
 // Helper function to create ultra-granular Braille health bar (104 dots total)
+// Health bars deplete from left to right (fill from right to left)
 pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
 
@@ -754,38 +755,37 @@ pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>
     let dots_to_show = (health * total_dots as f64).round() as usize;
     let dots_to_show = dots_to_show.max(4); // Minimum 4 dots (single column)
 
-    // Ultra-granular approach: maintain 104-dot precision with left-to-right filling
-    // Total dots available: 13 chars × 8 dots = 104 dots (1% per dot)
-    let total_dots = width * 8;
-    let dots_to_show = (health * total_dots as f64).round() as usize;
-    let dots_to_show = dots_to_show.max(4); // Minimum 4 dots
-
     // Calculate full characters + partial character at boundary
     let full_chars = dots_to_show / 8; // Number of completely filled characters
     let remaining_dots = dots_to_show % 8; // Dots for the partial character
 
-    // Braille characters for partial filling (left-to-right within character)
+    // Braille characters for partial filling (right-to-left within character)
+    // These fill from right side first, so bar depletes from left
     let partial_chars = [
         ' ',  // 0 dots
-        '⡀', // 1 dot (top-left)
-        '⡄', // 2 dots (top-left + top-right)
-        '⡆', // 3 dots (top-left + top-right + middle-left)
-        '⡇', // 4 dots (top-left + top-right + middle-left + middle-right)
-        '⣇', // 5 dots (above + bottom-left)
-        '⣧', // 6 dots (above + bottom-left + bottom-right)
-        '⣷', // 7 dots (above + bottom-left + bottom-right + middle)
+        '⢀', // 1 dot (top-right)
+        '⢠', // 2 dots (top-right + middle-right)
+        '⢰', // 3 dots (top-right + middle-right + bottom-right)
+        '⢸', // 4 dots (all right column)
+        '⣸', // 5 dots (right column + top-left)
+        '⣼', // 6 dots (right column + top-left + middle-left)
+        '⣾', // 7 dots (all but bottom-left)
     ];
 
+    // Calculate how many empty spaces to add at the left
+    let empty_chars = width - full_chars - if remaining_dots > 0 { 1 } else { 0 };
+
+    // Build the bar: empty spaces (left) -> partial char -> full chars (right)
     for i in 0..width {
-        let ch = if i < full_chars {
-            // Leftmost characters are fully filled
-            '⣿'
-        } else if i == full_chars && remaining_dots > 0 {
-            // Next character gets partial filling
+        let ch = if i < empty_chars {
+            // Leftmost characters are empty (health depleted)
+            ' '
+        } else if i == empty_chars && remaining_dots > 0 {
+            // Transition character with partial filling
             partial_chars[remaining_dots]
         } else {
-            // Remaining characters are empty
-            ' '
+            // Rightmost characters are fully filled
+            '⣿'
         };
 
         // Color based on health level
