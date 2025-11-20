@@ -628,18 +628,10 @@ pub fn draw_summary_view(
                 };
 
                 if use_braille {
-                    // Create Braille bar graph (8 characters high for better resolution)
-                    let braille_spans = create_braille_health_bar(health, 8);
-                    let mut bar_text = String::new();
-                    for span in &braille_spans {
-                        if span.content == "\n" {
-                            bar_text.push('\n');
-                        } else {
-                            bar_text.push_str(&span.content);
-                        }
-                    }
+                    // Create horizontal health bar (10 characters wide for good resolution)
+                    let braille_spans = create_braille_health_bar(health, 10);
                     cells.push(Cell::new(
-                        Line::from(bar_text.trim_end().to_string()).right_aligned(),
+                        Line::from(braille_spans).right_aligned(),
                     ));
                 } else {
                     // Text display
@@ -752,23 +744,22 @@ pub fn create_percentage_bar(
     (bar, pct_text)
 }
 
-// Helper function to create a Braille vertical bar graph for health
-pub fn create_braille_health_bar(health: f64, height: usize) -> Vec<Span<'static>> {
-    let filled_levels = (health * height as f64).round() as usize;
+// Helper function to create a horizontal health bar with gradient colors
+pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>> {
+    let filled_blocks = (health * width as f64).round() as usize;
     let mut spans = Vec::new();
 
     // Use block characters for clearer visual distinction
-    // Full block for filled, light shade for empty
     let filled_char = '█';
     let empty_char = '░';
 
-    for level in (0..height).rev() { // From top to bottom
-        let is_filled = level < filled_levels;
+    for i in 0..width {
+        let is_filled = i < filled_blocks;
         let ch = if is_filled { filled_char } else { empty_char };
 
         // Color code each segment based on its position in the health spectrum
-        // Higher segments (near 100%) are green, lower segments (near 0%) are red
-        let segment_health = (level + 1) as f64 / height as f64;
+        // Left segments (near 100%) are green, right segments (near 0%) are red
+        let segment_health = (width - i) as f64 / width as f64;
         let color = if segment_health >= 0.8 {
             Color::Green
         } else if segment_health >= 0.6 {
@@ -780,7 +771,6 @@ pub fn create_braille_health_bar(health: f64, height: usize) -> Vec<Span<'static
         };
 
         spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
-        spans.push(Span::raw("\n")); // New line for vertical stacking
     }
 
     spans
