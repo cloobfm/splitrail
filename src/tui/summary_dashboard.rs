@@ -490,7 +490,7 @@ pub fn draw_summary_view(
 
     let mut cli_constraints = vec![Constraint::Length(15)]; // Metric label
     for _ in 0..visible_indices.len() {
-        cli_constraints.push(Constraint::Length(15)); // Each CLI column (increased for Braille bars)
+        cli_constraints.push(Constraint::Length(13)); // Each CLI column
     }
 
     let cli_rows = vec![
