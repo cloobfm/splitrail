@@ -243,6 +243,31 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             cached_input_per_1m: 0.125,
         },
     },
+    "gpt-5.1-codex-mini" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.25,
+            output_per_1m: 2.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.025,
+        },
+    },
+    "gpt-5.1-codex-max" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.25,
+            output_per_1m: 10.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.125,
+        },
+    },
+    "coder-alpha2" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,
+            output_per_1m: 0.0,
+        },
+        caching: CachingSupport::None,
+    },
 
     // Anthropic Models
     "claude-opus-4-1" => ModelInfo {
@@ -276,6 +301,16 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
     },
     "claude-sonnet-4-5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 3.0,
+            output_per_1m: 15.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 3.75,
+            cache_read_per_1m: 0.3,
+        },
+    },
+    "claude-sonnet-4.5" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 3.0,
             output_per_1m: 15.0,

@@ -1,4 +1,5 @@
 use crate::analyzer::{Analyzer, DataSource};
+use crate::models::calculate_total_cost;
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
 use crate::utils::hash_text;
 use anyhow::{Context, Result};
@@ -18,18 +19,28 @@ impl AmazonQAnalyzer {
     }
 
     fn get_database_path() -> Option<PathBuf> {
-        let home_dir = std::env::home_dir()?;
-        let db_path = home_dir
-            .join("Library")
-            .join("Application Support")
-            .join("amazon-q")
-            .join("data.sqlite3");
+        let mut possible_paths = Vec::new();
 
-        if db_path.exists() {
-            Some(db_path)
-        } else {
-            None
+        if let Some(home_dir) = std::env::home_dir() {
+            // macOS
+            possible_paths.push(home_dir.join("Library").join("Application Support").join("amazon-q").join("data.sqlite3"));
+            // Linux
+            possible_paths.push(home_dir.join(".config").join("amazon-q").join("data.sqlite3"));
+            possible_paths.push(home_dir.join(".local").join("share").join("amazon-q").join("data.sqlite3"));
         }
+
+        // Windows
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            possible_paths.push(PathBuf::from(appdata).join("amazon-q").join("data.sqlite3"));
+        }
+
+        for path in possible_paths {
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
+        None
     }
 }
 
@@ -248,6 +259,19 @@ pub(crate) fn parse_amazon_q_conversation(
             stats.output_tokens = metadata.response_size.unwrap_or(0);
         }
 
+        // Calculate cost if we have a model and tokens
+        if let Some(model_name) = &model {
+            if stats.input_tokens > 0 || stats.output_tokens > 0 {
+                stats.cost = calculate_total_cost(
+                    model_name,
+                    stats.input_tokens,
+                    stats.output_tokens,
+                    0, // Amazon Q doesn't have cache creation tokens in client data
+                    0, // Amazon Q doesn't have cache read tokens in client data
+                );
+            }
+        }
+
         // Count tool uses
         if let QAssistantMessage::ToolUse { tool_uses, .. } = &history_entry.assistant {
             stats.tool_calls = tool_uses.len() as u32;
@@ -383,16 +407,22 @@ impl Analyzer for AmazonQAnalyzer {
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
         // Amazon Q uses SQLite, so we return the database path directly
+        let mut patterns = Vec::new();
+
         if let Some(home_dir) = std::env::home_dir() {
-            let db_path = home_dir
-                .join("Library")
-                .join("Application Support")
-                .join("amazon-q")
-                .join("data.sqlite3");
-            vec![db_path.to_string_lossy().to_string()]
-        } else {
-            vec![]
+            // macOS
+            patterns.push(home_dir.join("Library").join("Application Support").join("amazon-q").join("data.sqlite3").to_string_lossy().to_string());
+            // Linux
+            patterns.push(home_dir.join(".config").join("amazon-q").join("data.sqlite3").to_string_lossy().to_string());
+            patterns.push(home_dir.join(".local").join("share").join("amazon-q").join("data.sqlite3").to_string_lossy().to_string());
         }
+
+        // Windows
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            patterns.push(PathBuf::from(appdata).join("amazon-q").join("data.sqlite3").to_string_lossy().to_string());
+        }
+
+        patterns
     }
 
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
