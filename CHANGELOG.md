@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.4] - 2025-11-20
+
+### Fixed
+- Health bar visualization now depletes from left to right (fills right to left) for more intuitive display
+- Updated braille partial characters to fill from right side first
+- Maintains 104-dot granularity (13 chars × 8 dots) for smooth percentage representation
+
 ## [2.0.0] - 2025-11-10
 
 - Add support for Cline, Kilo Code, Roo Code (Cline forks) and Qwen Code (Gemini CLI fork) (#25 and #26) - @bl-ue
