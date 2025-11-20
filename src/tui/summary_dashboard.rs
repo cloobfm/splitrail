@@ -757,25 +757,25 @@ pub fn create_braille_health_bar(health: f64, height: usize) -> Vec<Span<'static
     let filled_levels = (health * height as f64).round() as usize;
     let mut spans = Vec::new();
 
-    // Braille patterns for vertical bar (from bottom to top)
-    // Using dots 4,5,6,8 (right side) for filled sections
-    let filled_char = '\u{28a4}'; // ⢤ (dots 4,5,6,8)
-    let empty_char = '\u{2800}';  // Empty Braille
+    // Use block characters for clearer visual distinction
+    // Full block for filled, light shade for empty
+    let filled_char = '█';
+    let empty_char = '░';
+
+    // Color code based on overall health level
+    let color = if health >= 0.8 {
+        Color::Green
+    } else if health >= 0.6 {
+        Color::Yellow
+    } else if health >= 0.4 {
+        Color::LightRed
+    } else {
+        Color::Red
+    };
 
     for level in (0..height).rev() { // From top to bottom
         let is_filled = level < filled_levels;
         let ch = if is_filled { filled_char } else { empty_char };
-
-        // Color code based on health level
-        let color = if health >= 0.8 {
-            Color::Green
-        } else if health >= 0.6 {
-            Color::Yellow
-        } else if health >= 0.4 {
-            Color::LightRed
-        } else {
-            Color::Red
-        };
 
         spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
         spans.push(Span::raw("\n")); // New line for vertical stacking
