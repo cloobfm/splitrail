@@ -7,6 +7,7 @@ use num_format::{Locale, ToFormattedString};
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 
+use crate::models::{get_model_info, QuotaLimits};
 use crate::types::{ConversationMessage, DailyStats};
 
 struct WarningEntry {
@@ -346,4 +347,61 @@ pub fn truncate_project_label(label: &str, max_len: usize) -> String {
     }
     // Pad with spaces to ensure fixed width
     format!("{:width$}", result, width = max_len)
+}
+
+/// Calculate overall health percentage (0.0 to 1.0) based on global token limits
+/// Daily limit: 200,000 tokens, Weekly limit: 1,000,000 tokens
+pub fn calculate_overall_health(messages: &[ConversationMessage], current_date: &str) -> f64 {
+    // Parse current date
+    let current_date_parsed = chrono::NaiveDate::parse_from_str(current_date, "%Y-%m-%d").unwrap_or_else(|_| chrono::Local::now().date_naive());
+
+    let mut daily_tokens = 0u64;
+    let mut weekly_tokens = 0u64;
+
+    for message in messages {
+        let message_date = message.date.date_naive();
+        let tokens_used = message.stats.input_tokens + message.stats.output_tokens;
+
+        // Daily usage (same day)
+        if message_date == current_date_parsed {
+            daily_tokens += tokens_used;
+        }
+
+        // Weekly usage (last 7 days)
+        let days_diff = (current_date_parsed - message_date).num_days();
+        if days_diff >= 0 && days_diff < 7 {
+            weekly_tokens += tokens_used;
+        }
+    }
+
+    const DAILY_LIMIT: u64 = 200_000;
+    const WEEKLY_LIMIT: u64 = 1_000_000;
+
+    let daily_health = 1.0 - (daily_tokens as f64 / DAILY_LIMIT as f64).min(1.0);
+    let weekly_health = 1.0 - (weekly_tokens as f64 / WEEKLY_LIMIT as f64).min(1.0);
+
+    // Return the more restrictive health value
+    daily_health.min(weekly_health).max(0.0)
+}
+
+/// Get health status description
+pub fn get_health_status(health: f64) -> &'static str {
+    match health {
+        h if h >= 0.8 => "Healthy",
+        h if h >= 0.6 => "Good",
+        h if h >= 0.4 => "Caution",
+        h if h >= 0.2 => "Warning",
+        _ => "Critical",
+    }
+}
+
+/// Get health color for display
+pub fn get_health_color(health: f64) -> &'static str {
+    match health {
+        h if h >= 0.8 => "green",
+        h if h >= 0.6 => "yellow",
+        h if h >= 0.4 => "orange",
+        h if h >= 0.2 => "red",
+        _ => "red",
+    }
 }
