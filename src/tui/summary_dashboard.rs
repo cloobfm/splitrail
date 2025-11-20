@@ -744,27 +744,26 @@ pub fn create_percentage_bar(
     (bar, pct_text)
 }
 
-// Helper function to create a horizontal health bar with gradient colors
-pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>> {
-    let filled_blocks = (health * width as f64).round() as usize;
+// Helper function to create a Braille-style vertical health bar
+pub fn create_braille_health_bar(health: f64, height: usize) -> Vec<Span<'static>> {
+    let filled_levels = (health * height as f64).round() as usize;
     let mut spans = Vec::new();
 
-    // Use block characters for clearer visual distinction
-    let filled_char = '█';
-    let empty_char = '░';
+    // Braille characters for vertical bar (4-dot patterns)
+    // Using consistent 4-dot wide patterns for better visual consistency
+    let filled_braille = '⠿'; // All 8 dots filled (⠿)
+    let empty_braille = '⠀';  // No dots (empty)
 
-    for i in 0..width {
-        let is_filled = i < filled_blocks;
-        let ch = if is_filled { filled_char } else { empty_char };
+    for level in (0..height).rev() { // From top to bottom
+        let is_filled = level < filled_levels;
+        let ch = if is_filled { filled_braille } else { empty_braille };
 
-        // Color code each segment based on its position in the health spectrum
-        // Left segments (near 100%) are green, right segments (near 0%) are red
-        let segment_health = (width - i) as f64 / width as f64;
-        let color = if segment_health >= 0.8 {
+        // Single color based on overall health (simpler than gradient)
+        let color = if health >= 0.8 {
             Color::Green
-        } else if segment_health >= 0.6 {
+        } else if health >= 0.6 {
             Color::Yellow
-        } else if segment_health >= 0.4 {
+        } else if health >= 0.4 {
             Color::LightRed
         } else {
             Color::Red
