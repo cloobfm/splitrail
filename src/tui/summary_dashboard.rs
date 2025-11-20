@@ -744,18 +744,22 @@ pub fn create_percentage_bar(
     (bar, pct_text)
 }
 
-// Helper function to create a compact block-based health bar
+// Helper function to create a Braille health bar using gradient patterns like the sparkline
 pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>> {
     let filled_blocks = (health * width as f64).round() as usize;
     let mut spans = Vec::new();
 
-    // Use block characters for better density and no spacing issues
-    let filled_char = '█';
-    let empty_char = '░';
+    // Use the same Braille gradient as the activity sparkline for consistency
+    let chars = [' ', '⡀', '⡄', '⡆', '⡇', '⣇', '⣧', '⣷', '⣿'];
 
     for i in 0..width {
         let is_filled = i < filled_blocks;
-        let ch = if is_filled { filled_char } else { empty_char };
+        let ch = if is_filled {
+            // Use filled Braille pattern
+            '⣿' // All dots filled
+        } else {
+            ' ' // Empty space
+        };
 
         // Single color based on overall health
         let color = if health >= 0.8 {
