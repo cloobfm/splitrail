@@ -30,7 +30,12 @@ pub struct FormattingConfig {
     pub number_human: bool,
     pub locale: String,
     pub decimal_places: usize,
+    #[serde(default = "default_health_display_style")]
     pub health_display_style: String, // "text" or "braille"
+}
+
+fn default_health_display_style() -> String {
+    "text".to_string()
 }
 
 impl Default for Config {
