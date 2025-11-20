@@ -773,6 +773,9 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "gemini-1.5-pro-exp-0801" => "gemini-1.5-pro",
 
     // Qwen aliases
+    
+    // Kiro CLI / Amazon Q aliases
+    "auto" => "claude-sonnet-4",  // Default for auto mode
 };
 
 /// Get model info by any valid name (canonical or alias)

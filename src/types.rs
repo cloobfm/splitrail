@@ -15,6 +15,7 @@ pub enum Application {
     KiloCode,
     Copilot,
     AmazonQ,
+    KiroCli,
     Warp,
 }
 

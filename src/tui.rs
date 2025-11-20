@@ -567,13 +567,14 @@ fn draw_ui(
     };
 
     // Header
+    let version = env!("CARGO_PKG_VERSION");
     let header = Paragraph::new(Text::from(vec![
         Line::styled(
-            "dash-0.1",
+            version,
             Style::new().cyan().bold(),
         ),
         Line::styled(
-            "========",
+            "=".repeat(version.len()),
             Style::new().cyan().bold(),
         ),
     ]));

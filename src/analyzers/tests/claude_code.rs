@@ -1,5 +1,5 @@
 use crate::analyzers::claude_code::{
-    calculate_cost_from_tokens, deduplicate_messages_by_local_hash, extract_and_hash_project_id,
+    calculate_cost_from_tokens, deduplicate_messages_by_local_hash, extract_project_id,
     parse_jsonl_file,
 };
 use crate::types::{Application, ConversationMessage, MessageRole, Stats};
@@ -93,9 +93,9 @@ fn test_extract_and_hash_project_id() {
     let path2 = Path::new("/home/user/.claude/projects/proj123/other.jsonl");
     let path3 = Path::new("/home/user/.claude/projects/proj456/conversation.jsonl");
 
-    let hash1 = extract_and_hash_project_id(path1);
-    let hash2 = extract_and_hash_project_id(path2);
-    let hash3 = extract_and_hash_project_id(path3);
+    let hash1 = extract_project_id(path1);
+    let hash2 = extract_project_id(path2);
+    let hash3 = extract_project_id(path3);
 
     // Same project should have same hash
     assert_eq!(hash1, hash2);
@@ -143,6 +143,7 @@ fn test_deduplicate_messages_by_local_hash() {
             ..Default::default()
         },
         role: MessageRole::Assistant,
+        content: Some("Test message content".to_string()),
     };
 
     let duplicate_msg = ConversationMessage {

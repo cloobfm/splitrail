@@ -137,6 +137,7 @@ splitrail upload
 - Gemini CLI
 - Qwen Code
 - Kilo Code
+- Kiro CLI (replaces Amazon Q)
 - Cline
 - Roo Code
 

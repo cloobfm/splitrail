@@ -174,7 +174,8 @@ struct QRequestMetadata {
 }
 
 // Parse a single Amazon Q conversation
-pub(crate) fn parse_amazon_q_conversation(
+// Public because Kiro CLI uses identical structure
+pub fn parse_amazon_q_conversation(
     project_path: &str,
     conversation_json: &str,
 ) -> Result<Vec<ConversationMessage>> {
