@@ -20,7 +20,7 @@ mod utils;
 mod watcher;
 
 #[derive(Parser)]
-#[command(name = "splitrail")]
+#[command(name = "splitrail-dashboard")]
 #[command(version)]
 #[command(disable_help_subcommand = true)]
 struct Cli {
