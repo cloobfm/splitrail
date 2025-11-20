@@ -767,20 +767,30 @@ pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>
         '⣿',   // 8 dots (all filled)
     ];
 
-    // Distribute dots across characters from left to right
+    // Distribute dots across characters from RIGHT to LEFT (health bar style)
     let mut remaining_dots = dots_to_show;
-    for i in 0..width {
+    let mut char_dots = vec![0; width];
+
+    // Fill from right to left
+    for i in (0..width).rev() { // Start from rightmost character
         let dots_for_this_char = if remaining_dots >= 8 {
             8
-        } else if i == width - 1 && remaining_dots > 0 {
-            // Last character gets remaining dots (minimum 4 for red health)
-            remaining_dots.max(4)
         } else {
             remaining_dots
         };
 
-        let ch = braille_chars[dots_for_this_char.min(8)];
+        char_dots[i] = dots_for_this_char;
         remaining_dots = remaining_dots.saturating_sub(dots_for_this_char);
+    }
+
+    // Ensure minimum 4 dots in leftmost position for red health
+    if health < 0.4 && char_dots.iter().sum::<usize>() < 4 {
+        char_dots[0] = 4; // Leftmost character gets minimum dots
+    }
+
+    // Create spans from left to right for display
+    for &dots in &char_dots {
+        let ch = braille_chars[dots.min(8)];
 
         // Color based on health level
         let color = if health >= 0.8 {
