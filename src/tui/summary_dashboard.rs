@@ -628,10 +628,10 @@ pub fn draw_summary_view(
                 };
 
                 if use_braille {
-                    // Create horizontal health bar (12 characters wide to fill the column)
-                    let braille_spans = create_braille_health_bar(health, 12);
+                    // Create horizontal health bar (10 characters wide to fit column better)
+                    let braille_spans = create_braille_health_bar(health, 10);
                     cells.push(Cell::new(
-                        Line::from(braille_spans).right_aligned(),
+                        Line::from(braille_spans),
                     ));
                 } else {
                     // Text display
