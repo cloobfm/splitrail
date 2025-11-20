@@ -4,11 +4,26 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::Result;
 use chrono::{DateTime, Datelike, Local, Utc};
 use num_format::{Locale, ToFormattedString};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::models::{get_model_info, QuotaLimits};
+use crate::models::get_model_info;
 use crate::types::{ConversationMessage, DailyStats};
+
+/// Quota limits for different time periods and types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotaLimits {
+    /// Daily token limit (input + output)
+    pub daily_tokens: Option<u64>,
+    /// Weekly token limit
+    pub weekly_tokens: Option<u64>,
+    /// Monthly token limit
+    pub monthly_tokens: Option<u64>,
+    /// Session time limit in minutes
+    pub session_time_minutes: Option<u64>,
+    /// Daily request limit
+    pub daily_requests: Option<u64>,
+}
 
 struct WarningEntry {
     message: String,

@@ -118,9 +118,9 @@ pub fn draw_summary_view(
     // Split area into parts: spacing + overview table + spacing + CLI breakdown table + visual panels
     let chunks = Layout::vertical([
         Constraint::Length(1),  // Space above overview
-        Constraint::Length(12), // Overview table (header + 9 rows + border)
+        Constraint::Length(11), // Overview table (header + 8 rows + border)
         Constraint::Length(1),  // Space between tables
-        Constraint::Length(13), // CLI breakdown table (fixed height)
+        Constraint::Length(14), // CLI breakdown table (fixed height)
         Constraint::Length(1),  // Space before visual panels
         Constraint::Min(0),     // Visual CLI panels (takes remaining space)
     ])
@@ -130,18 +130,6 @@ pub fn draw_summary_view(
     tui_state.layout.today_by_cli_rect = Some(chunks[3]);
     tui_state.layout.live_activity_rect = Some(chunks[5]);
 
-    // Calculate overall health
-    let all_messages: Vec<_> = filtered_stats.iter().flat_map(|s| &s.messages).cloned().collect();
-    let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
-    let overall_health = calculate_overall_health(&all_messages, &today);
-    let health_status = get_health_status(overall_health);
-    let health_color = match get_health_color(overall_health) {
-        "green" => Color::Green,
-        "yellow" => Color::Yellow,
-        "orange" => Color::LightRed,
-        "red" => Color::Red,
-        _ => Color::Gray,
-    };
 
     // Create table rows
     let header = Row::new(vec![
@@ -289,13 +277,6 @@ pub fn draw_summary_view(
             Cell::new(Line::from(format!("${:.2}", yesterday_stats.cost)).right_aligned()),
             Cell::new(Line::from(format!("${:.2}", week_stats.cost)).right_aligned()),
             Cell::new(Line::from(format!("${:.2}", two_week_stats.cost)).right_aligned()),
-        ]),
-        Row::new(vec![
-            Cell::new(Line::from("⚡ Health").style(Style::default().fg(health_color))),
-            Cell::new(Line::from(format!("{:.0}% {}", overall_health * 100.0, health_status)).style(Style::default().fg(health_color)).right_aligned()),
-            Cell::new(Line::raw("")),
-            Cell::new(Line::raw("")),
-            Cell::new(Line::raw("")),
         ]),
     ];
 
@@ -619,6 +600,44 @@ pub fn draw_summary_view(
                 let (_, _, _, _, _, cost, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format!("${:.2}", cost)).right_aligned(),
+                ));
+            }
+            Row::new(cells)
+        },
+        // Health row
+        {
+            let mut cells = vec![Cell::new(
+                Line::from("⚡ Health").style(Style::default().fg(Color::Green)),
+            )];
+            for &idx in visible_indices {
+                let analyzer_stats = &filtered_stats[idx];
+                let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+
+                // Calculate health for this specific CLI
+                let cli_messages: Vec<_> = analyzer_stats.messages.iter().filter(|msg| {
+                    msg.date.with_timezone(&chrono::Local).date_naive().format("%Y-%m-%d").to_string() == today
+                }).cloned().collect();
+
+                let health = if cli_messages.is_empty() {
+                    1.0 // No usage today = full health
+                } else {
+                    calculate_overall_health(&cli_messages, &today)
+                };
+
+                let health_percent = (health * 100.0) as u32;
+                let health_status = get_health_status(health);
+                let health_color = match get_health_color(health) {
+                    "green" => Color::Green,
+                    "yellow" => Color::Yellow,
+                    "orange" => Color::LightRed,
+                    "red" => Color::Red,
+                    _ => Color::Gray,
+                };
+
+                cells.push(Cell::new(
+                    Line::from(format!("{}% {}", health_percent, health_status))
+                        .style(Style::default().fg(health_color))
+                        .right_aligned(),
                 ));
             }
             Row::new(cells)
