@@ -490,7 +490,7 @@ pub fn draw_summary_view(
 
     let mut cli_constraints = vec![Constraint::Length(15)]; // Metric label
     for _ in 0..visible_indices.len() {
-        cli_constraints.push(Constraint::Length(13)); // Each CLI column
+        cli_constraints.push(Constraint::Length(15)); // Each CLI column (increased for Braille bars)
     }
 
     let cli_rows = vec![
@@ -628,8 +628,8 @@ pub fn draw_summary_view(
                 };
 
                 if use_braille {
-                    // Create horizontal health bar (10 characters wide for good resolution)
-                    let braille_spans = create_braille_health_bar(health, 10);
+                    // Create horizontal health bar (12 characters wide to fill the column)
+                    let braille_spans = create_braille_health_bar(health, 12);
                     cells.push(Cell::new(
                         Line::from(braille_spans).right_aligned(),
                     ));
