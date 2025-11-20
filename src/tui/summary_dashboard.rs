@@ -744,21 +744,25 @@ pub fn create_percentage_bar(
     (bar, pct_text)
 }
 
-// Helper function to create a Braille-style vertical health bar
-pub fn create_braille_health_bar(health: f64, height: usize) -> Vec<Span<'static>> {
-    let filled_levels = (health * height as f64).round() as usize;
+// Helper function to create a Braille-style vertical health bar using vertical dot patterns
+pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>> {
+    let filled_blocks = (health * width as f64).round() as usize;
     let mut spans = Vec::new();
 
-    // Braille characters for vertical bar (4-dot patterns)
-    // Using consistent 4-dot wide patterns for better visual consistency
-    let filled_braille = '⠿'; // All 8 dots filled (⠿)
-    let empty_braille = '⠀';  // No dots (empty)
+    // Braille characters showing vertical bars (like the sparkline)
+    // These show increasing numbers of dots in vertical columns
+    let chars = [' ', '⡇', '⣿']; // empty, 4 vertical dots, all dots
 
-    for level in (0..height).rev() { // From top to bottom
-        let is_filled = level < filled_levels;
-        let ch = if is_filled { filled_braille } else { empty_braille };
+    for i in 0..width {
+        let is_filled = i < filled_blocks;
+        let ch = if is_filled {
+            // Use the 4-dot vertical pattern for filled sections
+            '⡇' // 4 dots in vertical left column
+        } else {
+            ' ' // empty
+        };
 
-        // Single color based on overall health (simpler than gradient)
+        // Single color based on overall health
         let color = if health >= 0.8 {
             Color::Green
         } else if health >= 0.6 {
