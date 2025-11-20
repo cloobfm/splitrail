@@ -30,6 +30,7 @@ pub struct FormattingConfig {
     pub number_human: bool,
     pub locale: String,
     pub decimal_places: usize,
+    pub health_display_style: String, // "text" or "braille"
 }
 
 impl Default for Config {
@@ -50,6 +51,7 @@ impl Default for Config {
                 number_human: false,
                 locale: "en".to_string(),
                 decimal_places: 2,
+                health_display_style: "text".to_string(),
             },
         }
     }
@@ -154,6 +156,7 @@ pub fn show_config() -> Result<()> {
             println!("   Number Human: {}", config.formatting.number_human);
             println!("   Locale: {}", config.formatting.locale);
             println!("   Decimal Places: {}", config.formatting.decimal_places);
+            println!("   Health Display Style: {}", config.formatting.health_display_style);
         }
         None => {
             println!("❌ No configuration file found.");
@@ -198,6 +201,13 @@ pub fn set_config_value(key: &str, value: &str) -> Result<()> {
         "decimal-places" => {
             let places = value.parse::<usize>().context("Invalid number value")?;
             config.formatting.decimal_places = places;
+        }
+        "health-display-style" => {
+            if value == "text" || value == "braille" {
+                config.formatting.health_display_style = value.to_string();
+            } else {
+                anyhow::bail!("Invalid health display style. Use 'text' or 'braille'");
+            }
         }
         _ => anyhow::bail!("Unknown config key: {}", key),
     }

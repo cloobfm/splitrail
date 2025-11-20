@@ -105,6 +105,9 @@ pub fn draw_summary_view(
     filtered_stats: &[&AgenticCodingToolStats],
     tui_state: &mut crate::tui::TuiState,
 ) {
+    // Load config for health display style
+    let config = crate::config::Config::load().unwrap_or(None).unwrap_or_default();
+    let use_braille = config.formatting.health_display_style == "braille";
     let SummaryData {
         today_stats,
         yesterday_stats,
@@ -624,21 +627,38 @@ pub fn draw_summary_view(
                     calculate_overall_health(&cli_messages, &today)
                 };
 
-                let health_percent = (health * 100.0) as u32;
-                let health_status = get_health_status(health);
-                let health_color = match get_health_color(health) {
-                    "green" => Color::Green,
-                    "yellow" => Color::Yellow,
-                    "orange" => Color::LightRed,
-                    "red" => Color::Red,
-                    _ => Color::Gray,
-                };
+                if use_braille {
+                    // Create Braille bar graph (4 characters high)
+                    let braille_spans = create_braille_health_bar(health, 4);
+                    let mut bar_text = String::new();
+                    for span in &braille_spans {
+                        if span.content == "\n" {
+                            bar_text.push('\n');
+                        } else {
+                            bar_text.push_str(&span.content);
+                        }
+                    }
+                    cells.push(Cell::new(
+                        Line::from(bar_text.trim_end().to_string()).right_aligned(),
+                    ));
+                } else {
+                    // Text display
+                    let health_percent = (health * 100.0) as u32;
+                    let health_status = get_health_status(health);
+                    let health_color = match get_health_color(health) {
+                        "green" => Color::Green,
+                        "yellow" => Color::Yellow,
+                        "orange" => Color::LightRed,
+                        "red" => Color::Red,
+                        _ => Color::Gray,
+                    };
 
-                cells.push(Cell::new(
-                    Line::from(format!("{}% {}", health_percent, health_status))
-                        .style(Style::default().fg(health_color))
-                        .right_aligned(),
-                ));
+                    cells.push(Cell::new(
+                        Line::from(format!("{}% {}", health_percent, health_status))
+                            .style(Style::default().fg(health_color))
+                            .right_aligned(),
+                    ));
+                }
             }
             Row::new(cells)
         },
@@ -730,6 +750,38 @@ pub fn create_percentage_bar(
     let pct_text = format!("{:>5.1}%", percentage);
 
     (bar, pct_text)
+}
+
+// Helper function to create a Braille vertical bar graph for health
+pub fn create_braille_health_bar(health: f64, height: usize) -> Vec<Span<'static>> {
+    let filled_levels = (health * height as f64).round() as usize;
+    let mut spans = Vec::new();
+
+    // Braille patterns for vertical bar (from bottom to top)
+    // Using dots 4,5,6,8 (right side) for filled sections
+    let filled_char = '\u{28a4}'; // ⢤ (dots 4,5,6,8)
+    let empty_char = '\u{2800}';  // Empty Braille
+
+    for level in (0..height).rev() { // From top to bottom
+        let is_filled = level < filled_levels;
+        let ch = if is_filled { filled_char } else { empty_char };
+
+        // Color code based on health level
+        let color = if health >= 0.8 {
+            Color::Green
+        } else if health >= 0.6 {
+            Color::Yellow
+        } else if health >= 0.4 {
+            Color::LightRed
+        } else {
+            Color::Red
+        };
+
+        spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+        spans.push(Span::raw("\n")); // New line for vertical stacking
+    }
+
+    spans
 }
 
 // Helper to create activity sparkline for last hour

@@ -69,7 +69,7 @@ enum ConfigSubcommands {
     Show,
     /// Set configuration value
     Set {
-        /// Configuration key (api-token, auto-upload, number-comma, number-human, locale, decimal-places)
+        /// Configuration key (api-token, auto-upload, number-comma, number-human, locale, decimal-places, health-display-style)
         key: String,
         /// Configuration value
         value: String,
