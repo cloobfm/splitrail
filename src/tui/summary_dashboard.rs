@@ -754,43 +754,41 @@ pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>
     let dots_to_show = (health * total_dots as f64).round() as usize;
     let dots_to_show = dots_to_show.max(4); // Minimum 4 dots (single column)
 
-    // Braille characters in order of increasing dots (0 to 8)
-    let braille_chars = [
-        ' ',    // 0 dots
-        '⡀',   // 1 dot  (bottom left)
-        '⡄',   // 2 dots (bottom left + bottom right)
-        '⡆',   // 3 dots (bottom left + bottom right + middle left)
-        '⡇',   // 4 dots (bottom left + bottom right + middle left + top left)
-        '⣇',   // 5 dots (above + bottom)
-        '⣧',   // 6 dots (above + bottom + middle right)
-        '⣷',   // 7 dots (above + bottom + middle right + top right)
-        '⣿',   // 8 dots (all filled)
+    // Ultra-granular approach: maintain 104-dot precision with clear right-to-left depletion
+    // Total dots available: 13 chars × 8 dots = 104 dots (1% per dot)
+    let total_dots = width * 8;
+    let dots_to_show = (health * total_dots as f64).round() as usize;
+    let dots_to_show = dots_to_show.max(4); // Minimum 4 dots
+
+    // Calculate full characters + partial character at boundary
+    let full_chars = dots_to_show / 8; // Number of completely filled characters
+    let remaining_dots = dots_to_show % 8; // Dots for the partial character
+
+    // Braille characters for partial filling
+    let partial_chars = [
+        ' ',  // 0 dots
+        '⡀', // 1 dot
+        '⡄', // 2 dots
+        '⡆', // 3 dots
+        '⡇', // 4 dots
+        '⣇', // 5 dots
+        '⣧', // 6 dots
+        '⣷', // 7 dots
     ];
 
-    // Distribute dots across characters from RIGHT to LEFT (health bar style)
-    let mut remaining_dots = dots_to_show;
-    let mut char_dots = vec![0; width];
-
-    // Fill from right to left
-    for i in (0..width).rev() { // Start from rightmost character
-        let dots_for_this_char = if remaining_dots >= 8 {
-            8
+    for i in 0..width {
+        let ch = if i < (width - full_chars - (remaining_dots > 0) as usize) {
+            // Characters to the left of the filled area
+            ' '
+        } else if i < (width - (remaining_dots > 0) as usize) {
+            // Full characters in the filled area
+            '⣿'
+        } else if i == (width - 1) && remaining_dots > 0 {
+            // Rightmost character gets partial filling
+            partial_chars[remaining_dots]
         } else {
-            remaining_dots
+            ' '
         };
-
-        char_dots[i] = dots_for_this_char;
-        remaining_dots = remaining_dots.saturating_sub(dots_for_this_char);
-    }
-
-    // Ensure minimum 4 dots in leftmost position for red health
-    if health < 0.4 && char_dots.iter().sum::<usize>() < 4 {
-        char_dots[0] = 4; // Leftmost character gets minimum dots
-    }
-
-    // Create spans from left to right for display
-    for &dots in &char_dots {
-        let ch = braille_chars[dots.min(8)];
 
         // Color based on health level
         let color = if health >= 0.8 {
