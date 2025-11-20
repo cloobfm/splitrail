@@ -744,24 +744,45 @@ pub fn create_percentage_bar(
     (bar, pct_text)
 }
 
-// Helper function to create a Braille health bar using gradient patterns like the sparkline
+// Helper function to create ultra-granular Braille health bar (104 dots total)
 pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>> {
-    let filled_blocks = (health * width as f64).round() as usize;
     let mut spans = Vec::new();
 
-    // Use the same Braille gradient as the activity sparkline for consistency
-    let chars = [' ', '⡀', '⡄', '⡆', '⡇', '⣇', '⣧', '⣷', '⣿'];
+    // Total dots available: 13 chars × 8 dots = 104 dots
+    // Each 1% health = 1 dot
+    let total_dots = width * 8;
+    let dots_to_show = (health * total_dots as f64).round() as usize;
+    let dots_to_show = dots_to_show.max(4); // Minimum 4 dots (single column)
 
+    // Braille characters in order of increasing dots (0 to 8)
+    let braille_chars = [
+        ' ',    // 0 dots
+        '⡀',   // 1 dot  (bottom left)
+        '⡄',   // 2 dots (bottom left + bottom right)
+        '⡆',   // 3 dots (bottom left + bottom right + middle left)
+        '⡇',   // 4 dots (bottom left + bottom right + middle left + top left)
+        '⣇',   // 5 dots (above + bottom)
+        '⣧',   // 6 dots (above + bottom + middle right)
+        '⣷',   // 7 dots (above + bottom + middle right + top right)
+        '⣿',   // 8 dots (all filled)
+    ];
+
+    // Distribute dots across characters from left to right
+    let mut remaining_dots = dots_to_show;
     for i in 0..width {
-        let is_filled = i < filled_blocks;
-        let ch = if is_filled {
-            // Use filled Braille pattern
-            '⣿' // All dots filled
+        let dots_for_this_char = if remaining_dots >= 8 {
+            8
+        } else if i == width - 1 && remaining_dots > 0 {
+            // Last character gets remaining dots (minimum 4 for red health)
+            remaining_dots.max(4)
         } else {
-            ' ' // Empty space
+            remaining_dots
         };
 
-        // Single color based on overall health
+        let ch = braille_chars[dots_for_this_char.min(8)];
+        remaining_dots = remaining_dots.saturating_sub(dots_for_this_char);
+
+        // Color based on health level
         let color = if health >= 0.8 {
             Color::Green
         } else if health >= 0.6 {
