@@ -754,7 +754,7 @@ pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>
     let dots_to_show = (health * total_dots as f64).round() as usize;
     let dots_to_show = dots_to_show.max(4); // Minimum 4 dots (single column)
 
-    // Ultra-granular approach: maintain 104-dot precision with clear right-to-left depletion
+    // Ultra-granular approach: maintain 104-dot precision with left-to-right filling
     // Total dots available: 13 chars × 8 dots = 104 dots (1% per dot)
     let total_dots = width * 8;
     let dots_to_show = (health * total_dots as f64).round() as usize;
@@ -764,29 +764,27 @@ pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>
     let full_chars = dots_to_show / 8; // Number of completely filled characters
     let remaining_dots = dots_to_show % 8; // Dots for the partial character
 
-    // Braille characters for partial filling
+    // Braille characters for partial filling (left-to-right within character)
     let partial_chars = [
         ' ',  // 0 dots
-        '⡀', // 1 dot
-        '⡄', // 2 dots
-        '⡆', // 3 dots
-        '⡇', // 4 dots
-        '⣇', // 5 dots
-        '⣧', // 6 dots
-        '⣷', // 7 dots
+        '⡀', // 1 dot (top-left)
+        '⡄', // 2 dots (top-left + top-right)
+        '⡆', // 3 dots (top-left + top-right + middle-left)
+        '⡇', // 4 dots (top-left + top-right + middle-left + middle-right)
+        '⣇', // 5 dots (above + bottom-left)
+        '⣧', // 6 dots (above + bottom-left + bottom-right)
+        '⣷', // 7 dots (above + bottom-left + bottom-right + middle)
     ];
 
     for i in 0..width {
-        let ch = if i < (width - full_chars - (remaining_dots > 0) as usize) {
-            // Characters to the left of the filled area
-            ' '
-        } else if i < (width - (remaining_dots > 0) as usize) {
-            // Full characters in the filled area
+        let ch = if i < full_chars {
+            // Leftmost characters are fully filled
             '⣿'
-        } else if i == (width - 1) && remaining_dots > 0 {
-            // Rightmost character gets partial filling
+        } else if i == full_chars && remaining_dots > 0 {
+            // Next character gets partial filling
             partial_chars[remaining_dots]
         } else {
+            // Remaining characters are empty
             ' '
         };
 
