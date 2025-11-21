@@ -885,61 +885,6 @@ pub fn simplify_analyzer_name(name: &str) -> &str {
     }
 }
 
-// Helper function to format message info when content is not available
-fn format_message_without_content(msg: &crate::types::ConversationMessage) -> String {
-    let stats = &msg.stats;
-    let mut parts = Vec::new();
-    
-    // Show model if available
-    if let Some(model) = &msg.model {
-        parts.push(format!("[{}]", model));
-    }
-    
-    // Show token counts for assistant messages (use simple number formatting)
-    if msg.role == crate::types::MessageRole::Assistant {
-        if stats.input_tokens > 0 || stats.output_tokens > 0 {
-            // Use compact notation: k for thousands, m for millions
-            let format_compact = |n: u64| {
-                if n >= 1_000_000 {
-                    format!("{:.1}m", n as f64 / 1_000_000.0)
-                } else if n >= 1_000 {
-                    format!("{:.1}k", n as f64 / 1_000.0)
-                } else {
-                    n.to_string()
-                }
-            };
-            parts.push(format!("{}i/{}o", 
-                format_compact(stats.input_tokens),
-                format_compact(stats.output_tokens)
-            ));
-        }
-        if stats.reasoning_tokens > 0 {
-            let format_compact = |n: u64| {
-                if n >= 1_000_000 {
-                    format!("{:.1}m", n as f64 / 1_000_000.0)
-                } else if n >= 1_000 {
-                    format!("{:.1}k", n as f64 / 1_000.0)
-                } else {
-                    n.to_string()
-                }
-            };
-            parts.push(format!("{}r", format_compact(stats.reasoning_tokens)));
-        }
-    }
-    
-    // Show tool calls if any
-    if stats.tool_calls > 0 {
-        parts.push(format!("🔧{}", stats.tool_calls));
-    }
-    
-    // If we have no info at all, show a generic indicator
-    if parts.is_empty() {
-        "[message]".to_string()
-    } else {
-        parts.join(" ")
-    }
-}
-
 // Get last message preview
 pub fn get_last_message_preview(
     stats: &AgenticCodingToolStats,
@@ -963,34 +908,22 @@ pub fn get_last_message_preview(
         .messages
         .iter()
         .filter_map(|msg| {
-            let msg_role_name = match msg.role {
-                crate::types::MessageRole::User => username.as_str(),
-                crate::types::MessageRole::Assistant => simplified_name,
-            };
-            
-            // Try to get content, or generate a placeholder with stats
-            let display_text = if let Some(content) = &msg.content {
+            if let Some(content) = &msg.content {
                 let single_line_content = content.replace('\n', " ").replace('\r', "");
                 if !single_line_content.trim().is_empty() {
-                    single_line_content
-                } else {
-                    // Content exists but is empty
-                    format_message_without_content(msg)
+                    let msg_role_name = match msg.role {
+                        crate::types::MessageRole::User => username.as_str(),
+                        crate::types::MessageRole::Assistant => simplified_name,
+                    };
+                    return Some((
+                        msg.date,
+                        msg.role.clone(),
+                        msg_role_name.to_string(),
+                        single_line_content,
+                        msg.project_hash.clone(),
+                        msg.application.clone(),
+                    ));
                 }
-            } else {
-                // No content available (e.g., OpenCode optimization)
-                format_message_without_content(msg)
-            };
-            
-            if !display_text.trim().is_empty() {
-                return Some((
-                    msg.date,
-                    msg.role.clone(),
-                    msg_role_name.to_string(),
-                    display_text,
-                    msg.project_hash.clone(),
-                    msg.application.clone(),
-                ));
             }
             None
         })
