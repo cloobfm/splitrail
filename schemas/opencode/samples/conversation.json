@@ -1,0 +1,110 @@
+[
+  {
+    "id": "msg_001",
+    "timestamp": "2024-01-15T10:30:00Z",
+    "role": "user",
+    "content": "Help me create a Rust function that calculates fibonacci numbers",
+    "model": null,
+    "tokens": null,
+    "tools": null,
+    "files": null
+  },
+  {
+    "id": "msg_002", 
+    "timestamp": "2024-01-15T10:30:15Z",
+    "role": "assistant",
+    "content": "I'll help you create a Fibonacci function in Rust. Let me write an efficient implementation:",
+    "model": "big-pickle",
+    "tokens": {
+      "input": 25,
+      "output": 20,
+      "cached": 0,
+      "reasoning": 0
+    },
+    "tools": [
+      {
+        "name": "write",
+        "duration_ms": 150,
+        "success": true
+      }
+    ],
+    "files": [
+      {
+        "path": "src/fibonacci.rs",
+        "operation": "write",
+        "bytes": 512,
+        "lines": 25
+      }
+    ]
+  },
+  {
+    "id": "msg_003",
+    "timestamp": "2024-01-15T10:30:45Z", 
+    "role": "assistant",
+    "content": "Here's the Fibonacci function:\n\n```rust\npub fn fibonacci(n: u64) -> u64 {\n    match n {\n        0 => 0,\n        1 => 1,\n        _ => fibonacci(n - 1) + fibonacci(n - 2),\n    }\n}\n\n// More efficient iterative version\npub fn fibonacci_iterative(n: u64) -> u64 {\n    if n <= 1 {\n        return n;\n    }\n    \n    let (mut a, mut b) = (0, 1);\n    for _ in 2..=n {\n        let temp = a + b;\n        a = b;\n        b = temp;\n    }\n    b\n}\n```\n\nThe iterative version is much more efficient for large numbers as it runs in O(n) time instead of O(2^n).",
+    "model": "big-pickle",
+    "tokens": {
+      "input": 30,
+      "output": 180,
+      "cached": 5,
+      "reasoning": 0
+    },
+    "tools": [
+      {
+        "name": "edit",
+        "duration_ms": 200,
+        "success": true
+      },
+      {
+        "name": "read",
+        "duration_ms": 50,
+        "success": true
+      }
+    ],
+    "files": [
+      {
+        "path": "src/fibonacci.rs",
+        "operation": "edit", 
+        "bytes": 256,
+        "lines": 20
+      },
+      {
+        "path": "src/main.rs",
+        "operation": "read",
+        "bytes": 128,
+        "lines": 8
+      }
+    ]
+  },
+  {
+    "id": "msg_004",
+    "timestamp": "2024-01-15T10:31:30Z",
+    "role": "user", 
+    "content": "Can you run cargo check to make sure it compiles?",
+    "model": null,
+    "tokens": null,
+    "tools": null,
+    "files": null
+  },
+  {
+    "id": "msg_005",
+    "timestamp": "2024-01-15T10:31:35Z",
+    "role": "assistant",
+    "content": "I'll run cargo check to verify the code compiles correctly.",
+    "model": "big-pickle",
+    "tokens": {
+      "input": 20,
+      "output": 15,
+      "cached": 0,
+      "reasoning": 0
+    },
+    "tools": [
+      {
+        "name": "bash",
+        "duration_ms": 2500,
+        "success": true
+      }
+    ],
+    "files": null
+  }
+]

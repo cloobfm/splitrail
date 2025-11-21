@@ -17,6 +17,7 @@ pub enum Application {
     AmazonQ,
     KiroCli,
     Warp,
+    OpenCode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

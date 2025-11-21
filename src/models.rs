@@ -664,6 +664,92 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
         caching: CachingSupport::None,
     },
+
+    // OpenCode Models
+    "opencode-zen" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,  // Free tier
+            output_per_1m: 0.0, // Free tier
+        },
+        caching: CachingSupport::None,
+    },
+    "big-pickle" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,  // Free during beta period
+            output_per_1m: 0.0, // Free during beta period
+        },
+        caching: CachingSupport::None,
+    },
+    "opencode-zen-pro" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.50,
+            output_per_1m: 2.00,
+        },
+        caching: CachingSupport::None,
+    },
+    "grok-code" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,  // Currently free promotional tier
+            output_per_1m: 0.0, // Currently free promotional tier
+        },
+        caching: CachingSupport::None,
+    },
+    "grok-code-pro" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.00,
+            output_per_1m: 4.00,
+        },
+        caching: CachingSupport::None,
+    },
+    "openrouter-free" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,  // Free tier
+            output_per_1m: 0.0, // Free tier
+        },
+        caching: CachingSupport::None,
+    },
+    "openrouter-standard" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.25,
+            output_per_1m: 1.00,
+        },
+        caching: CachingSupport::None,
+    },
+    "kimi-k2" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.30,
+            output_per_1m: 1.20,
+        },
+        caching: CachingSupport::None,
+    },
+    "qwen3-coder-free" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,  // Free tier
+            output_per_1m: 0.0, // Free tier
+        },
+        caching: CachingSupport::None,
+    },
+    "local-llama" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,  // Local models are free
+            output_per_1m: 0.0, // Local models are free
+        },
+        caching: CachingSupport::None,
+    },
+    "local-codellama" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,  // Local models are free
+            output_per_1m: 0.0, // Local models are free
+        },
+        caching: CachingSupport::None,
+    },
+    "local-mistral" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,  // Local models are free
+            output_per_1m: 0.0, // Local models are free
+        },
+        caching: CachingSupport::None,
+    },
 };
 
 static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
@@ -773,6 +859,28 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "gemini-1.5-pro-exp-0801" => "gemini-1.5-pro",
 
     // Qwen aliases
+    
+    // OpenCode aliases
+    "zen" => "opencode-zen",
+    "zen-free" => "opencode-zen",
+    "zen-pro" => "opencode-zen-pro",
+    "opencode" => "opencode-zen",  // Default OpenCode model
+    "big-pickle" => "big-pickle",
+    "bigpickle" => "big-pickle",
+    "pickle" => "big-pickle",
+    "grok" => "grok-code",
+    "grok-free" => "grok-code",
+    "xai-grok" => "grok-code",
+    "openrouter" => "openrouter-standard",
+    "openrouter-free-tier" => "openrouter-free",
+    "kimi" => "kimi-k2",
+    "moonshot-k2" => "kimi-k2",
+    "qwen3-free" => "qwen3-coder-free",
+    "llama-local" => "local-llama",
+    "codellama-local" => "local-codellama",
+    "mistral-local" => "local-mistral",
+    "ollama" => "local-llama",  // Common local model alias
+    "lm-studio" => "local-llama",  // Common local model alias
     
     // Kiro CLI / Amazon Q aliases
     "auto" => "claude-sonnet-4",  // Default for auto mode

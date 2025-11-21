@@ -6,6 +6,7 @@ pub mod copilot;
 pub mod gemini_cli;
 pub mod kilo_code;
 pub mod kiro_cli;
+pub mod opencode;
 pub mod qwen_code;
 pub mod roo_code;
 pub mod warp_dev;
@@ -18,6 +19,7 @@ pub use codex_cli::CodexCliAnalyzer;
 pub use gemini_cli::GeminiCliAnalyzer;
 pub use kilo_code::KiloCodeAnalyzer;
 pub use kiro_cli::KiroCliAnalyzer;
+pub use opencode::OpenCodeAnalyzer;
 pub use qwen_code::QwenCodeAnalyzer;
 pub use warp_dev::WarpDevAnalyzer;
 // pub use roo_code::RooCodeAnalyzer; // Temporarily disabled

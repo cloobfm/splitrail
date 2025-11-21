@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenCode Conversation Message",
+  "description": "Schema for individual OpenCode conversation messages in JSONL format",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for the message"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the message was created"
+    },
+    "role": {
+      "type": "string",
+      "enum": ["user", "assistant"],
+      "description": "The role of the message sender"
+    },
+    "content": {
+      "type": "string",
+      "description": "The content of the message"
+    },
+    "model": {
+      "type": ["string", "null"],
+      "description": "The model used for assistant messages, null for user messages"
+    },
+    "tokens": {
+      "type": ["object", "null"],
+      "description": "Token usage information for assistant messages",
+      "properties": {
+        "input": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of input tokens"
+        },
+        "output": {
+          "type": "integer", 
+          "minimum": 0,
+          "description": "Number of output tokens"
+        },
+        "cached": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of cached tokens"
+        },
+        "reasoning": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of reasoning tokens (for models that support it)"
+        }
+      }
+    },
+    "tools": {
+      "type": ["array", "null"],
+      "description": "List of tool calls made in this message",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the tool called"
+          },
+          "duration_ms": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Duration of the tool call in milliseconds"
+          },
+          "success": {
+            "type": ["boolean", "null"],
+            "description": "Whether the tool call was successful"
+          }
+        }
+      }
+    },
+    "files": {
+      "type": ["array", "null"],
+      "description": "List of file operations performed in this message",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to the file that was operated on"
+          },
+          "operation": {
+            "type": "string",
+            "enum": ["read", "write", "edit", "delete", "create", "modify"],
+            "description": "Type of file operation performed"
+          },
+          "bytes": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Number of bytes affected by the operation"
+          },
+          "lines": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Number of lines affected by the operation"
+          }
+        }
+      }
+    }
+  },
+  "required": ["id", "timestamp", "role", "content"],
+  "additionalProperties": false
+}
