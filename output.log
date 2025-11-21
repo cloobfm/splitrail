@@ -1,0 +1,484 @@
+warning: unused import: `WarpDevAnalyzer`
+ --> src/main.rs:8:76
+  |
+8 |     KiloCodeAnalyzer, KiroCliAnalyzer, OpenCodeAnalyzer, QwenCodeAnalyzer, WarpDevAnalyzer,
+  |                                                                            ^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::path::Path`
+ --> src/analyzers/opencode.rs:5:5
+  |
+5 | use std::path::Path;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `regex::Regex`
+  --> src/analyzers/warp_dev.rs:11:5
+   |
+11 | use regex::Regex;
+   |     ^^^^^^^^^^^^
+
+warning: unused import: `amazon_q::AmazonQAnalyzer`
+  --> src/analyzers/mod.rs:14:9
+   |
+14 | pub use amazon_q::AmazonQAnalyzer;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Application`
+ --> src/tui.rs:1:64
+  |
+1 | use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats, Application};
+  |                                                                ^^^^^^^^^^^
+
+warning: unused import: `format_timestamp_for_live_view`
+ --> src/tui.rs:3:65
+  |
+3 |     clear_old_warnings, format_date_for_display, format_number, format_timestamp_for_live_view, NumberFormatOptions,
+  |                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `chrono::Duration as ChronoDuration`
+ --> src/tui.rs:7:5
+  |
+7 | use chrono::Duration as ChronoDuration;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Application`
+ --> src/tui/summary_dashboard.rs:1:44
+  |
+1 | use crate::types::{AgenticCodingToolStats, Application};
+  |                                            ^^^^^^^^^^^
+
+warning: unused imports: `TableState` and `Tabs`
+ --> src/tui/summary_dashboard.rs:7:60
+  |
+7 | use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs};
+  |                                                            ^^^^^^^^^^  ^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src/tui/summary_dashboard.rs:9:5
+  |
+9 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Write` and `stdout`
+  --> src/tui/summary_dashboard.rs:10:15
+   |
+10 | use std::io::{stdout, Write};
+   |               ^^^^^^  ^^^^^
+
+warning: unused imports: `ExecutableCommand` and `execute`
+  --> src/tui/summary_dashboard.rs:11:17
+   |
+11 | use crossterm::{ExecutableCommand, execute};
+   |                 ^^^^^^^^^^^^^^^^^  ^^^^^^^
+
+warning: unused imports: `Print`, `ResetColor`, and `SetForegroundColor`
+  --> src/tui/summary_dashboard.rs:12:24
+   |
+12 | use crossterm::style::{Print, ResetColor, SetForegroundColor};
+   |                        ^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::models::get_model_info`
+  --> src/utils.rs:10:5
+   |
+10 | use crate::models::get_model_info;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Config as NotifyConfig`
+ --> src/watcher.rs:2:14
+  |
+2 | use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
+  |              ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: value assigned to `num_conversations` is never read
+   --> src/analyzers/opencode.rs:209:37
+    |
+209 |         let mut num_conversations = 0;
+    |                                     ^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `max_len`
+   --> src/tui/summary_dashboard.rs:891:5
+    |
+891 |     max_len: usize,
+    |     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_max_len`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> src/tui/summary_dashboard.rs:1110:25
+     |
+1110 |                     let mut truncated = project_hash.chars().take(8).collect::<String>();
+     |                         ----^^^^^^^^^
+     |                         |
+     |                         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `cost`
+    --> src/tui/summary_dashboard.rs:1038:13
+     |
+1038 |             cost,
+     |             ^^^^ help: if this is intentional, prefix it with an underscore: `_cost`
+
+warning: unused variable: `sessions`
+    --> src/tui/summary_dashboard.rs:1041:13
+     |
+1041 |             sessions,
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_sessions`
+
+warning: unused variable: `messages`
+    --> src/tui/summary_dashboard.rs:1042:13
+     |
+1042 |             messages,
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_messages`
+
+warning: unused variable: `debug_config`
+   --> src/watcher.rs:142:5
+    |
+142 |     debug_config: Option<&WatchDebugConfig>,
+    |     ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_debug_config`
+
+warning: struct `AmazonQAnalyzer` is never constructed
+  --> src/analyzers/amazon_q.rs:14:12
+   |
+14 | pub struct AmazonQAnalyzer;
+   |            ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated functions `new` and `get_database_path` are never used
+  --> src/analyzers/amazon_q.rs:17:12
+   |
+16 | impl AmazonQAnalyzer {
+   | -------------------- associated functions in this implementation
+17 |     pub fn new() -> Self {
+   |            ^^^
+...
+21 |     fn get_database_path() -> Option<PathBuf> {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: struct `CopilotAnalyzer` is never constructed
+  --> src/analyzers/copilot.rs:15:12
+   |
+15 | pub struct CopilotAnalyzer;
+   |            ^^^^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+  --> src/analyzers/copilot.rs:18:12
+   |
+17 | impl CopilotAnalyzer {
+   | -------------------- associated function in this implementation
+18 |     pub fn new() -> Self {
+   |            ^^^
+
+warning: struct `CopilotChatSession` is never constructed
+  --> src/analyzers/copilot.rs:27:8
+   |
+27 | struct CopilotChatSession {
+   |        ^^^^^^^^^^^^^^^^^^
+
+warning: struct `CopilotRequest` is never constructed
+  --> src/analyzers/copilot.rs:43:8
+   |
+43 | struct CopilotRequest {
+   |        ^^^^^^^^^^^^^^
+
+warning: struct `CopilotMessage` is never constructed
+  --> src/analyzers/copilot.rs:55:8
+   |
+55 | struct CopilotMessage {
+   |        ^^^^^^^^^^^^^^
+
+warning: enum `CopilotResponsePart` is never used
+  --> src/analyzers/copilot.rs:61:6
+   |
+61 | enum CopilotResponsePart {
+   |      ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `CopilotResult` is never constructed
+  --> src/analyzers/copilot.rs:75:8
+   |
+75 | struct CopilotResult {
+   |        ^^^^^^^^^^^^^
+
+warning: struct `CopilotMetadata` is never constructed
+  --> src/analyzers/copilot.rs:82:8
+   |
+82 | struct CopilotMetadata {
+   |        ^^^^^^^^^^^^^^^
+
+warning: struct `CopilotToolCallRound` is never constructed
+  --> src/analyzers/copilot.rs:91:8
+   |
+91 | struct CopilotToolCallRound {
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `CopilotToolCall` is never constructed
+  --> src/analyzers/copilot.rs:99:8
+   |
+99 | struct CopilotToolCall {
+   |        ^^^^^^^^^^^^^^^
+
+warning: function `count_tokens` is never used
+   --> src/analyzers/copilot.rs:107:4
+    |
+107 | fn count_tokens(text: &str) -> u64 {
+    |    ^^^^^^^^^^^^
+
+warning: function `extract_text_from_value` is never used
+   --> src/analyzers/copilot.rs:122:4
+    |
+122 | fn extract_text_from_value(value: &simd_json::OwnedValue, accumulated_text: &mut String) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `extract_and_hash_project_id_copilot` is never used
+   --> src/analyzers/copilot.rs:159:4
+    |
+159 | fn extract_and_hash_project_id_copilot(_file_path: &Path) -> String {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `extract_model_from_model_id` is never used
+   --> src/analyzers/copilot.rs:166:4
+    |
+166 | fn extract_model_from_model_id(model_id: &str) -> Option<String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `count_tool_calls` is never used
+   --> src/analyzers/copilot.rs:181:4
+    |
+181 | fn count_tool_calls(response: &[CopilotResponsePart]) -> u32 {
+    |    ^^^^^^^^^^^^^^^^
+
+warning: function `extract_file_operations` is never used
+   --> src/analyzers/copilot.rs:191:4
+    |
+191 | fn extract_file_operations(metadata: &CopilotMetadata) -> Stats {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_copilot_session_file` is never used
+   --> src/analyzers/copilot.rs:218:15
+    |
+218 | pub(crate) fn parse_copilot_session_file(session_file: &Path) -> Result<Vec<ConversationMessage>> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `QwenAutoStatsData` is never used
+  --> src/analyzers/qwen_code.rs:29:6
+   |
+29 | enum QwenAutoStatsData {
+   |      ^^^^^^^^^^^^^^^^^
+
+warning: struct `QwenRequestLogEntry` is never constructed
+  --> src/analyzers/qwen_code.rs:35:8
+   |
+35 | struct QwenRequestLogEntry {
+   |        ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `QwenRequestData` is never constructed
+  --> src/analyzers/qwen_code.rs:47:8
+   |
+47 | struct QwenRequestData {
+   |        ^^^^^^^^^^^^^^^
+
+warning: struct `QwenUsageMetadata` is never constructed
+  --> src/analyzers/qwen_code.rs:73:8
+   |
+73 | struct QwenUsageMetadata {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: struct `QwenStatsLogEntry` is never constructed
+  --> src/analyzers/qwen_code.rs:85:8
+   |
+85 | struct QwenStatsLogEntry {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: struct `QwenAggregatedStats` is never constructed
+  --> src/analyzers/qwen_code.rs:96:8
+   |
+96 | struct QwenAggregatedStats {
+   |        ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `QwenModelStats` is never constructed
+   --> src/analyzers/qwen_code.rs:101:8
+    |
+101 | struct QwenModelStats {
+    |        ^^^^^^^^^^^^^^
+
+warning: struct `QwenTokenCounts` is never constructed
+   --> src/analyzers/qwen_code.rs:110:8
+    |
+110 | struct QwenTokenCounts {
+    |        ^^^^^^^^^^^^^^^
+
+warning: struct `RooCodeAnalyzer` is never constructed
+  --> src/analyzers/roo_code.rs:14:12
+   |
+14 | pub struct RooCodeAnalyzer;
+   |            ^^^^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+  --> src/analyzers/roo_code.rs:17:12
+   |
+16 | impl RooCodeAnalyzer {
+   | -------------------- associated function in this implementation
+17 |     pub fn new() -> Self {
+   |            ^^^
+
+warning: enum `RooCodeUiMessage` is never used
+  --> src/analyzers/roo_code.rs:26:6
+   |
+26 | enum RooCodeUiMessage {
+   |      ^^^^^^^^^^^^^^^^
+
+warning: struct `RooCodeApiRequest` is never constructed
+  --> src/analyzers/roo_code.rs:46:8
+   |
+46 | struct RooCodeApiRequest {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: function `extract_and_hash_project_id_roo_code` is never used
+  --> src/analyzers/roo_code.rs:61:4
+   |
+61 | fn extract_and_hash_project_id_roo_code(file_path: &Path) -> String {
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `extract_model_from_text` is never used
+  --> src/analyzers/roo_code.rs:82:4
+   |
+82 | fn extract_model_from_text(text: &str) -> Option<String> {
+   |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_roo_code_task_directory` is never used
+  --> src/analyzers/roo_code.rs:94:4
+   |
+94 | fn parse_roo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMessage>> {
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `WarpDevAnalyzer` is never constructed
+  --> src/analyzers/warp_dev.rs:18:12
+   |
+18 | pub struct WarpDevAnalyzer;
+   |            ^^^^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+  --> src/analyzers/warp_dev.rs:21:12
+   |
+20 | impl WarpDevAnalyzer {
+   | -------------------- associated function in this implementation
+21 |     pub fn new() -> Self {
+   |            ^^^
+
+warning: struct `WarpLogEntry` is never constructed
+  --> src/analyzers/warp_dev.rs:27:8
+   |
+27 | struct WarpLogEntry {
+   |        ^^^^^^^^^^^^
+
+warning: struct `WarpBatchItem` is never constructed
+  --> src/analyzers/warp_dev.rs:39:8
+   |
+39 | struct WarpBatchItem {
+   |        ^^^^^^^^^^^^^
+
+warning: struct `WarpProperties` is never constructed
+  --> src/analyzers/warp_dev.rs:47:8
+   |
+47 | struct WarpProperties {
+   |        ^^^^^^^^^^^^^^
+
+warning: struct `WarpAiSuggestionsRequest` is never constructed
+  --> src/analyzers/warp_dev.rs:56:8
+   |
+56 | struct WarpAiSuggestionsRequest {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_warp_log_file` is never used
+  --> src/analyzers/warp_dev.rs:62:4
+   |
+62 | fn parse_warp_log_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: field `scroll_offset` is never read
+  --> src/tui.rs:42:9
+   |
+40 | pub struct TuiState {
+   |            -------- field in this struct
+41 |     pub selected_tab: usize,
+42 |     pub scroll_offset: usize,
+   |         ^^^^^^^^^^^^^
+   |
+   = note: `TuiState` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `selected_day_stats` is never read
+  --> src/tui/summary_dashboard.rs:31:9
+   |
+26 | pub struct SummaryData {
+   |            ----------- field in this struct
+...
+31 |     pub selected_day_stats: AggregatedStats,
+   |         ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `SummaryData` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: function `create_bar` is never used
+   --> src/tui/summary_dashboard.rs:710:8
+    |
+710 | pub fn create_bar(value: u64, max_value: u64, width: usize, color: Color) -> Line<'static> {
+    |        ^^^^^^^^^^
+
+warning: function `create_percentage_bar` is never used
+   --> src/tui/summary_dashboard.rs:729:8
+    |
+729 | pub fn create_percentage_bar(
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `QuotaLimits` is never constructed
+  --> src/utils.rs:15:12
+   |
+15 | pub struct QuotaLimits {
+   |            ^^^^^^^^^^^
+
+warning: the `timestamp:` in this pattern is redundant
+   --> src/analyzers/claude_code.rs:497:49
+    |
+497 | ...                   timestamp: ref timestamp,
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^ help: use shorthand field pattern: `ref timestamp`
+    |
+    = note: `#[warn(non_shorthand_field_patterns)]` on by default
+
+warning: the `tool_use_result:` in this pattern is redundant
+   --> src/analyzers/claude_code.rs:498:49
+    |
+498 | ...                   tool_use_result: ref tool_use_result,
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use shorthand field pattern: `ref tool_use_result`
+
+warning: the `request_id:` in this pattern is redundant
+   --> src/analyzers/claude_code.rs:499:49
+    |
+499 | ...                   request_id: ref request_id,
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use shorthand field pattern: `ref request_id`
+
+warning: the `uuid:` in this pattern is redundant
+   --> src/analyzers/claude_code.rs:500:49
+    |
+500 | ...                   uuid: ref uuid,
+    |                       ^^^^^^^^^^^^^^ help: use shorthand field pattern: `ref uuid`
+
+warning: the `model:` in this pattern is redundant
+   --> src/analyzers/claude_code.rs:492:58
+    |
+492 | ...                   model: ref model,
+    |                       ^^^^^^^^^^^^^^^^ help: use shorthand field pattern: `ref model`
+
+warning: the `usage:` in this pattern is redundant
+   --> src/analyzers/claude_code.rs:494:58
+    |
+494 | ...                   usage: ref usage,
+    |                       ^^^^^^^^^^^^^^^^ help: use shorthand field pattern: `ref usage`
+
+warning: `splitrail-dashboard` (bin "splitrail-dashboard") generated 74 warnings (run `cargo fix --bin "splitrail-dashboard" -p splitrail-dashboard` to apply 27 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running `target/debug/splitrail-dashboard`
+Error displaying TUI: Device not configured (os error 6)
