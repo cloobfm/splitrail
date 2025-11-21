@@ -37,7 +37,17 @@ struct OpenCodeSummary {
     deletions: u64,
     files: u64,
 }
-
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenCodePart {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    #[serde(rename = "messageID")]
+    message_id: String,
+    #[serde(rename = "type")]
+    part_type: String,
+    text: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OpenCodeMessageTime {
@@ -168,7 +178,7 @@ impl Analyzer for OpenCodeAnalyzer {
         let mut messages = Vec::new();
         let mut seen_hashes = std::collections::HashSet::new();
         
-        // OPTIMIZED: Separate only message and session files (no parts needed)
+        // Separate message and session files
         let mut message_files = Vec::new();
         let mut session_files = Vec::new();
         
@@ -191,7 +201,7 @@ impl Analyzer for OpenCodeAnalyzer {
             }
         }
         
-        // Process message files - these contain all necessary data
+        // Process message files
         for message_file in message_files {
             if let Ok(content) = std::fs::read_to_string(&message_file.path) {
                 if let Ok(opencode_msg) = serde_json::from_str::<OpenCodeMessageData>(&content) {
@@ -200,9 +210,11 @@ impl Analyzer for OpenCodeAnalyzer {
                         .map(|s| s.directory.clone())
                         .unwrap_or_else(|| "unknown".to_string());
                     
+                    // Read text content from part files for this message
+                    let message_content = self.read_message_text_content(&opencode_msg.id);
+                    
                     // Convert to our internal format
-                    // Note: We don't read part files for content since message files have all the stats we need
-                    if let Some(msg) = self.convert_opencode_message_data(opencode_msg, &session_dir) {
+                    if let Some(msg) = self.convert_opencode_message_data(opencode_msg, &session_dir, message_content) {
                         // Deduplicate by global hash
                         if seen_hashes.insert(msg.global_hash.clone()) {
                             messages.push(msg);
@@ -302,10 +314,53 @@ impl Analyzer for OpenCodeAnalyzer {
 }
 
 impl OpenCodeAnalyzer {
+    /// Read text content from part files for a specific message
+    fn read_message_text_content(&self, message_id: &str) -> Option<String> {
+        // Find part directory for this message
+        if let Some(home_dir) = std::env::home_dir() {
+            let part_dir = home_dir
+                .join(".local/share/opencode/storage/part")
+                .join(message_id);
+            
+            if !part_dir.exists() {
+                return None;
+            }
+            
+            // Read all part files for this message and collect text
+            let mut text_parts = Vec::new();
+            
+            if let Ok(entries) = std::fs::read_dir(&part_dir) {
+                for entry in entries.flatten() {
+                    if let Ok(content) = std::fs::read_to_string(&entry.path()) {
+                        if let Ok(part) = serde_json::from_str::<OpenCodePart>(&content) {
+                            // Only collect "text" type parts
+                            if part.part_type == "text" {
+                                if let Some(text) = part.text {
+                                    if !text.trim().is_empty() {
+                                        text_parts.push(text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if text_parts.is_empty() {
+                None
+            } else {
+                Some(text_parts.join(" "))
+            }
+        } else {
+            None
+        }
+    }
+    
     fn convert_opencode_message_data(
         &self,
         msg: OpenCodeMessageData,
         project_path: &str,
+        content: Option<String>,
     ) -> Option<ConversationMessage> {
         // Convert role
         let role = match msg.role.to_lowercase().as_str() {
@@ -363,10 +418,9 @@ impl OpenCodeAnalyzer {
             model,
             stats,
             role,
-            content: None, // We don't need content for stats dashboard
+            content, // Text content from part files
         })
     }
-
 }
 
 #[cfg(test)]
