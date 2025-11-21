@@ -52,6 +52,71 @@ struct OpenCodePart {
     time: Option<OpenCodeTime>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenCodeMessageData {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    role: String,
+    time: OpenCodeTime,
+    #[serde(rename = "parentID")]
+    parent_id: Option<String>,
+    #[serde(rename = "modelID")]
+    model_id: Option<String>,
+    #[serde(rename = "providerID")]
+    provider_id: Option<String>,
+    mode: Option<String>,
+    path: Option<OpenCodePath>,
+    cost: Option<u64>,
+    tokens: Option<OpenCodeTokens>,
+    finish: Option<String>,
+    summary: Option<OpenCodeMessageSummary>,
+    agent: Option<String>,
+    model: Option<OpenCodeMessageModel>,
+    tools: Option<OpenCodeMessageTools>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenCodePath {
+    cwd: Option<String>,
+    root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenCodeTokens {
+    input: u64,
+    output: u64,
+    reasoning: u64,
+    cache: Option<OpenCodeCache>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenCodeCache {
+    read: u64,
+    write: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenCodeMessageSummary {
+    title: String,
+    diffs: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenCodeMessageModel {
+    #[serde(rename = "providerID")]
+    provider_id: String,
+    #[serde(rename = "modelID")]
+    model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenCodeMessageTools {
+    todowrite: Option<bool>,
+    todoread: Option<bool>,
+    task: Option<bool>,
+}
+
 /// Combined message structure for analysis
 #[derive(Debug, Clone)]
 struct OpenCodeMessage {
@@ -84,6 +149,9 @@ impl Analyzer for OpenCodeAnalyzer {
             let home_str = home_dir.to_string_lossy();
             
             // Actual OpenCode data storage locations
+            // Complete messages (with model info) - PRIORITY
+            patterns.push(format!("{home_str}/.local/share/opencode/storage/message/*/msg_*.json"));
+            
             // Message parts (individual messages)
             patterns.push(format!("{home_str}/.local/share/opencode/storage/part/msg_*/prt_*.json"));
             
@@ -125,14 +193,18 @@ impl Analyzer for OpenCodeAnalyzer {
         let mut messages = Vec::new();
         let mut seen_hashes = std::collections::HashSet::new();
         
-        // Separate session files and part files
+        // Separate message files, session files and part files
+        let mut message_files = Vec::new();
         let mut session_files = Vec::new();
         let mut part_files = Vec::new();
         
         for source in sources {
-            if source.path.to_string_lossy().contains("session/") {
+            let path_str = source.path.to_string_lossy();
+            if path_str.contains("message/") {
+                message_files.push(source);
+            } else if path_str.contains("session/") {
                 session_files.push(source);
-            } else if source.path.to_string_lossy().contains("part/") {
+            } else if path_str.contains("part/") {
                 part_files.push(source);
             }
         }
@@ -143,6 +215,26 @@ impl Analyzer for OpenCodeAnalyzer {
             if let Ok(content) = std::fs::read_to_string(&session_file.path) {
                 if let Ok(session) = serde_json::from_str::<OpenCodeSession>(&content) {
                     sessions.insert(session.id.clone(), session);
+                }
+            }
+        }
+        
+        // Process complete message files first (these have model info)
+        for message_file in message_files {
+            if let Ok(content) = std::fs::read_to_string(&message_file.path) {
+                if let Ok(opencode_msg) = serde_json::from_str::<OpenCodeMessageData>(&content) {
+                    // Get session info for directory path
+                    let session_dir = sessions.get(&opencode_msg.session_id)
+                        .map(|s| s.directory.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    
+                    // Convert to our internal format
+                    if let Some(msg) = self.convert_opencode_message_data(opencode_msg, &session_dir) {
+                        // Deduplicate by global hash
+                        if seen_hashes.insert(msg.global_hash.clone()) {
+                            messages.push(msg);
+                        }
+                    }
                 }
             }
         }
@@ -293,6 +385,68 @@ impl Analyzer for OpenCodeAnalyzer {
 }
 
 impl OpenCodeAnalyzer {
+    fn convert_opencode_message_data(
+        &self,
+        msg: OpenCodeMessageData,
+        project_path: &str,
+    ) -> Option<ConversationMessage> {
+        // Convert role
+        let role = match msg.role.to_lowercase().as_str() {
+            "user" => MessageRole::User,
+            "assistant" | "ai" => MessageRole::Assistant,
+            _ => return None, // Skip unknown roles
+        };
+
+        // Generate hashes
+        let project_hash = hash_text(project_path);
+        let conversation_hash = hash_text(&msg.session_id);
+        let local_hash = Some(hash_text(&format!("{}-{}", msg.id, msg.time.created)));
+        let global_hash = hash_text(&format!("opencode-{}-{}", msg.id, msg.time.created));
+
+        // Extract model information - ACTUAL MODEL DETECTION
+        let model = msg.model_id.clone()
+            .or_else(|| msg.model.as_ref().map(|m| m.model_id.clone()))
+            .or_else(|| Some("opencode-zen".to_string())); // fallback
+
+        // Convert stats - use actual token counts if available
+        let mut stats = Stats::default();
+        
+        if let Some(tokens) = msg.tokens {
+            stats.input_tokens = tokens.input;
+            stats.output_tokens = tokens.output;
+            stats.reasoning_tokens = tokens.reasoning;
+            if let Some(cache) = tokens.cache {
+                stats.cache_read_tokens = cache.read;
+                stats.cache_creation_tokens = cache.write;
+                stats.cached_tokens = cache.read;
+            }
+        }
+        
+        // Count tool calls based on finish type
+        if let Some(finish) = msg.finish {
+            if finish == "tool-calls" {
+                stats.tool_calls = 1;
+            }
+        }
+        
+        // Calculate cost using actual model pricing
+        stats.cost = msg.cost.unwrap_or(0) as f64 / 1000000.0; // Convert from micro-units if present
+
+        Some(ConversationMessage {
+            application: Application::OpenCode,
+            date: DateTime::from_timestamp_millis(msg.time.created as i64)
+                .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap()),
+            project_hash,
+            conversation_hash,
+            local_hash,
+            global_hash,
+            model,
+            stats,
+            role,
+            content: None, // Message files don't have content field
+        })
+    }
+
     fn convert_opencode_message(
         &self,
         msg: OpenCodeMessage,
