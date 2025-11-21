@@ -38,18 +38,11 @@ struct OpenCodeSummary {
     files: u64,
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenCodePart {
-    id: String,
-    #[serde(rename = "sessionID")]
-    session_id: String,
-    #[serde(rename = "messageID")]
-    message_id: String,
-    #[serde(rename = "type")]
-    part_type: String,
-    text: Option<String>,
-    snapshot: Option<String>,
-    time: Option<OpenCodeTime>,
+struct OpenCodeMessageTime {
+    created: u64,
+    completed: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +51,7 @@ struct OpenCodeMessageData {
     #[serde(rename = "sessionID")]
     session_id: String,
     role: String,
-    time: OpenCodeTime,
+    time: OpenCodeMessageTime,
     #[serde(rename = "parentID")]
     parent_id: Option<String>,
     #[serde(rename = "modelID")]
@@ -117,16 +110,6 @@ struct OpenCodeMessageTools {
     task: Option<bool>,
 }
 
-/// Combined message structure for analysis
-#[derive(Debug, Clone)]
-struct OpenCodeMessage {
-    id: String,
-    session_id: String,
-    timestamp: DateTime<Utc>,
-    role: String,
-    content: String,
-    parts: Vec<OpenCodePart>,
-}
 
 pub struct OpenCodeAnalyzer;
 
@@ -148,23 +131,15 @@ impl Analyzer for OpenCodeAnalyzer {
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
             
-            // Actual OpenCode data storage locations
-            // Complete messages (with model info) - PRIORITY
+            // OPTIMIZED: Only read message files (contain all stats) and sessions (for project context)
+            // Message files contain complete token counts, model info, and timing
             patterns.push(format!("{home_str}/.local/share/opencode/storage/message/*/msg_*.json"));
             
-            // Message parts (individual messages)
-            patterns.push(format!("{home_str}/.local/share/opencode/storage/part/msg_*/prt_*.json"));
-            
-            // Session metadata
+            // Session metadata (read once for project context)
             patterns.push(format!("{home_str}/.local/share/opencode/storage/session/*/ses_*.json"));
             
-            // Legacy/alternative locations
-            patterns.push(format!("{home_str}/.config/opencode/sessions/**/*.jsonl"));
-            patterns.push(format!("{home_str}/.local/share/opencode/sessions/**/*.jsonl"));
-            patterns.push(format!("{home_str}/.opencode/sessions/**/*.jsonl"));
-            
-            // Project-specific OpenCode data
-            patterns.push("**/.opencode/sessions/**/*.jsonl".to_string());
+            // REMOVED: Part files - these are individual message fragments, text content not needed for stats
+            // Part files are only necessary if we need to display actual conversation content
         }
 
         patterns
@@ -193,10 +168,9 @@ impl Analyzer for OpenCodeAnalyzer {
         let mut messages = Vec::new();
         let mut seen_hashes = std::collections::HashSet::new();
         
-        // Separate message files, session files and part files
+        // OPTIMIZED: Separate only message and session files (no parts needed)
         let mut message_files = Vec::new();
         let mut session_files = Vec::new();
-        let mut part_files = Vec::new();
         
         for source in sources {
             let path_str = source.path.to_string_lossy();
@@ -204,14 +178,10 @@ impl Analyzer for OpenCodeAnalyzer {
                 message_files.push(source);
             } else if path_str.contains("session/") {
                 session_files.push(source);
-            } else if path_str.contains("part/") {
-                part_files.push(source);
             }
         }
         
-
-        
-        // Load session metadata
+        // Load session metadata (read once, used for project context)
         let mut sessions = std::collections::HashMap::new();
         for session_file in session_files {
             if let Ok(content) = std::fs::read_to_string(&session_file.path) {
@@ -221,17 +191,7 @@ impl Analyzer for OpenCodeAnalyzer {
             }
         }
         
-        // Group parts by message FIRST (needed for message file processing)
-        let mut message_parts: std::collections::HashMap<String, Vec<OpenCodePart>> = std::collections::HashMap::new();
-        for part_file in part_files {
-            if let Ok(content) = std::fs::read_to_string(&part_file.path) {
-                if let Ok(part) = serde_json::from_str::<OpenCodePart>(&content) {
-                    message_parts.entry(part.message_id.clone()).or_default().push(part);
-                }
-            }
-        }
-        
-        // Process complete message files first (these have model info)
+        // Process message files - these contain all necessary data
         for message_file in message_files {
             if let Ok(content) = std::fs::read_to_string(&message_file.path) {
                 if let Ok(opencode_msg) = serde_json::from_str::<OpenCodeMessageData>(&content) {
@@ -240,67 +200,9 @@ impl Analyzer for OpenCodeAnalyzer {
                         .map(|s| s.directory.clone())
                         .unwrap_or_else(|| "unknown".to_string());
                     
-                    // Find corresponding parts to get content
-                    let message_parts_for_msg: Vec<&OpenCodePart> = message_parts
-                        .get(&opencode_msg.id)
-                        .map(|parts| parts.iter().collect())
-                        .unwrap_or_default();
-                    
-                    // Combine text from all parts
-                    let combined_content: String = message_parts_for_msg.iter()
-                        .filter_map(|p| p.text.as_ref())
-                        .map(|s| s.as_str())
-                        .collect::<Vec<&str>>()
-                        .join("\n");
-                    
                     // Convert to our internal format
-                    if let Some(msg) = self.convert_opencode_message_data(opencode_msg, &session_dir, combined_content) {
-                        // Deduplicate by global hash
-                        if seen_hashes.insert(msg.global_hash.clone()) {
-                            messages.push(msg);
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Convert grouped parts into messages
-        for (message_id, parts) in message_parts {
-            if let Some(first_part) = parts.first() {
-                if let Some(session) = sessions.get(&first_part.session_id) {
-                    // Convert timestamp from milliseconds to DateTime<Utc>
-                    let timestamp = DateTime::from_timestamp_millis(session.time.created as i64)
-                        .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
-                    
-                    // Combine text from all parts
-                    let content: String = parts.iter()
-                        .filter_map(|p| p.text.as_ref())
-                        .map(|s| s.as_str())
-                        .collect::<Vec<&str>>()
-                        .join("\n");
-                    
-                    // Determine role based on content and part types
-                    let role = if parts.iter().any(|p| p.part_type == "text" && !content.trim().is_empty()) {
-                        if content.starts_with("I'll") || content.starts_with("Let me") || content.contains("function") || content.contains("code") {
-                            "assistant"
-                        } else {
-                            "user"
-                        }
-                    } else {
-                        "assistant" // Default to assistant for non-text parts
-                    };
-                    
-                    let opencode_msg = OpenCodeMessage {
-                        id: message_id.clone(),
-                        session_id: first_part.session_id.clone(),
-                        timestamp,
-                        role: role.to_string(),
-                        content,
-                        parts,
-                    };
-                    
-                    // Convert to our internal format
-                    if let Some(msg) = self.convert_opencode_message(opencode_msg, &session.directory) {
+                    // Note: We don't read part files for content since message files have all the stats we need
+                    if let Some(msg) = self.convert_opencode_message_data(opencode_msg, &session_dir) {
                         // Deduplicate by global hash
                         if seen_hashes.insert(msg.global_hash.clone()) {
                             messages.push(msg);
@@ -404,7 +306,6 @@ impl OpenCodeAnalyzer {
         &self,
         msg: OpenCodeMessageData,
         project_path: &str,
-        content: String,
     ) -> Option<ConversationMessage> {
         // Convert role
         let role = match msg.role.to_lowercase().as_str() {
@@ -419,14 +320,12 @@ impl OpenCodeAnalyzer {
         let local_hash = Some(hash_text(&format!("{}-{}", msg.id, msg.time.created)));
         let global_hash = hash_text(&format!("opencode-{}-{}", msg.id, msg.time.created));
 
-        // Extract model information - ACTUAL MODEL DETECTION
+        // Extract model information - FIXED: read from correct field
         let model = msg.model_id.clone()
             .or_else(|| msg.model.as_ref().map(|m| m.model_id.clone()))
-            .or_else(|| Some("opencode-zen".to_string())); // fallback
+            .or(Some("opencode-zen".to_string())); // fallback
         
-
-
-        // Convert stats - use actual token counts if available
+        // Convert stats - FIXED: properly read token counts from message
         let mut stats = Stats::default();
         
         if let Some(tokens) = msg.tokens {
@@ -441,7 +340,7 @@ impl OpenCodeAnalyzer {
         }
         
         // Count tool calls based on finish type
-        if let Some(finish) = msg.finish {
+        if let Some(finish) = &msg.finish {
             if finish == "tool-calls" {
                 stats.tool_calls = 1;
             }
@@ -450,10 +349,13 @@ impl OpenCodeAnalyzer {
         // Calculate cost using actual model pricing
         stats.cost = msg.cost.unwrap_or(0) as f64 / 1000000.0; // Convert from micro-units if present
 
+        // FIXED: Use actual message timestamp (milliseconds since epoch)
+        let timestamp = DateTime::from_timestamp_millis(msg.time.created as i64)
+            .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+
         Some(ConversationMessage {
             application: Application::OpenCode,
-            date: DateTime::from_timestamp_millis(msg.time.created as i64)
-                .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap()),
+            date: timestamp,
             project_hash,
             conversation_hash,
             local_hash,
@@ -461,99 +363,10 @@ impl OpenCodeAnalyzer {
             model,
             stats,
             role,
-            content: Some(content),
+            content: None, // We don't need content for stats dashboard
         })
     }
 
-    fn convert_opencode_message(
-        &self,
-        msg: OpenCodeMessage,
-        project_path: &str,
-    ) -> Option<ConversationMessage> {
-        // Convert role
-        let role = match msg.role.to_lowercase().as_str() {
-            "user" => MessageRole::User,
-            "assistant" | "ai" => MessageRole::Assistant,
-            _ => return None, // Skip unknown roles
-        };
-
-        // Generate hashes
-        let project_hash = hash_text(project_path);
-        let conversation_hash = hash_text(&msg.session_id);
-        let local_hash = Some(hash_text(&format!("{}-{}", msg.id, msg.timestamp)));
-        let global_hash = hash_text(&format!("opencode-{}-{}", msg.id, msg.timestamp));
-
-        // Convert stats - OpenCode doesn't provide token counts, so we estimate
-        let mut stats = Stats::default();
-        
-        // Estimate tokens from content length (rough approximation: 1 token ≈ 4 characters)
-        let content_length = msg.content.len() as u64;
-        if role == MessageRole::User {
-            stats.input_tokens = content_length / 4;
-        } else {
-            stats.output_tokens = content_length / 4;
-        }
-        
-        // Count reasoning parts
-        let reasoning_parts = msg.parts.iter().filter(|p| p.part_type == "reasoning").count() as u64;
-        stats.reasoning_tokens = reasoning_parts * 50; // Rough estimate
-        
-        // Count tool calls based on part types
-        let tool_parts = msg.parts.iter().filter(|p| 
-            p.part_type == "step-start" || 
-            p.part_type == "tool-use" || 
-            p.part_type == "tool-result"
-        ).count() as u32;
-        stats.tool_calls = tool_parts;
-        
-        // Estimate file operations from content analysis
-        if msg.content.to_lowercase().contains("read") || msg.content.to_lowercase().contains("open") {
-            stats.files_read += 1;
-        }
-        if msg.content.to_lowercase().contains("write") || msg.content.to_lowercase().contains("create") {
-            stats.files_added += 1;
-        }
-        if msg.content.to_lowercase().contains("edit") || msg.content.to_lowercase().contains("modify") {
-            stats.files_edited += 1;
-        }
-        if msg.content.to_lowercase().contains("delete") || msg.content.to_lowercase().contains("remove") {
-            stats.files_deleted += 1;
-        }
-        
-        // Estimate terminal commands
-        if msg.content.to_lowercase().contains("cargo") || 
-           msg.content.to_lowercase().contains("npm") || 
-           msg.content.to_lowercase().contains("git") ||
-           msg.content.to_lowercase().contains("ls") ||
-           msg.content.to_lowercase().contains("cd") {
-            stats.terminal_commands += 1;
-        }
-        
-        // Estimate searches
-        if msg.content.to_lowercase().contains("search") || 
-           msg.content.to_lowercase().contains("find") ||
-           msg.content.to_lowercase().contains("grep") {
-            stats.file_searches += 1;
-        }
-
-        // Calculate cost using model pricing - OpenCode uses various models
-        // Default to opencode-zen (free model) for now
-        let model = Some("opencode-zen".to_string());
-        stats.cost = 0.0; // OpenCode's zen model is free
-
-        Some(ConversationMessage {
-            application: Application::OpenCode,
-            date: msg.timestamp,
-            project_hash,
-            conversation_hash,
-            local_hash,
-            global_hash,
-            model,
-            stats,
-            role,
-            content: Some(msg.content),
-        })
-    }
 }
 
 #[cfg(test)]
