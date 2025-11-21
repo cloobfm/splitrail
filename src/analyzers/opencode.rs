@@ -209,12 +209,24 @@ impl Analyzer for OpenCodeAnalyzer {
             }
         }
         
+
+        
         // Load session metadata
         let mut sessions = std::collections::HashMap::new();
         for session_file in session_files {
             if let Ok(content) = std::fs::read_to_string(&session_file.path) {
                 if let Ok(session) = serde_json::from_str::<OpenCodeSession>(&content) {
                     sessions.insert(session.id.clone(), session);
+                }
+            }
+        }
+        
+        // Group parts by message FIRST (needed for message file processing)
+        let mut message_parts: std::collections::HashMap<String, Vec<OpenCodePart>> = std::collections::HashMap::new();
+        for part_file in part_files {
+            if let Ok(content) = std::fs::read_to_string(&part_file.path) {
+                if let Ok(part) = serde_json::from_str::<OpenCodePart>(&content) {
+                    message_parts.entry(part.message_id.clone()).or_default().push(part);
                 }
             }
         }
@@ -228,23 +240,26 @@ impl Analyzer for OpenCodeAnalyzer {
                         .map(|s| s.directory.clone())
                         .unwrap_or_else(|| "unknown".to_string());
                     
+                    // Find corresponding parts to get content
+                    let message_parts_for_msg: Vec<&OpenCodePart> = message_parts
+                        .get(&opencode_msg.id)
+                        .map(|parts| parts.iter().collect())
+                        .unwrap_or_default();
+                    
+                    // Combine text from all parts
+                    let combined_content: String = message_parts_for_msg.iter()
+                        .filter_map(|p| p.text.as_ref())
+                        .map(|s| s.as_str())
+                        .collect::<Vec<&str>>()
+                        .join("\n");
+                    
                     // Convert to our internal format
-                    if let Some(msg) = self.convert_opencode_message_data(opencode_msg, &session_dir) {
+                    if let Some(msg) = self.convert_opencode_message_data(opencode_msg, &session_dir, combined_content) {
                         // Deduplicate by global hash
                         if seen_hashes.insert(msg.global_hash.clone()) {
                             messages.push(msg);
                         }
                     }
-                }
-            }
-        }
-        
-        // Group parts by message
-        let mut message_parts: std::collections::HashMap<String, Vec<OpenCodePart>> = std::collections::HashMap::new();
-        for part_file in part_files {
-            if let Ok(content) = std::fs::read_to_string(&part_file.path) {
-                if let Ok(part) = serde_json::from_str::<OpenCodePart>(&content) {
-                    message_parts.entry(part.message_id.clone()).or_default().push(part);
                 }
             }
         }
@@ -389,6 +404,7 @@ impl OpenCodeAnalyzer {
         &self,
         msg: OpenCodeMessageData,
         project_path: &str,
+        content: String,
     ) -> Option<ConversationMessage> {
         // Convert role
         let role = match msg.role.to_lowercase().as_str() {
@@ -407,6 +423,8 @@ impl OpenCodeAnalyzer {
         let model = msg.model_id.clone()
             .or_else(|| msg.model.as_ref().map(|m| m.model_id.clone()))
             .or_else(|| Some("opencode-zen".to_string())); // fallback
+        
+
 
         // Convert stats - use actual token counts if available
         let mut stats = Stats::default();
@@ -443,7 +461,7 @@ impl OpenCodeAnalyzer {
             model,
             stats,
             role,
-            content: None, // Message files don't have content field
+            content: Some(content),
         })
     }
 
