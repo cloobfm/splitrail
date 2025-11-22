@@ -673,37 +673,6 @@ pub fn draw_summary_view(
             }
             Row::new(cells)
         },
-        // Streak row
-        {
-            let mut cells = vec![Cell::new(
-                Line::from("🔥 Streak").style(Style::default().fg(Color::Red)),
-            )];
-            for &idx in visible_indices {
-                let analyzer_stats = &filtered_stats[idx];
-
-                // Count days in the last 30 days that have data
-                let now = chrono::Local::now().date_naive();
-                let thirty_days_ago = now - chrono::Duration::days(30);
-
-                let days_with_data = analyzer_stats
-                    .daily_stats
-                    .iter()
-                    .filter(|(date_str, _)| {
-                        if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                            date >= thirty_days_ago && date <= now
-                        } else {
-                            false
-                        }
-                    })
-                    .count();
-
-                cells.push(Cell::new(
-                    Line::from(format!("{}", days_with_data))
-                        .right_aligned(),
-                ));
-            }
-            Row::new(cells)
-        },
         // Status row
         {
             let mut cells = vec![Cell::new(
