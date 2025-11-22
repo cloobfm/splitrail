@@ -1,15 +1,18 @@
 use crate::types::{AgenticCodingToolStats, Application};
-use crate::utils::{calculate_overall_health, format_number, format_timestamp_for_live_view, get_health_color, get_health_status, get_warnings, NumberFormatOptions};
+use crate::utils::{
+    NumberFormatOptions, calculate_overall_health, format_number, format_timestamp_for_live_view,
+    get_health_color, get_health_status, get_warnings,
+};
 use chrono::Duration as ChronoDuration;
+use crossterm::style::{Print, ResetColor, SetForegroundColor};
+use crossterm::{ExecutableCommand, execute};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs};
-use ratatui::{Frame};
 use std::collections::HashMap;
-use std::io::{stdout, Write};
-use crossterm::{ExecutableCommand, execute};
-use crossterm::style::{Print, ResetColor, SetForegroundColor};
+use std::io::{Write, stdout};
 
 #[derive(Default, Clone)]
 pub struct AggregatedStats {
@@ -31,8 +34,48 @@ pub struct SummaryData {
     pub selected_day_stats: AggregatedStats,
     pub selected_day_offset: usize,
     pub active_clis: usize,
-    // Cache sparklines to avoid expensive recalculation on every redraw
+    // Cached sparklines and ring buffers to avoid expensive recalculation on every redraw
     pub sparkline_cache: HashMap<String, Vec<Span<'static>>>,
+    pub sparkline_max_cache: HashMap<String, u64>,
+    pub sparkline_buffers: HashMap<String, SparklineState>,
+}
+
+pub fn build_activity_sparkline_cache(
+    filtered_stats: &[&AgenticCodingToolStats],
+    render_time: chrono::DateTime<chrono::Utc>,
+) -> (
+    HashMap<String, Vec<Span<'static>>>,
+    HashMap<String, u64>,
+    HashMap<String, SparklineState>,
+) {
+    build_activity_sparkline_cache_with_prev(filtered_stats, render_time, None, None)
+}
+
+pub fn build_activity_sparkline_cache_with_prev(
+    filtered_stats: &[&AgenticCodingToolStats],
+    render_time: chrono::DateTime<chrono::Utc>,
+    prev_max: Option<&HashMap<String, u64>>,
+    prev_buffers: Option<&HashMap<String, SparklineState>>,
+) -> (
+    HashMap<String, Vec<Span<'static>>>,
+    HashMap<String, u64>,
+    HashMap<String, SparklineState>,
+) {
+    let mut sparkline_cache = HashMap::new();
+    let mut max_cache = HashMap::new();
+    let mut buffer_cache = HashMap::new();
+    for stats in filtered_stats {
+        let prev = prev_max.and_then(|m| m.get(&stats.analyzer_name)).copied();
+        let prev_buf = prev_buffers
+            .and_then(|m| m.get(&stats.analyzer_name))
+            .cloned();
+        let (sparkline, stable_max, state) =
+            create_activity_sparkline_with_prev(stats, render_time, prev, prev_buf);
+        sparkline_cache.insert(stats.analyzer_name.clone(), sparkline);
+        max_cache.insert(stats.analyzer_name.clone(), stable_max);
+        buffer_cache.insert(stats.analyzer_name.clone(), state);
+    }
+    (sparkline_cache, max_cache, buffer_cache)
 }
 
 impl AggregatedStats {
@@ -89,13 +132,10 @@ pub fn calculate_summary_data(
     }
 
     // Pre-calculate sparklines for all CLIs to cache them
-    let mut sparkline_cache = HashMap::new();
     let render_time = chrono::Utc::now();
-    for stats in filtered_stats {
-        let sparkline = create_activity_sparkline(stats, render_time);
-        sparkline_cache.insert(stats.analyzer_name.clone(), sparkline);
-    }
-    
+    let (sparkline_cache, sparkline_max_cache, sparkline_buffers) =
+        build_activity_sparkline_cache(filtered_stats, render_time);
+
     SummaryData {
         today_stats,
         yesterday_stats,
@@ -105,6 +145,8 @@ pub fn calculate_summary_data(
         selected_day_offset: day_offset,
         active_clis: filtered_stats.len(),
         sparkline_cache,
+        sparkline_max_cache,
+        sparkline_buffers,
     }
 }
 
@@ -119,7 +161,9 @@ pub fn draw_summary_view(
     render_time_system: std::time::SystemTime,
 ) {
     // Load config for health display style
-    let config = crate::config::Config::load().unwrap_or(None).unwrap_or_default();
+    let config = crate::config::Config::load()
+        .unwrap_or(None)
+        .unwrap_or_default();
     let use_braille = config.formatting.health_display_style == "braille";
     let SummaryData {
         today_stats,
@@ -129,7 +173,9 @@ pub fn draw_summary_view(
         selected_day_stats: _,
         selected_day_offset,
         active_clis,
-        sparkline_cache: _,  // Accessed directly from summary_data below
+        sparkline_cache: _,     // Accessed directly from summary_data below
+        sparkline_max_cache: _, // Accessed directly from summary_data below
+        sparkline_buffers: _,   // Accessed directly from summary_data below
     } = summary_data;
 
     // Split area into parts: spacing + overview table + spacing + CLI breakdown table + visual panels
@@ -146,7 +192,6 @@ pub fn draw_summary_view(
     // Store the rects for mouse handling
     tui_state.layout.today_by_cli_rect = Some(chunks[3]);
     tui_state.layout.live_activity_rect = Some(chunks[5]);
-
 
     // Create table rows
     let header = Row::new(vec![
@@ -337,7 +382,7 @@ pub fn draw_summary_view(
     )> = Vec::new();
     let mut cli_meta: Vec<(i64, u8)> = Vec::new();
     for analyzer_stats in filtered_stats {
-        let now_utc = render_time_utc;  // Use cached time instead of syscall
+        let now_utc = render_time_utc; // Use cached time instead of syscall
         let mut cached = 0u64;
         let mut input = 0u64;
         let mut output = 0u64;
@@ -533,8 +578,7 @@ pub fn draw_summary_view(
                     .count();
 
                 cells.push(Cell::new(
-                    Line::from(format!("{}", days_with_data))
-                        .right_aligned(),
+                    Line::from(format!("{}", days_with_data)).right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -633,12 +677,25 @@ pub fn draw_summary_view(
             )];
             for &idx in visible_indices {
                 let analyzer_stats = &filtered_stats[idx];
-                let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+                let today = chrono::Local::now()
+                    .date_naive()
+                    .format("%Y-%m-%d")
+                    .to_string();
 
                 // Calculate health for this specific CLI
-                let cli_messages: Vec<_> = analyzer_stats.messages.iter().filter(|msg| {
-                    msg.date.with_timezone(&chrono::Local).date_naive().format("%Y-%m-%d").to_string() == today
-                }).cloned().collect();
+                let cli_messages: Vec<_> = analyzer_stats
+                    .messages
+                    .iter()
+                    .filter(|msg| {
+                        msg.date
+                            .with_timezone(&chrono::Local)
+                            .date_naive()
+                            .format("%Y-%m-%d")
+                            .to_string()
+                            == today
+                    })
+                    .cloned()
+                    .collect();
 
                 let health = if cli_messages.is_empty() {
                     1.0 // No usage today = full health
@@ -649,9 +706,7 @@ pub fn draw_summary_view(
                 if use_braille {
                     // Create horizontal health bar (13 characters wide to fill the full column)
                     let braille_spans = create_braille_health_bar(health, 13);
-                    cells.push(Cell::new(
-                        Line::from(braille_spans).right_aligned(),
-                    ));
+                    cells.push(Cell::new(Line::from(braille_spans).right_aligned()));
                 } else {
                     // Text display
                     let health_percent = (health * 100.0) as u32;
@@ -696,9 +751,7 @@ pub fn draw_summary_view(
         let formatted_date = selected_date_with_tz.format("%B %d, %Y").to_string(); // November 15, 2025
         format!(
             "📊 {} ({}, {} days ago)",
-            weekday,
-            formatted_date,
-            selected_day_offset,
+            weekday, formatted_date, selected_day_offset,
         )
     };
 
@@ -724,7 +777,7 @@ pub fn draw_summary_view(
         tui_state,
         render_time_utc,
         render_time_system,
-        summary_data,  // Pass summary_data to access sparkline cache
+        summary_data, // Pass summary_data to access sparkline cache
     );
 }
 
@@ -784,7 +837,7 @@ pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>
     // Braille characters for partial filling (right-to-left within character)
     // These fill from right side first, so bar depletes from left
     let partial_chars = [
-        ' ',  // 0 dots
+        ' ', // 0 dots
         '⢀', // 1 dot (top-right)
         '⢠', // 2 dots (top-right + middle-right)
         '⢰', // 3 dots (top-right + middle-right + bottom-right)
@@ -832,42 +885,89 @@ pub fn create_activity_sparkline(
     stats: &AgenticCodingToolStats,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<Span<'static>> {
+    create_activity_sparkline_with_prev(stats, now, None, None).0
+}
 
+#[derive(Clone)]
+pub struct SparklineState {
+    pub buckets: Vec<u64>, // fixed-length ring buffer (120 slots)
+    pub last_slot_start: chrono::DateTime<chrono::Utc>,
+}
+
+pub fn create_activity_sparkline_with_prev(
+    stats: &AgenticCodingToolStats,
+    now: chrono::DateTime<chrono::Utc>,
+    prev_max: Option<u64>,
+    prev_state: Option<SparklineState>,
+) -> (Vec<Span<'static>>, u64, SparklineState) {
     // Create 120 buckets (30-second intervals for last hour)
-    let mut buckets = vec![0u64; 120];
+    let mut state = if let Some(mut prev) = prev_state {
+        // Align the buffer forward based on elapsed time since last_slot_start
+        let slot_len = chrono::Duration::seconds(30);
+        let mut slots_to_advance =
+            ((now - prev.last_slot_start).num_seconds() / 30).max(0) as usize;
+        if slots_to_advance > 0 {
+            slots_to_advance = slots_to_advance.min(120);
+            prev.buckets.rotate_left(slots_to_advance);
+            for b in prev.buckets.iter_mut().rev().take(slots_to_advance) {
+                *b = 0;
+            }
+            prev.last_slot_start = prev.last_slot_start + slot_len * (slots_to_advance as i32);
+        }
+        prev
+    } else {
+        SparklineState {
+            buckets: vec![0u64; 120],
+            last_slot_start: now - chrono::Duration::seconds(30 * 120), // align in the past
+        }
+    };
 
+    // Clear buckets before rebuilding from current window to avoid double-counting
+    for b in state.buckets.iter_mut() {
+        *b = 0;
+    }
+
+    // Only add messages that fall into the currently covered window
+    let window_start = now - chrono::Duration::seconds(30 * 120);
     for msg in &stats.messages {
-        let age = now.signed_duration_since(msg.date);
-        if age.num_seconds() < 3600 && age.num_seconds() >= 0 {
-            let bucket_idx = (age.num_seconds() / 30) as usize; // 30 sec intervals
-            if bucket_idx < 120 {
-                let total_tokens = msg.stats.input_tokens
-                    + msg.stats.output_tokens
-                    + msg.stats.reasoning_tokens;
-
-                if total_tokens > 0 {
-                    buckets[119 - bucket_idx] += total_tokens;
-                } else {
-                    // If there are no tokens, still count it as a message event
-                    buckets[119 - bucket_idx] += 1;
-                }
+        if msg.date < window_start || msg.date > now {
+            continue;
+        }
+        let age_secs = now.signed_duration_since(msg.date).num_seconds().max(0);
+        let bucket_idx = (age_secs / 30) as usize;
+        if bucket_idx < 120 {
+            let total_tokens =
+                msg.stats.input_tokens + msg.stats.output_tokens + msg.stats.reasoning_tokens;
+            let target_idx = state
+                .buckets
+                .len()
+                .saturating_sub(1)
+                .saturating_sub(bucket_idx);
+            if total_tokens > 0 {
+                state.buckets[target_idx] += total_tokens;
+            } else {
+                state.buckets[target_idx] += 1;
             }
         }
     }
 
-    // Find max for scaling
-    let max = *buckets.iter().max().unwrap_or(&1).max(&1);
+    // Find max for scaling. Freeze scale once established so older bars never rescale.
+    // New peaks will simply hit the ceiling rather than shrinking prior bars.
+    let raw_max = *state.buckets.iter().max().unwrap_or(&1).max(&1);
+    let stable_max = prev_max.unwrap_or(raw_max).max(1);
 
-    // Create sparkline with tiny dots like btop (truncate to 80 most recent)
+    // Create sparkline with braille ramps (truncate to 80 most recent)
     let chars = [' ', '⡀', '⡄', '⡆', '⡇', '⣇', '⣧', '⣷', '⣿'];
-    buckets
+    let spans = state
+        .buckets
         .iter()
-        .skip(buckets.len().saturating_sub(80)) // Show the most recent 80 buckets (40 minutes)
+        .skip(state.buckets.len().saturating_sub(80)) // Show the most recent 80 buckets (40 minutes)
         .map(|&count| {
             if count == 0 {
                 Span::raw(" ")
             } else {
-                let ratio = count as f64 / max as f64;
+                let capped = count.min(stable_max);
+                let ratio = capped as f64 / stable_max as f64;
                 let idx = (ratio * (chars.len() - 1) as f64) as usize;
                 let ch = chars[idx.min(chars.len() - 1)];
 
@@ -883,7 +983,9 @@ pub fn create_activity_sparkline(
                 Span::styled(ch.to_string(), Style::default().fg(color))
             }
         })
-        .collect()
+        .collect();
+
+    (spans, stable_max, state)
 }
 
 // Helper function to get the current username
@@ -963,9 +1065,11 @@ pub fn get_last_message_preview(
     // Convert to the expected format
     let message_lines: Vec<_> = messages_with_content
         .into_iter()
-        .map(|(date, role, role_name, content, project_hash, application)| {
-            (date, role, role_name, content, project_hash, application)
-        })
+        .map(
+            |(date, role, role_name, content, project_hash, application)| {
+                (date, role, role_name, content, project_hash, application)
+            },
+        )
         .collect();
 
     // Get the role of the last message for status display
@@ -1003,7 +1107,7 @@ pub fn draw_visual_cli_panels(
     tui_state: &mut crate::tui::TuiState,
     render_time_utc: chrono::DateTime<chrono::Utc>,
     render_time_system: std::time::SystemTime,
-    summary_data: &SummaryData,  // Access to sparkline cache
+    summary_data: &SummaryData, // Access to sparkline cache
 ) {
     if filtered_stats.is_empty() {
         return;
@@ -1072,10 +1176,21 @@ pub fn draw_visual_cli_panels(
 
         // Line 1: CLI name, state, activity sparkline
         // Use cached sparkline instead of recalculating every second
-        let sparkline = summary_data.sparkline_cache
+        let sparkline = summary_data
+            .sparkline_cache
             .get(&stats.analyzer_name)
             .cloned()
-            .unwrap_or_else(|| create_activity_sparkline(stats, render_time_utc));
+            .unwrap_or_else(|| {
+                let prev = summary_data
+                    .sparkline_max_cache
+                    .get(&stats.analyzer_name)
+                    .copied();
+                let prev_state = summary_data
+                    .sparkline_buffers
+                    .get(&stats.analyzer_name)
+                    .cloned();
+                create_activity_sparkline_with_prev(stats, render_time_utc, prev, prev_state).0
+            });
         let (_last_role, message_lines) = get_last_message_preview(stats, 50);
 
         let name_color = match state.as_str() {
@@ -1088,7 +1203,7 @@ pub fn draw_visual_cli_panels(
 
         // Build the line with colored sparkline spans
         let mut line_spans = vec![];
-        
+
         // In verbose mode, show model name next to CLI name
         if tui_state.summary_verbose_mode {
             // Find the most commonly used model for this CLI
@@ -1104,7 +1219,7 @@ pub fn draw_visual_cli_panels(
                 .max_by_key(|(_, count)| *count)
                 .map(|(model, _)| model)
                 .unwrap_or_else(|| String::from("—"));
-            
+
             // Scrolling animation for long model names
             let model_display = if most_used_model.len() > 15 {
                 // Use time-based scrolling animation with cached time
@@ -1112,18 +1227,20 @@ pub fn draw_visual_cli_panels(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64;
-                
+
                 // Scroll position updates every 0.3 seconds, wrapping around
                 let max_width = 15;
                 let scroll_speed = 1; // characters per interval
                 let scroll_interval_millis = 300; // milliseconds per scroll step
-                
-                let scroll_position = ((now_millis / scroll_interval_millis) * scroll_speed) as usize % (most_used_model.len() + 3);
-                
+
+                let scroll_position = ((now_millis / scroll_interval_millis) * scroll_speed)
+                    as usize
+                    % (most_used_model.len() + 3);
+
                 // Create scrolling window with padding
                 let padded_text = format!("{}   {}", most_used_model, most_used_model); // Add spacing and repeat
                 let chars: Vec<char> = padded_text.chars().collect();
-                
+
                 // Extract visible window
                 let visible: String = chars
                     .iter()
@@ -1131,12 +1248,12 @@ pub fn draw_visual_cli_panels(
                     .skip(scroll_position)
                     .take(max_width)
                     .collect();
-                
+
                 visible
             } else {
                 most_used_model.clone()
             };
-            
+
             line_spans.push(Span::styled(
                 format!("{:12}", cli_name),
                 Style::default().fg(name_color).bold(),
@@ -1157,7 +1274,7 @@ pub fn draw_visual_cli_panels(
             ));
             line_spans.push(Span::raw(" "));
         }
-        
+
         line_spans.extend(sparkline);
         line_spans.extend(vec![
             Span::raw("   "),
@@ -1209,11 +1326,15 @@ pub fn draw_visual_cli_panels(
                     crate::utils::truncate_project_label(project_hash, 8)
                 };
 
-                let is_changed = last_project_hash_displayed.as_ref().map_or(false, |last| last != project_hash);
+                let is_changed = last_project_hash_displayed
+                    .as_ref()
+                    .map_or(false, |last| last != project_hash);
                 last_project_hash_displayed = Some(project_hash.clone());
 
                 let project_style = if is_changed {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) // Highlight color
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD) // Highlight color
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
@@ -1223,10 +1344,7 @@ pub fn draw_visual_cli_panels(
             };
 
             let timestamp_str = if tui_state.summary_verbose_mode {
-                format!(
-                    "{} ",
-                    format_timestamp_for_live_view(timestamp)
-                )
+                format!("{} ", format_timestamp_for_live_view(timestamp))
             } else {
                 String::new()
             };

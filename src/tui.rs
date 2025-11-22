@@ -1,6 +1,7 @@
-use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats, Application};
+use crate::types::{AgenticCodingToolStats, Application, MultiAnalyzerStats};
 use crate::utils::{
-    clear_old_warnings, format_date_for_display, format_number, format_timestamp_for_live_view, NumberFormatOptions,
+    NumberFormatOptions, clear_old_warnings, format_date_for_display, format_number,
+    format_timestamp_for_live_view,
 };
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::Result;
@@ -8,10 +9,7 @@ use chrono::Duration as ChronoDuration;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
-    EnterAlternateScreen,
-    LeaveAlternateScreen,
-    disable_raw_mode,
-    enable_raw_mode,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{ExecutableCommand, execute};
 use ratatui::backend::CrosstermBackend;
@@ -20,10 +18,10 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs};
 use ratatui::{Frame, Terminal};
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 
 // Import the summary dashboard module
@@ -66,17 +64,12 @@ pub enum UploadStatus {
 
 fn has_data(stats: &AgenticCodingToolStats) -> bool {
     stats.num_conversations > 0
-        ||
-        stats.daily_stats.values().any(|day| {
+        || stats.daily_stats.values().any(|day| {
             day.stats.cost > 0.0
-                ||
-                day.stats.input_tokens > 0
-                ||
-                day.stats.output_tokens > 0
-                ||
-                day.stats.reasoning_tokens > 0
-                ||
-                day.stats.tool_calls > 0
+                || day.stats.input_tokens > 0
+                || day.stats.output_tokens > 0
+                || day.stats.reasoning_tokens > 0
+                || day.stats.tool_calls > 0
         })
 }
 
@@ -159,6 +152,8 @@ async fn run_app(
 
     // Rate limit warning cleanup to once per minute
     let mut last_warning_cleanup = std::time::Instant::now();
+    let mut last_sparkline_refresh = Instant::now();
+    let mut last_clock_tick = Instant::now();
 
     loop {
         // Check for stats updates
@@ -180,6 +175,7 @@ async fn run_app(
                 &filtered_stats,
                 tui_state.summary_day_offset,
             ));
+            last_sparkline_refresh = Instant::now();
             needs_redraw = true;
         }
 
@@ -203,7 +199,8 @@ async fn run_app(
                 current: _,
                 total: _,
                 dots,
-            } = &mut *status {
+            } = &mut *status
+            {
                 // Always animate dots during upload
                 dots_counter += 1;
                 if dots_counter >= 5 {
@@ -228,12 +225,29 @@ async fn run_app(
             last_warning_cleanup = std::time::Instant::now();
         }
 
+        // Periodically refresh sparkline cache so sliding windows stay up to date without heavy recompute
+        if last_sparkline_refresh.elapsed() >= Duration::from_secs(5) {
+            if let Some(summary) = cached_summary_data.as_mut() {
+                let (cache, max_cache, buffers) = build_activity_sparkline_cache_with_prev(
+                    &filtered_stats,
+                    chrono::Utc::now(),
+                    Some(&summary.sparkline_max_cache),
+                    Some(&summary.sparkline_buffers),
+                );
+                summary.sparkline_cache = cache;
+                summary.sparkline_max_cache = max_cache;
+                summary.sparkline_buffers = buffers;
+                needs_redraw = true;
+            }
+            last_sparkline_refresh = Instant::now();
+        }
+
         // Only redraw if something has changed
         if needs_redraw {
             // Cache time values ONCE for the entire render cycle to avoid syscall spam
             let render_time_utc = chrono::Utc::now();
             let render_time_system = SystemTime::now();
-            
+
             terminal.draw(|frame| {
                 draw_ui(
                     frame,
@@ -250,7 +264,13 @@ async fn run_app(
             needs_redraw = false;
         }
 
-        // Use a timeout to allow periodic refreshes for upload status updates  
+        // Force a redraw every second so the clock (and any other time-based UI) stays fresh
+        if last_clock_tick.elapsed() >= Duration::from_secs(1) {
+            needs_redraw = true;
+            last_clock_tick = Instant::now();
+        }
+
+        // Use a timeout to allow periodic refreshes for upload status updates
         // 250ms poll interval reduces CPU by reducing loop iterations (still responsive)
         if let Ok(event_available) = event::poll(Duration::from_millis(250)) {
             if !event_available {
@@ -465,7 +485,8 @@ async fn run_app(
                             if tui_state.selected_tab > 0
                                 && tui_state.selected_tab <= filtered_stats.len()
                             {
-                                tui_state.daily_stats_view_start = tui_state.daily_stats_view_start.saturating_add(30);
+                                tui_state.daily_stats_view_start =
+                                    tui_state.daily_stats_view_start.saturating_add(30);
                                 needs_redraw = true;
                             }
                         }
@@ -474,7 +495,8 @@ async fn run_app(
                             if tui_state.selected_tab > 0
                                 && tui_state.selected_tab <= filtered_stats.len()
                             {
-                                tui_state.daily_stats_view_start = tui_state.daily_stats_view_start.saturating_sub(30);
+                                tui_state.daily_stats_view_start =
+                                    tui_state.daily_stats_view_start.saturating_sub(30);
                                 needs_redraw = true;
                             }
                         }
@@ -504,8 +526,7 @@ async fn run_app(
                                         tui_state.cli_scroll_offset -= 1;
                                         needs_redraw = true;
                                     }
-                                }
-                                else if mouse_y >= today_by_cli_rect.y
+                                } else if mouse_y >= today_by_cli_rect.y
                                     && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height
                                 {
                                     if tui_state.cli_table_scroll_offset > 0 {
@@ -524,8 +545,7 @@ async fn run_app(
                                         tui_state.cli_scroll_offset += 1;
                                         needs_redraw = true;
                                     }
-                                }
-                                else if mouse_y >= today_by_cli_rect.y
+                                } else if mouse_y >= today_by_cli_rect.y
                                     && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height
                                 {
                                     // Arbitrary limit, can be improved
@@ -579,17 +599,17 @@ fn draw_ui(
         // For Summary view (tui_state.selected_tab == 0), give more space to main table since no totals shown
         let summary_stats_height = if tui_state.selected_tab == 0 { 0 } else { 9 };
         Layout::vertical([
-            Constraint::Length(3), // Header
-            Constraint::Length(1), // Tabs
-            Constraint::Min(3), // Main table
-            Constraint::Length(summary_stats_height), // Summary stats (0 for Summary tab)
+            Constraint::Length(3),                             // Header
+            Constraint::Length(1),                             // Tabs
+            Constraint::Min(3),                                // Main table
+            Constraint::Length(summary_stats_height),          // Summary stats (0 for Summary tab)
             Constraint::Length(if has_error { 3 } else { 1 }), // Help text
         ])
         .split(frame.area())
     } else {
         Layout::vertical([
             Constraint::Length(3), // Header
-            Constraint::Min(3), // No-data message
+            Constraint::Min(3),    // No-data message
             Constraint::Length(1), // Help text
         ])
         .split(frame.area())
@@ -598,14 +618,8 @@ fn draw_ui(
     // Header
     let version = env!("CARGO_PKG_VERSION");
     let header = Paragraph::new(Text::from(vec![
-        Line::styled(
-            version,
-            Style::new().cyan().bold(),
-        ),
-        Line::styled(
-            "=".repeat(version.len()),
-            Style::new().cyan().bold(),
-        ),
+        Line::styled(version, Style::new().cyan().bold()),
+        Line::styled("=".repeat(version.len()), Style::new().cyan().bold()),
     ]));
     frame.render_widget(header, chunks[0]);
 
@@ -615,8 +629,7 @@ fn draw_ui(
         tab_titles.extend(filtered_stats.iter().map(|stats| {
             Line::from(format!(
                 " {} ({}) ",
-                stats.analyzer_name,
-                stats.num_conversations,
+                stats.analyzer_name, stats.num_conversations,
             ))
         }));
 
@@ -785,7 +798,7 @@ fn draw_daily_stats_table(
     stats: &AgenticCodingToolStats,
     format_options: &NumberFormatOptions,
     table_state: &mut TableState,
-    view_start_offset: usize,  // Pagination offset for viewing historical data
+    view_start_offset: usize, // Pagination offset for viewing historical data
 ) -> usize {
     // Convert BTreeMap to Vec and reverse to show most recent first
     let all_dates: Vec<(&String, &crate::types::DailyStats)> = stats.daily_stats.iter().collect();
@@ -1360,26 +1373,18 @@ fn draw_summary_stats(
         // Collect unique days across all tools that have actual data
         for (day, day_stats) in &stats.daily_stats {
             if day_stats.stats.cost > 0.0
-                ||
-                day_stats.stats.input_tokens > 0
-                ||
-                day_stats.stats.output_tokens > 0
-                ||
-                day_stats.stats.reasoning_tokens > 0
-                ||
-                day_stats.stats.cached_tokens > 0
-                ||
-                day_stats.stats.tool_calls > 0
-                ||
-                day_stats.ai_messages > 0
-                ||
-                day_stats.conversations > 0
+                || day_stats.stats.input_tokens > 0
+                || day_stats.stats.output_tokens > 0
+                || day_stats.stats.reasoning_tokens > 0
+                || day_stats.stats.cached_tokens > 0
+                || day_stats.stats.tool_calls > 0
+                || day_stats.ai_messages > 0
+                || day_stats.conversations > 0
             {
                 all_days.insert(day);
             }
         }
     }
-
 
     let mut summary_lines: Vec<Line> = Vec::new();
 
