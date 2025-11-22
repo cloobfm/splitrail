@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::analyzer::{Analyzer, DataSource};
+use crate::models::calculate_total_cost;
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
 use crate::utils::hash_text;
 
@@ -404,8 +405,16 @@ impl OpenCodeAnalyzer {
             }
         }
         
-        // Calculate cost using actual model pricing
-        stats.cost = msg.cost.unwrap_or(0) as f64 / 1000000.0; // Convert from micro-units if present
+        // Calculate cost using our pricing model (OpenCode stores cost=0 for free tier)
+        if let Some(ref model_name) = model {
+            stats.cost = calculate_total_cost(
+                model_name,
+                stats.input_tokens,
+                stats.output_tokens,
+                stats.cache_creation_tokens,
+                stats.cache_read_tokens,
+            );
+        }
 
         // FIXED: Use actual message timestamp (milliseconds since epoch)
         let timestamp = DateTime::from_timestamp_millis(msg.time.created as i64)
