@@ -675,10 +675,12 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
     },
     "big-pickle" => ModelInfo {
         pricing: PricingStructure::Flat {
-            input_per_1m: 0.0,  // Free during beta period
-            output_per_1m: 0.0, // Free during beta period
+            input_per_1m: 0.25,
+            output_per_1m: 1.00,
         },
-        caching: CachingSupport::None,
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.05,
+        },
     },
     "opencode-zen-pro" => ModelInfo {
         pricing: PricingStructure::Flat {
@@ -693,6 +695,15 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             output_per_1m: 0.0, // Currently free promotional tier
         },
         caching: CachingSupport::None,
+    },
+    "grok-code-fast-1" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.20,
+            output_per_1m: 1.50,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.02,
+        },
     },
     "grok-code-pro" => ModelInfo {
         pricing: PricingStructure::Flat {
@@ -870,7 +881,10 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "pickle" => "big-pickle",
     "grok" => "grok-code",
     "grok-free" => "grok-code",
+    "grok-code-fast-1" => "grok-code-fast-1",
+    "grok-fast" => "grok-code-fast-1",
     "xai-grok" => "grok-code",
+    "xai-grok-fast" => "grok-code-fast-1",
     "openrouter" => "openrouter-standard",
     "openrouter-free-tier" => "openrouter-free",
     "kimi" => "kimi-k2",
