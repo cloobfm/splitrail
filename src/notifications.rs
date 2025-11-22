@@ -217,46 +217,35 @@ fn find_waiting_conversations(
 }
 
 fn build_notification_text(alert: &WaitingAlert) -> String {
-    let detected_at = Local::now();
     let model = alert.model.as_deref().unwrap_or("unknown");
     let header = format!(
-        "🟡 Waiting for input in {} ({})",
+        "🟡 Waiting – {} ({}) | {} idle | {}",
         alert.analyzer_name,
-        format_application(&alert.application)
-    );
-    let meta = format!(
-        "Idle for {} | Model: {} | Project: {} | Conversation: {}",
+        format_application(&alert.application),
         format_duration(alert.idle_seconds),
-        model,
-        abbreviate(&alert.project_hash, 12),
-        abbreviate(&alert.conversation_hash, 12)
+        model
     );
-    let last_line = format!(
-        "Last assistant message at {} (local)",
-        format_timestamp(alert.last_message_time)
-    );
+    let meta = format!("Project {}", abbreviate(&alert.project_hash, 8));
 
-    let mut lines = vec![header, meta, last_line, "Recent messages:".to_string()];
+    let mut lines = vec![header, meta];
 
     for msg in &alert.recent_messages {
+        // Skip empty/blank content
         let role_label = match msg.role {
             MessageRole::User => "You",
             MessageRole::Assistant => alert.analyzer_name.as_str(),
         };
-        let content = msg
-            .content
-            .as_deref()
-            .map(clean_message)
-            .unwrap_or_else(|| "<no content captured>".to_string());
-        let trimmed = truncate_content(&content, 200);
+        let Some(content_raw) = msg.content.as_deref() else {
+            continue;
+        };
+        let cleaned = clean_message(content_raw);
+        if cleaned.is_empty() {
+            continue;
+        }
+        let trimmed = truncate_content(&cleaned, 120);
         let timestamp = format_timestamp(msg.date);
         lines.push(format!("- [{timestamp}] {role_label}: {trimmed}"));
     }
-
-    lines.push(format!(
-        "Detected at {} (local)",
-        detected_at.format("%Y-%m-%d %H:%M:%S")
-    ));
 
     lines.join("\n")
 }
