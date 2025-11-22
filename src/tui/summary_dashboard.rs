@@ -1272,7 +1272,7 @@ pub fn draw_visual_cli_panels(
 
     let now = chrono::Local::now();
     let clock_text = now.format("%H:%M:%S").to_string();
-    let title = format!("📊 Live: {}", clock_text);
+    let title = format!("📊 Activity: {}", clock_text);
 
     let paragraph = Paragraph::new(lines).block(
         Block::default()

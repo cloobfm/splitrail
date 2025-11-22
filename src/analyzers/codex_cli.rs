@@ -317,33 +317,33 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                                 .content
                                 .as_ref()
                                 .and_then(extract_text_from_message_content)
-                                .map(|text| text.trim().to_string())
-                                .filter(|text| !text.is_empty());
+                                .and_then(clean_codex_message_content);
 
-                            entries.push(ConversationMessage {
-                                date: wrapper.timestamp,
-                                global_hash: hash_text(&format!(
-                                    "{}_{}",
-                                    file_path_str,
-                                    wrapper.timestamp.to_rfc3339()
-                                )),
-                                local_hash: None,
-                                conversation_hash: hash_text(&file_path_str),
-                                application: Application::CodexCli,
-                                project_hash: project_label.clone().unwrap_or_default(),
-                                model: None,
-                                stats: Stats::default(),
-                                role: MessageRole::User,
-                                content,
-                            });
+                            if let Some(content) = content {
+                                entries.push(ConversationMessage {
+                                    date: wrapper.timestamp,
+                                    global_hash: hash_text(&format!(
+                                        "{}_{}",
+                                        file_path_str,
+                                        wrapper.timestamp.to_rfc3339()
+                                    )),
+                                    local_hash: None,
+                                    conversation_hash: hash_text(&file_path_str),
+                                    application: Application::CodexCli,
+                                    project_hash: project_label.clone().unwrap_or_default(),
+                                    model: None,
+                                    stats: Stats::default(),
+                                    role: MessageRole::User,
+                                    content: Some(content),
+                                });
+                            }
                         }
                         "assistant" => {
                             let content = message
                                 .content
                                 .as_ref()
                                 .and_then(extract_text_from_message_content)
-                                .map(|text| text.trim().to_string())
-                                .filter(|text| !text.is_empty());
+                                .and_then(clean_codex_message_content);
 
                             if let Some(content) = content {
                                 let model_state = session_model.clone().unwrap_or_else(|| {
@@ -571,6 +571,59 @@ fn normalize_model_name(raw: &str) -> Option<String> {
     }
 }
 
+fn remove_tagged_block(text: &str, tag: &str) -> String {
+    let start_tag = format!("<{tag}>");
+    let end_tag = format!("</{tag}>");
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    while let Some(start_idx) = remaining.find(&start_tag) {
+        let (before, after_start) = remaining.split_at(start_idx);
+        result.push_str(before);
+
+        if let Some(end_idx_rel) = after_start.find(&end_tag) {
+            let after_end = &after_start[end_idx_rel + end_tag.len()..];
+            remaining = after_end;
+        } else {
+            // No closing tag; discard the rest
+            remaining = "";
+            break;
+        }
+    }
+
+    result.push_str(remaining);
+    result
+}
+
+const CODEX_TAGS_TO_STRIP: &[&str] = &[
+    "environment_context",
+    "attachments",
+    "attachment",
+    "context",
+    "editorContext",
+    "repoContext",
+    "reminderInstructions",
+    "userRequest",
+];
+
+fn clean_codex_message_content(text: String) -> Option<String> {
+    let mut cleaned = text;
+    for tag in CODEX_TAGS_TO_STRIP {
+        cleaned = remove_tagged_block(&cleaned, tag);
+    }
+
+    while cleaned.contains("\n\n") {
+        cleaned = cleaned.replace("\n\n", "\n");
+    }
+
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
+    }
+}
+
 fn extract_text_from_message_content(value: &simd_json::OwnedValue) -> Option<String> {
     match value {
         simd_json::OwnedValue::String(s) => Some(s.clone()),
@@ -646,6 +699,10 @@ fn parse_codex_cli_history_file(path: &Path) -> Result<Vec<ConversationMessage>>
             continue;
         }
 
+        let Some(cleaned) = clean_codex_message_content(trimmed.to_string()) else {
+            continue;
+        };
+
         if rollout_exists_for_session(&entry.session_id) {
             continue;
         }
@@ -674,7 +731,7 @@ fn parse_codex_cli_history_file(path: &Path) -> Result<Vec<ConversationMessage>>
             model: None,
             stats: Stats::default(),
             role: MessageRole::User,
-            content: Some(trimmed.to_string()),
+            content: Some(cleaned),
         });
     }
 
@@ -690,4 +747,29 @@ fn rollout_exists_for_session(session_id: &str) -> bool {
             .and_then(|mut paths| paths.next())
             .is_some()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_environment_context_block() {
+        let raw = "User note\n<environment_context>\n  <cwd>/tmp/project</cwd>\n</environment_context>\nDo the thing";
+        let cleaned = clean_codex_message_content(raw.to_string()).unwrap();
+        assert_eq!(cleaned, "User note\nDo the thing");
+    }
+
+    #[test]
+    fn drops_message_that_is_only_environment_context() {
+        let raw = "<environment_context><cwd>/tmp</cwd></environment_context>";
+        assert!(clean_codex_message_content(raw.to_string()).is_none());
+    }
+
+    #[test]
+    fn strips_other_tagged_blocks() {
+        let raw = "<attachments>file list</attachments>\n<editorContext>abc</editorContext>\nReal content";
+        let cleaned = clean_codex_message_content(raw.to_string()).unwrap();
+        assert_eq!(cleaned, "Real content");
+    }
 }
