@@ -104,6 +104,7 @@ impl NotificationManager {
                 {
                     let text = build_notification_text(&alert);
 
+                    // Only send one notification per analyzer per tick
                     if let Some(slack) = &self.slack {
                         if let Err(e) = slack.send(&text).await {
                             eprintln!("⚠️ Failed to deliver Slack notification: {e:#}");
