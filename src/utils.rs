@@ -368,7 +368,8 @@ pub fn truncate_project_label(label: &str, max_len: usize) -> String {
 /// Daily limit: 200,000 tokens, Weekly limit: 1,000,000 tokens
 pub fn calculate_overall_health(messages: &[ConversationMessage], current_date: &str) -> f64 {
     // Parse current date
-    let current_date_parsed = chrono::NaiveDate::parse_from_str(current_date, "%Y-%m-%d").unwrap_or_else(|_| chrono::Local::now().date_naive());
+    let current_date_parsed = chrono::NaiveDate::parse_from_str(current_date, "%Y-%m-%d")
+        .unwrap_or_else(|_| chrono::Local::now().date_naive());
 
     let mut daily_tokens = 0u64;
     let mut weekly_tokens = 0u64;

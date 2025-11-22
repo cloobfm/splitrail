@@ -592,7 +592,9 @@ where
             application: Application::ClaudeCode,
             model: model.clone(),
             date: timestamp,
-            project_hash: project_label.clone().unwrap_or_else(|| project_id_from_path.clone()),
+            project_hash: project_label
+                .clone()
+                .unwrap_or_else(|| project_id_from_path.clone()),
             conversation_hash: hash_text(&file_path_str),
             stats,
             role: if is_assistant {

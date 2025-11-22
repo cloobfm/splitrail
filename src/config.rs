@@ -161,7 +161,10 @@ pub fn show_config() -> Result<()> {
             println!("   Number Human: {}", config.formatting.number_human);
             println!("   Locale: {}", config.formatting.locale);
             println!("   Decimal Places: {}", config.formatting.decimal_places);
-            println!("   Health Display Style: {}", config.formatting.health_display_style);
+            println!(
+                "   Health Display Style: {}",
+                config.formatting.health_display_style
+            );
         }
         None => {
             println!("❌ No configuration file found.");

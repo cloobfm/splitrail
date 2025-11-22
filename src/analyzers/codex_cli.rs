@@ -420,8 +420,17 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
 
                             // Parse and add rate_limits if present
                             if let Some(rate_limits_value) = &event.rate_limits {
-                                if let Ok(rate_limits_json) = serde_json::to_value(rate_limits_value) {
-                                    if let Ok(rate_limits) = serde_json::from_value::<std::collections::HashMap<String, crate::types::RateLimitInfo>>(rate_limits_json) {
+                                if let Ok(rate_limits_json) =
+                                    serde_json::to_value(rate_limits_value)
+                                {
+                                    if let Ok(rate_limits) =
+                                        serde_json::from_value::<
+                                            std::collections::HashMap<
+                                                String,
+                                                crate::types::RateLimitInfo,
+                                            >,
+                                        >(rate_limits_json)
+                                    {
                                         stats.rate_limits = Some(rate_limits);
                                     }
                                 }

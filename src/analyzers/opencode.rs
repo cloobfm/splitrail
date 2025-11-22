@@ -103,7 +103,7 @@ struct OpenCodeCache {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OpenCodeMessageSummary {
     title: String,
-    body: Option<String>,  // Full message body text
+    body: Option<String>, // Full message body text
     diffs: Vec<serde_json::Value>,
 }
 
@@ -121,7 +121,6 @@ struct OpenCodeMessageTools {
     todoread: Option<bool>,
     task: Option<bool>,
 }
-
 
 pub struct OpenCodeAnalyzer;
 
@@ -142,14 +141,18 @@ impl Analyzer for OpenCodeAnalyzer {
 
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
-            
+
             // OPTIMIZED: Only read message files (contain all stats) and sessions (for project context)
             // Message files contain complete token counts, model info, and timing
-            patterns.push(format!("{home_str}/.local/share/opencode/storage/message/*/msg_*.json"));
-            
+            patterns.push(format!(
+                "{home_str}/.local/share/opencode/storage/message/*/msg_*.json"
+            ));
+
             // Session metadata (read once for project context)
-            patterns.push(format!("{home_str}/.local/share/opencode/storage/session/*/ses_*.json"));
-            
+            patterns.push(format!(
+                "{home_str}/.local/share/opencode/storage/session/*/ses_*.json"
+            ));
+
             // REMOVED: Part files - these are individual message fragments, text content not needed for stats
             // Part files are only necessary if we need to display actual conversation content
         }
@@ -179,11 +182,11 @@ impl Analyzer for OpenCodeAnalyzer {
     ) -> Result<Vec<ConversationMessage>> {
         let mut messages = Vec::new();
         let mut seen_hashes = std::collections::HashSet::new();
-        
+
         // Separate message and session files
         let mut message_files = Vec::new();
         let mut session_files = Vec::new();
-        
+
         for source in sources {
             let path_str = source.path.to_string_lossy();
             if path_str.contains("message/") {
@@ -192,7 +195,7 @@ impl Analyzer for OpenCodeAnalyzer {
                 session_files.push(source);
             }
         }
-        
+
         // Load session metadata (read once, used for project context)
         let mut sessions = std::collections::HashMap::new();
         for session_file in session_files {
@@ -202,21 +205,26 @@ impl Analyzer for OpenCodeAnalyzer {
                 }
             }
         }
-        
+
         // Process message files
         for message_file in message_files {
             if let Ok(content) = std::fs::read_to_string(&message_file.path) {
                 if let Ok(opencode_msg) = serde_json::from_str::<OpenCodeMessageData>(&content) {
                     // Get session info for directory path
-                    let session_dir = sessions.get(&opencode_msg.session_id)
+                    let session_dir = sessions
+                        .get(&opencode_msg.session_id)
                         .map(|s| s.directory.clone())
                         .unwrap_or_else(|| "unknown".to_string());
-                    
+
                     // Read actual message content from part files for both user and assistant
                     let message_content = self.read_message_text_content(&opencode_msg.id);
-                    
+
                     // Convert to our internal format
-                    if let Some(msg) = self.convert_opencode_message_data(opencode_msg, &session_dir, message_content) {
+                    if let Some(msg) = self.convert_opencode_message_data(
+                        opencode_msg,
+                        &session_dir,
+                        message_content,
+                    ) {
                         // Deduplicate by global hash
                         if seen_hashes.insert(msg.global_hash.clone()) {
                             messages.push(msg);
@@ -232,23 +240,26 @@ impl Analyzer for OpenCodeAnalyzer {
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
         let sources = self.discover_data_sources()?;
         let messages = self.parse_conversations(sources).await?;
-        
+
         let mut daily_stats = std::collections::BTreeMap::new();
         let mut num_conversations = 0;
-        
+
         for message in &messages {
             // Convert UTC timestamp to local timezone for daily stats grouping
             let local_date = message.date.with_timezone(&chrono::Local);
             let date_str = local_date.format("%Y-%m-%d").to_string();
-            let daily = daily_stats.entry(date_str.clone()).or_insert_with(|| crate::types::DailyStats {
-                date: date_str,
-                user_messages: 0,
-                ai_messages: 0,
-                conversations: 0,
-                models: std::collections::BTreeMap::new(),
-                stats: crate::types::Stats::default(),
-            });
-            
+            let daily =
+                daily_stats
+                    .entry(date_str.clone())
+                    .or_insert_with(|| crate::types::DailyStats {
+                        date: date_str,
+                        user_messages: 0,
+                        ai_messages: 0,
+                        conversations: 0,
+                        models: std::collections::BTreeMap::new(),
+                        stats: crate::types::Stats::default(),
+                    });
+
             match message.role {
                 crate::types::MessageRole::User => daily.user_messages += 1,
                 crate::types::MessageRole::Assistant => {
@@ -258,7 +269,7 @@ impl Analyzer for OpenCodeAnalyzer {
                     }
                 }
             }
-            
+
             // Add stats
             daily.stats.input_tokens += message.stats.input_tokens;
             daily.stats.output_tokens += message.stats.output_tokens;
@@ -284,12 +295,10 @@ impl Analyzer for OpenCodeAnalyzer {
             daily.stats.bytes_edited += message.stats.bytes_edited;
             daily.stats.bytes_deleted += message.stats.bytes_deleted;
         }
-        
+
         // Count unique conversations
-        let unique_conversations: std::collections::HashSet<_> = messages
-            .iter()
-            .map(|m| &m.conversation_hash)
-            .collect();
+        let unique_conversations: std::collections::HashSet<_> =
+            messages.iter().map(|m| &m.conversation_hash).collect();
         num_conversations = unique_conversations.len() as u64;
 
         Ok(AgenticCodingToolStats {
@@ -304,13 +313,13 @@ impl Analyzer for OpenCodeAnalyzer {
         // Check if OpenCode is installed and has potential data directories
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
-            
+
             // Check for OpenCode config or data directories
             let config_path = format!("{home_str}/.config/opencode");
             let local_share_path = format!("{home_str}/.local/share/opencode");
-            
-            std::path::Path::new(&config_path).exists() || 
-            std::path::Path::new(&local_share_path).exists()
+
+            std::path::Path::new(&config_path).exists()
+                || std::path::Path::new(&local_share_path).exists()
         } else {
             false
         }
@@ -325,14 +334,14 @@ impl OpenCodeAnalyzer {
             let part_dir = home_dir
                 .join(".local/share/opencode/storage/part")
                 .join(message_id);
-            
+
             if !part_dir.exists() {
                 return None;
             }
-            
+
             // Read all part files for this message and collect text
             let mut text_parts = Vec::new();
-            
+
             if let Ok(entries) = std::fs::read_dir(&part_dir) {
                 for entry in entries.flatten() {
                     if let Ok(content) = std::fs::read_to_string(&entry.path()) {
@@ -349,7 +358,7 @@ impl OpenCodeAnalyzer {
                     }
                 }
             }
-            
+
             if text_parts.is_empty() {
                 None
             } else {
@@ -359,7 +368,7 @@ impl OpenCodeAnalyzer {
             None
         }
     }
-    
+
     fn convert_opencode_message_data(
         &self,
         msg: OpenCodeMessageData,
@@ -380,13 +389,15 @@ impl OpenCodeAnalyzer {
         let global_hash = hash_text(&format!("opencode-{}-{}", msg.id, msg.time.created));
 
         // Extract model information - FIXED: read from correct field
-        let model = msg.model_id.clone()
+        let model = msg
+            .model_id
+            .clone()
             .or_else(|| msg.model.as_ref().map(|m| m.model_id.clone()))
             .or(Some("opencode-zen".to_string())); // fallback
-        
+
         // Convert stats - FIXED: properly read token counts from message
         let mut stats = Stats::default();
-        
+
         if let Some(tokens) = msg.tokens {
             stats.input_tokens = tokens.input;
             stats.output_tokens = tokens.output;
@@ -397,14 +408,14 @@ impl OpenCodeAnalyzer {
                 stats.cached_tokens = cache.read;
             }
         }
-        
+
         // Count tool calls based on finish type
         if let Some(finish) = &msg.finish {
             if finish == "tool-calls" {
                 stats.tool_calls = 1;
             }
         }
-        
+
         // Calculate cost using our pricing model (OpenCode stores cost=0 for free tier)
         if let Some(ref model_name) = model {
             stats.cost = calculate_total_cost(
@@ -445,7 +456,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_opencode_conversations() {
         let analyzer = OpenCodeAnalyzer::new();
-        
+
         // Create a temporary file with sample OpenCode data
         let mut temp_file = NamedTempFile::new().unwrap();
         let sample_data = r#"
@@ -453,14 +464,14 @@ mod tests {
 {"id":"msg2","timestamp":"2024-01-01T12:01:00Z","role":"assistant","content":"Hi there!","model":"opencode-zen","tokens":{"input":10,"output":5},"tools":[{"name":"read","duration_ms":100,"success":true}],"files":[{"path":"test.rs","operation":"read","bytes":100,"lines":10}]}
 "#;
         temp_file.write_all(sample_data.as_bytes()).unwrap();
-        
+
         let sources = vec![DataSource {
             path: temp_file.path().to_path_buf(),
         }];
-        
+
         let messages = analyzer.parse_conversations(sources).await.unwrap();
         assert_eq!(messages.len(), 2);
-        
+
         // Check the assistant message
         let assistant_msg = &messages[1];
         assert_eq!(assistant_msg.role, MessageRole::Assistant);

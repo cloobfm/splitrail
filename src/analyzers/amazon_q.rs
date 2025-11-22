@@ -23,10 +23,27 @@ impl AmazonQAnalyzer {
 
         if let Some(home_dir) = std::env::home_dir() {
             // macOS
-            possible_paths.push(home_dir.join("Library").join("Application Support").join("amazon-q").join("data.sqlite3"));
+            possible_paths.push(
+                home_dir
+                    .join("Library")
+                    .join("Application Support")
+                    .join("amazon-q")
+                    .join("data.sqlite3"),
+            );
             // Linux
-            possible_paths.push(home_dir.join(".config").join("amazon-q").join("data.sqlite3"));
-            possible_paths.push(home_dir.join(".local").join("share").join("amazon-q").join("data.sqlite3"));
+            possible_paths.push(
+                home_dir
+                    .join(".config")
+                    .join("amazon-q")
+                    .join("data.sqlite3"),
+            );
+            possible_paths.push(
+                home_dir
+                    .join(".local")
+                    .join("share")
+                    .join("amazon-q")
+                    .join("data.sqlite3"),
+            );
         }
 
         // Windows
@@ -412,15 +429,44 @@ impl Analyzer for AmazonQAnalyzer {
 
         if let Some(home_dir) = std::env::home_dir() {
             // macOS
-            patterns.push(home_dir.join("Library").join("Application Support").join("amazon-q").join("data.sqlite3").to_string_lossy().to_string());
+            patterns.push(
+                home_dir
+                    .join("Library")
+                    .join("Application Support")
+                    .join("amazon-q")
+                    .join("data.sqlite3")
+                    .to_string_lossy()
+                    .to_string(),
+            );
             // Linux
-            patterns.push(home_dir.join(".config").join("amazon-q").join("data.sqlite3").to_string_lossy().to_string());
-            patterns.push(home_dir.join(".local").join("share").join("amazon-q").join("data.sqlite3").to_string_lossy().to_string());
+            patterns.push(
+                home_dir
+                    .join(".config")
+                    .join("amazon-q")
+                    .join("data.sqlite3")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            patterns.push(
+                home_dir
+                    .join(".local")
+                    .join("share")
+                    .join("amazon-q")
+                    .join("data.sqlite3")
+                    .to_string_lossy()
+                    .to_string(),
+            );
         }
 
         // Windows
         if let Ok(appdata) = std::env::var("APPDATA") {
-            patterns.push(PathBuf::from(appdata).join("amazon-q").join("data.sqlite3").to_string_lossy().to_string());
+            patterns.push(
+                PathBuf::from(appdata)
+                    .join("amazon-q")
+                    .join("data.sqlite3")
+                    .to_string_lossy()
+                    .to_string(),
+            );
         }
 
         patterns

@@ -870,7 +870,7 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "gemini-1.5-pro-exp-0801" => "gemini-1.5-pro",
 
     // Qwen aliases
-    
+
     // OpenCode aliases
     "zen" => "opencode-zen",
     "zen-free" => "opencode-zen",
@@ -895,7 +895,7 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "mistral-local" => "local-mistral",
     "ollama" => "local-llama",  // Common local model alias
     "lm-studio" => "local-llama",  // Common local model alias
-    
+
     // Kiro CLI / Amazon Q aliases
     "auto" => "claude-sonnet-4",  // Default for auto mode
 };

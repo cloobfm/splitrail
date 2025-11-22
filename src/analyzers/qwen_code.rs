@@ -310,11 +310,15 @@ fn parse_jsonl_stats_file(file_path: &Path) -> Result<Vec<ConversationMessage>> 
         match simd_json::from_slice::<simd_json::OwnedValue>(&mut line_bytes) {
             Ok(json_value) => {
                 // Try to parse as request log first
-                if let Ok(request_entry) = parse_request_log_from_json_value(&json_value, &file_path_str) {
+                if let Ok(request_entry) =
+                    parse_request_log_from_json_value(&json_value, &file_path_str)
+                {
                     entries.extend(request_entry);
                 }
                 // If not a request log, try to parse as stats log
-                else if let Ok(stats_entry) = parse_stats_log_from_json_value(&json_value, &file_path_str) {
+                else if let Ok(stats_entry) =
+                    parse_stats_log_from_json_value(&json_value, &file_path_str)
+                {
                     entries.extend(stats_entry);
                 }
             }
@@ -336,25 +340,46 @@ fn parse_request_log_from_json_value(
             if let Some(session_id) = session_id_val.as_str() {
                 if let Some(type_val) = obj.get("type").and_then(|v| v.as_str()) {
                     if type_val == "auto_request_log" {
-                        let timestamp = if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
-                            chrono::DateTime::parse_from_rfc3339(ts_str).map(|dt| dt.with_timezone(&chrono::Utc)).ok()
-                        } else {
-                            None
-                        };
+                        let timestamp =
+                            if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
+                                chrono::DateTime::parse_from_rfc3339(ts_str)
+                                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                                    .ok()
+                            } else {
+                                None
+                            };
 
-                        let event = obj.get("event").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let event = obj
+                            .get("event")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
 
                         if let Some(data_obj) = obj.get("data").and_then(|v| v.as_object()) {
-                            let model = data_obj.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            let model = data_obj
+                                .get("model")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
 
                             if let Some(timestamp) = timestamp {
                                 let mut stats = Stats::default();
 
                                 // Extract token stats if available
-                                if let Some(usage_obj) = data_obj.get("usageMetadata").and_then(|v| v.as_object()) {
-                                    let prompt_tokens = usage_obj.get("promptTokenCount").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let candidates_tokens = usage_obj.get("candidatesTokenCount").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let cached_tokens = usage_obj.get("cachedContentTokenCount").and_then(|v| v.as_u64()).unwrap_or(0);
+                                if let Some(usage_obj) =
+                                    data_obj.get("usageMetadata").and_then(|v| v.as_object())
+                                {
+                                    let prompt_tokens = usage_obj
+                                        .get("promptTokenCount")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0);
+                                    let candidates_tokens = usage_obj
+                                        .get("candidatesTokenCount")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0);
+                                    let cached_tokens = usage_obj
+                                        .get("cachedContentTokenCount")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0);
 
                                     // Apply same heuristic as in JSON session parsing - if prompt includes cached content
                                     let real_input_tokens = if prompt_tokens >= cached_tokens {
@@ -369,9 +394,17 @@ fn parse_request_log_from_json_value(
                                     stats.output_tokens = candidates_tokens;
                                     stats.cached_tokens = cached_tokens;
                                     if let Some(ref model_name) = model {
-                                        stats.cost = calculate_input_cost(model_name, real_input_tokens)
-                                            + calculate_output_cost(model_name, candidates_tokens)
-                                            + calculate_cache_cost(model_name, 0, cached_tokens);
+                                        stats.cost =
+                                            calculate_input_cost(model_name, real_input_tokens)
+                                                + calculate_output_cost(
+                                                    model_name,
+                                                    candidates_tokens,
+                                                )
+                                                + calculate_cache_cost(
+                                                    model_name,
+                                                    0,
+                                                    cached_tokens,
+                                                );
                                     }
                                 }
 
@@ -382,7 +415,9 @@ fn parse_request_log_from_json_value(
                                 };
 
                                 // Extract content if available
-                                let content = if let Some(user_prompt_id) = data_obj.get("userPromptId").and_then(|v| v.as_str()) {
+                                let content = if let Some(user_prompt_id) =
+                                    data_obj.get("userPromptId").and_then(|v| v.as_str())
+                                {
                                     Some(user_prompt_id.chars().take(200).collect())
                                 } else {
                                     None
@@ -430,43 +465,77 @@ fn parse_stats_log_from_json_value(
             if let Some(session_id) = session_id_val.as_str() {
                 if let Some(type_val) = obj.get("type").and_then(|v| v.as_str()) {
                     if type_val == "auto_stats" {
-                        let timestamp = if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
-                            chrono::DateTime::parse_from_rfc3339(ts_str).map(|dt| dt.with_timezone(&chrono::Utc)).ok()
-                        } else {
-                            None
-                        };
+                        let timestamp =
+                            if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
+                                chrono::DateTime::parse_from_rfc3339(ts_str)
+                                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                                    .ok()
+                            } else {
+                                None
+                            };
 
                         if let Some(stats_obj) = obj.get("stats").and_then(|v| v.as_object()) {
                             let mut messages = Vec::new();
 
                             // Process model-specific stats if available
-                            if let Some(models_obj) = stats_obj.get("models").and_then(|v| v.as_object()) {
+                            if let Some(models_obj) =
+                                stats_obj.get("models").and_then(|v| v.as_object())
+                            {
                                 for (model_name, model_value) in models_obj {
                                     if let Some(model_obj) = model_value.as_object() {
-                                        let requests = model_obj.get("requests").and_then(|v| v.as_u64()).unwrap_or(0);
-                                        let errors = model_obj.get("errors").and_then(|v| v.as_u64()).unwrap_or(0);
-                                        let latency_ms = model_obj.get("latency_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                                        let requests = model_obj
+                                            .get("requests")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0);
+                                        let errors = model_obj
+                                            .get("errors")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0);
+                                        let latency_ms = model_obj
+                                            .get("latency_ms")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0);
 
-                                        if let Some(tokens_obj) = model_obj.get("tokens").and_then(|v| v.as_object()) {
-                                            let prompt_tokens = tokens_obj.get("prompt").and_then(|v| v.as_u64()).unwrap_or(0);
-                                            let candidates_tokens = tokens_obj.get("candidates").and_then(|v| v.as_u64()).unwrap_or(0);
-                                            let cached_tokens = tokens_obj.get("cached").and_then(|v| v.as_u64()).unwrap_or(0);
+                                        if let Some(tokens_obj) =
+                                            model_obj.get("tokens").and_then(|v| v.as_object())
+                                        {
+                                            let prompt_tokens = tokens_obj
+                                                .get("prompt")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0);
+                                            let candidates_tokens = tokens_obj
+                                                .get("candidates")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0);
+                                            let cached_tokens = tokens_obj
+                                                .get("cached")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0);
 
                                             // Apply same heuristic as in JSON session parsing - if prompt includes cached content
-                                            let real_input_tokens = if prompt_tokens >= cached_tokens {
-                                                // prompt_tokens likely includes cached tokens, subtract to get real new tokens
-                                                prompt_tokens.saturating_sub(cached_tokens)
-                                            } else {
-                                                // prompt_tokens is less than cached, so likely new content only
-                                                prompt_tokens
-                                            };
+                                            let real_input_tokens =
+                                                if prompt_tokens >= cached_tokens {
+                                                    // prompt_tokens likely includes cached tokens, subtract to get real new tokens
+                                                    prompt_tokens.saturating_sub(cached_tokens)
+                                                } else {
+                                                    // prompt_tokens is less than cached, so likely new content only
+                                                    prompt_tokens
+                                                };
 
                                             let stats = Stats {
                                                 tool_calls: requests as u32,
                                                 cost: if !model_name.is_empty() {
-                                                    calculate_input_cost(&model_name, real_input_tokens)
-                                                        + calculate_output_cost(&model_name, candidates_tokens)
-                                                        + calculate_cache_cost(&model_name, 0, cached_tokens)
+                                                    calculate_input_cost(
+                                                        &model_name,
+                                                        real_input_tokens,
+                                                    ) + calculate_output_cost(
+                                                        &model_name,
+                                                        candidates_tokens,
+                                                    ) + calculate_cache_cost(
+                                                        &model_name,
+                                                        0,
+                                                        cached_tokens,
+                                                    )
                                                 } else {
                                                     0.0
                                                 },
@@ -481,12 +550,13 @@ fn parse_stats_log_from_json_value(
                                                     date: timestamp,
                                                     application: Application::QwenCode,
                                                     project_hash: String::new(), // Not available in stats logs
-                                                    local_hash: Some(format!("stats-{}-{}", session_id, model_name)),
+                                                    local_hash: Some(format!(
+                                                        "stats-{}-{}",
+                                                        session_id, model_name
+                                                    )),
                                                     global_hash: hash_text(&format!(
                                                         "{}:{}:stats:{}",
-                                                        file_path_str,
-                                                        session_id,
-                                                        model_name
+                                                        file_path_str, session_id, model_name
                                                     )),
                                                     conversation_hash: hash_text(&session_id),
                                                     model: Some(model_name.clone()),
@@ -577,7 +647,7 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                     // input is less than cached, so input is likely new tokens only
                     tokens.input
                 };
-                
+
                 stats.input_tokens = real_input_tokens;
                 stats.output_tokens = tokens.output;
                 stats.reasoning_tokens = tokens.thoughts + tokens.tool;
@@ -826,72 +896,89 @@ mod tests {
     #[tokio::test]
     async fn test_qwen_token_fix() {
         let analyzer = QwenCodeAnalyzer::new();
-        
+
         if !analyzer.is_available() {
             println!("⚠️  Qwen Code analyzer not available - skipping test");
             return;
         }
-        
+
         let stats = analyzer.get_stats().await.expect("Failed to get stats");
-        
+
         if stats.messages.is_empty() {
             println!("⚠️  No Qwen messages found - skipping test");
             return;
         }
-        
+
         // Find messages with token data
-        let token_messages: Vec<_> = stats.messages.iter()
+        let token_messages: Vec<_> = stats
+            .messages
+            .iter()
             .filter(|msg| msg.stats.input_tokens > 0 || msg.stats.cached_tokens > 0)
             .collect();
-        
+
         if token_messages.is_empty() {
             println!("⚠️  No messages with token data found - skipping test");
             return;
         }
-        
-        println!("🧪 Testing Qwen token fix with {} messages", token_messages.len());
-        
+
+        println!(
+            "🧪 Testing Qwen token fix with {} messages",
+            token_messages.len()
+        );
+
         // Test first few messages
         for (i, msg) in token_messages.iter().take(3).enumerate() {
-            println!("\n📝 Message {}: {}", i + 1, msg.date.format("%Y-%m-%d %H:%M:%S"));
-            println!("   Input: {} | Cached: {} | Output: {}", 
-                     msg.stats.input_tokens, msg.stats.cached_tokens, msg.stats.output_tokens);
-            println!("   Reasoning: {} | Cost: ${:.6}", 
-                     msg.stats.reasoning_tokens, msg.stats.cost);
-            
+            println!(
+                "\n📝 Message {}: {}",
+                i + 1,
+                msg.date.format("%Y-%m-%d %H:%M:%S")
+            );
+            println!(
+                "   Input: {} | Cached: {} | Output: {}",
+                msg.stats.input_tokens, msg.stats.cached_tokens, msg.stats.output_tokens
+            );
+            println!(
+                "   Reasoning: {} | Cost: ${:.6}",
+                msg.stats.reasoning_tokens, msg.stats.cost
+            );
+
             // Verify fix: input should not include cached tokens
             let total_input_including_cached = msg.stats.input_tokens + msg.stats.cached_tokens;
-            
+
             if msg.stats.input_tokens < total_input_including_cached {
-                println!("   ✅ Fix working: input ({}) < input+cached ({})", 
-                         msg.stats.input_tokens, total_input_including_cached);
+                println!(
+                    "   ✅ Fix working: input ({}) < input+cached ({})",
+                    msg.stats.input_tokens, total_input_including_cached
+                );
             } else {
-                println!("   ❌ Issue: input ({}) >= input+cached ({})", 
-                         msg.stats.input_tokens, total_input_including_cached);
+                println!(
+                    "   ❌ Issue: input ({}) >= input+cached ({})",
+                    msg.stats.input_tokens, total_input_including_cached
+                );
             }
         }
-        
+
         // Overall summary
-        let total_new_input: u64 = token_messages.iter()
-            .map(|m| m.stats.input_tokens)
-            .sum();
-        let total_cached: u64 = token_messages.iter()
-            .map(|m| m.stats.cached_tokens)
-            .sum();
+        let total_new_input: u64 = token_messages.iter().map(|m| m.stats.input_tokens).sum();
+        let total_cached: u64 = token_messages.iter().map(|m| m.stats.cached_tokens).sum();
         let total_old_calculation = total_new_input + total_cached;
-        
+
         println!("\n📊 Summary:");
         println!("   Total new input tokens: {}", total_new_input);
         println!("   Total cached tokens: {}", total_cached);
         println!("   Old calculation would be: {}", total_old_calculation);
-        println!("   Reduction: {} tokens ({:.1}%)", 
-                 total_cached, 
-                 (total_cached as f64 / total_old_calculation as f64) * 100.0);
-        
+        println!(
+            "   Reduction: {} tokens ({:.1}%)",
+            total_cached,
+            (total_cached as f64 / total_old_calculation as f64) * 100.0
+        );
+
         // Assert that fix is working
-        assert!(total_new_input < total_old_calculation, 
-                "Input tokens should be reduced after fix");
-        
+        assert!(
+            total_new_input < total_old_calculation,
+            "Input tokens should be reduced after fix"
+        );
+
         println!("\n✅ Test passed! Qwen token fix is working correctly.");
     }
 }

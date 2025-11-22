@@ -224,7 +224,7 @@ mod tests {
         // This test verifies the database structure matches
         if let Some(db_path) = KiroCliAnalyzer::get_database_path() {
             let conn = rusqlite::Connection::open(db_path).expect("Failed to open database");
-            
+
             // Check for expected tables
             let tables: Vec<String> = conn
                 .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
