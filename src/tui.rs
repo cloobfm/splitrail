@@ -661,6 +661,7 @@ fn draw_ui(
                     current_stats,
                     format_options,
                     current_table_state,
+                    tui_state.daily_stats_view_start,
                 );
 
                 // Summary stats - pass all filtered stats for aggregation
@@ -784,18 +785,37 @@ fn draw_daily_stats_table(
     stats: &AgenticCodingToolStats,
     format_options: &NumberFormatOptions,
     table_state: &mut TableState,
+    view_start_offset: usize,  // Pagination offset for viewing historical data
 ) -> usize {
     // Convert BTreeMap to Vec and reverse to show most recent first
     let all_dates: Vec<(&String, &crate::types::DailyStats)> = stats.daily_stats.iter().collect();
     let total_days = all_dates.len();
 
-    // Show only the most recent 30 days by default
-    let view_limit = 30; // Show last 30 days by default
-    let start_idx = 0; // For now, show most recent 30 days only
-    let end_idx = std::cmp::min(start_idx + view_limit, total_days);
+    // Show the most recent 30 days by default, starting from the specified view offset (going backwards in time)
+    let view_limit = 30; // Show 30 days by default
+
+    // Since all_dates is in chronological order (oldest first, newest last),
+    // for pagination we want to start from the end and move backwards in chunks of view_limit
+
+    // Calculate start and end indices to get most recent days first
+    // When view_start_offset is 0, we want the last view_limit days (most recent)
+    // When view_start_offset is 1, we want the previous view_limit days, etc.
+    let start_idx = if (view_start_offset + 1) * view_limit <= total_days {
+        // Normal case: we can take a full view_limit window from the end
+        total_days - (view_start_offset + 1) * view_limit
+    } else {
+        // Edge case: not enough days, take from the beginning
+        0
+    };
+    let end_idx = std::cmp::min(total_days, total_days - view_start_offset * view_limit);
+
+    // Ensure bounds are valid
+    let start_idx = std::cmp::min(start_idx, end_idx);
+    let end_idx = std::cmp::min(end_idx, total_days);
+
     let visible_dates = &all_dates[start_idx..end_idx];
 
-    // Show most recent first (reverse the slice)
+    // Show most recent first (reverse the slice to get newest dates first)
     let visible_dates_reversed: Vec<_> = visible_dates.iter().rev().collect();
 
     // Find best values for highlighting among visible dates only
@@ -1193,7 +1213,7 @@ fn draw_daily_stats_table(
             Line::from(Span::raw(""))
         },
         Line::from(Span::styled(
-            format!("Total ({}d of {} shown)", visible_dates_reversed.len(), stats.daily_stats.len()),
+            format!("Total ({}d)", visible_dates_reversed.len()),
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
@@ -1266,7 +1286,7 @@ fn draw_daily_stats_table(
         rows,
         [
             Constraint::Length(1),  // Arrow
-            Constraint::Length(11), // Date
+            Constraint::Length(12), // Date - reduced from 15 to 12 since we shortened the text to "Total (XXd)"
             Constraint::Length(10), // Cost
             Constraint::Length(13), // Cached (was 12, increased for larger numbers)
             Constraint::Length(12), // Input (was 8, increased significantly)
@@ -1359,6 +1379,7 @@ fn draw_summary_stats(
             }
         }
     }
+
 
     let mut summary_lines: Vec<Line> = Vec::new();
 
