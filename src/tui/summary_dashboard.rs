@@ -1056,13 +1056,48 @@ pub fn draw_visual_cli_panels(
         };
 
         // Build the line with colored sparkline spans
-        let mut line_spans = vec![
-            Span::styled(
+        let mut line_spans = vec![];
+        
+        // In verbose mode, show model name next to CLI name
+        if tui_state.summary_verbose_mode {
+            // Find the most commonly used model for this CLI
+            let most_used_model = stats
+                .messages
+                .iter()
+                .filter_map(|msg| msg.model.as_ref())
+                .fold(std::collections::HashMap::new(), |mut acc, model| {
+                    *acc.entry(model.clone()).or_insert(0) += 1;
+                    acc
+                })
+                .into_iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(model, _)| model)
+                .unwrap_or_else(|| String::from("—"));
+            
+            // Truncate long model names
+            let model_display = if most_used_model.len() > 15 {
+                format!("{}…", &most_used_model[..14])
+            } else {
+                most_used_model.clone()
+            };
+            
+            line_spans.push(Span::styled(
                 format!("{:12}", cli_name),
                 Style::default().fg(name_color).bold(),
-            ),
-            Span::raw(" "),
-        ];
+            ));
+            line_spans.push(Span::styled(
+                format!(" [{}]", model_display),
+                Style::default().fg(Color::DarkGray).italic(),
+            ));
+            line_spans.push(Span::raw(" "));
+        } else {
+            line_spans.push(Span::styled(
+                format!("{:12}", cli_name),
+                Style::default().fg(name_color).bold(),
+            ));
+            line_spans.push(Span::raw(" "));
+        }
+        
         line_spans.extend(sparkline);
         line_spans.extend(vec![
             Span::raw("   "),
