@@ -104,6 +104,8 @@ pub fn draw_summary_view(
     format_options: &NumberFormatOptions,
     filtered_stats: &[&AgenticCodingToolStats],
     tui_state: &mut crate::tui::TuiState,
+    render_time_utc: chrono::DateTime<chrono::Utc>,
+    render_time_system: std::time::SystemTime,
 ) {
     // Load config for health display style
     let config = crate::config::Config::load().unwrap_or(None).unwrap_or_default();
@@ -323,7 +325,7 @@ pub fn draw_summary_view(
     )> = Vec::new();
     let mut cli_meta: Vec<(i64, u8)> = Vec::new();
     for analyzer_stats in filtered_stats {
-        let now_utc = chrono::Utc::now();
+        let now_utc = render_time_utc;  // Use cached time instead of syscall
         let mut cached = 0u64;
         let mut input = 0u64;
         let mut output = 0u64;
@@ -703,6 +705,8 @@ pub fn draw_summary_view(
         &cli_order,
         format_options,
         tui_state,
+        render_time_utc,
+        render_time_system,
     );
 }
 
@@ -806,8 +810,10 @@ pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>
 }
 
 // Helper to create activity sparkline for last hour
-pub fn create_activity_sparkline(stats: &AgenticCodingToolStats) -> Vec<Span<'static>> {
-    let now = chrono::Utc::now();
+pub fn create_activity_sparkline(
+    stats: &AgenticCodingToolStats,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<Span<'static>> {
 
     // Create 120 buckets (30-second intervals for last hour)
     let mut buckets = vec![0u64; 120];
@@ -977,6 +983,8 @@ pub fn draw_visual_cli_panels(
     cli_order: &[usize],
     _format_options: &NumberFormatOptions,
     tui_state: &mut crate::tui::TuiState,
+    render_time_utc: chrono::DateTime<chrono::Utc>,
+    render_time_system: std::time::SystemTime,
 ) {
     if filtered_stats.is_empty() {
         return;
@@ -1044,7 +1052,7 @@ pub fn draw_visual_cli_panels(
         ) = &cli_data[ordered_idx];
 
         // Line 1: CLI name, state, activity sparkline
-        let sparkline = create_activity_sparkline(stats);
+        let sparkline = create_activity_sparkline(stats, render_time_utc);
         let (_last_role, message_lines) = get_last_message_preview(stats, 50);
 
         let name_color = match state.as_str() {
@@ -1076,22 +1084,16 @@ pub fn draw_visual_cli_panels(
             
             // Scrolling animation for long model names
             let model_display = if most_used_model.len() > 15 {
-                // Use time-based scrolling animation
-                let now = std::time::SystemTime::now()
+                // Use time-based scrolling animation with cached time
+                let now_millis = render_time_system
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_secs();
+                    .as_millis() as u64;
                 
                 // Scroll position updates every 0.3 seconds, wrapping around
                 let max_width = 15;
                 let scroll_speed = 1; // characters per interval
                 let scroll_interval_millis = 300; // milliseconds per scroll step
-                
-                // Use milliseconds for smoother scrolling
-                let now_millis = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
                 
                 let scroll_position = ((now_millis / scroll_interval_millis) * scroll_speed) as usize % (most_used_model.len() + 3);
                 

@@ -156,14 +156,10 @@ async fn run_app(
         tui_state.summary_day_offset,
     ));
 
-    let mut clock_timer = std::time::Instant::now();
+    // Rate limit warning cleanup to once per minute
+    let mut last_warning_cleanup = std::time::Instant::now();
 
     loop {
-        if clock_timer.elapsed() >= Duration::from_secs(1) {
-            needs_redraw = true;
-            clock_timer = std::time::Instant::now();
-        }
-
         // Check for stats updates
         if stats_receiver.has_changed()? {
             current_stats = stats_receiver.borrow_and_update().clone();
@@ -225,11 +221,18 @@ async fn run_app(
             needs_redraw = true;
         }
 
-        // Clean up old warnings (older than 1 minute)
-        clear_old_warnings();
+        // Clean up old warnings (older than 1 minute) - rate limited to once per minute
+        if last_warning_cleanup.elapsed() >= Duration::from_secs(60) {
+            clear_old_warnings();
+            last_warning_cleanup = std::time::Instant::now();
+        }
 
         // Only redraw if something has changed
         if needs_redraw {
+            // Cache time values ONCE for the entire render cycle to avoid syscall spam
+            let render_time_utc = chrono::Utc::now();
+            let render_time_system = SystemTime::now();
+            
             terminal.draw(|frame| {
                 draw_ui(
                     frame,
@@ -239,6 +242,8 @@ async fn run_app(
                     tui_state,
                     upload_status.clone(),
                     &cached_summary_data,
+                    render_time_utc,
+                    render_time_system,
                 );
             })?;
             needs_redraw = false;
@@ -534,6 +539,8 @@ fn draw_ui(
     tui_state: &mut TuiState,
     upload_status: Arc<Mutex<UploadStatus>>,
     cached_summary_data: &Option<SummaryData>,
+    render_time_utc: chrono::DateTime<chrono::Utc>,
+    render_time_system: SystemTime,
 ) {
     // Since we're already working with filtered stats, has_data is simply whether we have any stats
     let has_data = !filtered_stats.is_empty();
@@ -610,6 +617,8 @@ fn draw_ui(
                     format_options,
                     filtered_stats,
                     tui_state,
+                    render_time_utc,
+                    render_time_system,
                 );
                 draw_summary_stats(frame, chunks[3], filtered_stats, format_options, false);
             }
