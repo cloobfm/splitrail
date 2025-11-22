@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.6] - 2025-11-22
+
+### Added
+- Waiting-for-input notification module with Slack webhook delivery and TUI status indicators (countdown + last-send)
+
+### Changed
+- Notification delivery now sends only one alert per analyzer per check and ignores long-stale sessions (over-threshold by >15 minutes)
+
 ## [2.0.0-dash-0.5] - 2025-11-22
 
 ### Fixed

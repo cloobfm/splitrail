@@ -119,7 +119,22 @@ splitrail --number-human
 splitrail --locale en --decimal-places 2
 ```
 
-### 4. Manual Upload to Cloud
+### 4. Enable Waiting Notifications (Slack)
+```bash
+# Turn on notifications and Slack delivery
+splitrail config set notifications-enabled true
+splitrail config set slack-enabled true
+splitrail config set slack-webhook-url https://hooks.slack.com/services/XXX/YYY/ZZZ
+
+# Optional: tune thresholds (defaults: wait 180s, stale 180m, preview 5 messages)
+splitrail config set notifications-wait-seconds 180
+splitrail config set notifications-stale-minutes 180
+splitrail config set notifications-sample-messages 5
+```
+
+Then start the dashboard (`splitrail`). The Activity header shows Slack status, a “next” countdown (time until the soonest waiting-for-input alert fires), and a short-lived “last” checkmark after an alert is sent. Only the freshest assistant-last conversation per CLI notifies, and alerts are suppressed for sessions that have been idle more than 15 minutes past the threshold.
+
+### 5. Manual Upload to Cloud
 ```bash
 splitrail upload
 ```
