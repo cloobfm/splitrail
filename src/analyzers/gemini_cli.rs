@@ -180,7 +180,17 @@ fn extract_project_id_gemini_cli(file_path: &Path) -> String {
 
 // Cost calculation using the centralized model system
 fn calculate_gemini_cost(tokens: &GeminiCliTokens, model_name: &str) -> f64 {
-    let total_input_tokens = tokens.input + tokens.thoughts + tokens.tool;
+    // Use heuristic to determine if input tokens include cached tokens
+    // If input is at least as large as cached, assume input includes cached tokens
+    let real_input_tokens = if tokens.input >= tokens.cached {
+        // input likely includes cached tokens, subtract to get real new tokens
+        tokens.input.saturating_sub(tokens.cached)
+    } else {
+        // input is less than cached, so input is likely new tokens only
+        tokens.input
+    };
+
+    let total_input_tokens = real_input_tokens + tokens.thoughts + tokens.tool;
 
     let input_cost = calculate_input_cost(model_name, total_input_tokens);
     let output_cost = calculate_output_cost(model_name, tokens.output);
@@ -236,7 +246,16 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                 let mut stats = extract_tool_stats(&tool_calls);
 
                 // Update stats with token information
-                stats.input_tokens = tokens.input;
+                // Use heuristic to determine if input tokens include cached tokens
+                let real_input_tokens = if tokens.input >= tokens.cached {
+                    // input likely includes cached tokens, subtract to get real new tokens
+                    tokens.input.saturating_sub(tokens.cached)
+                } else {
+                    // input is less than cached, so input is likely new tokens only
+                    tokens.input
+                };
+
+                stats.input_tokens = real_input_tokens;
                 stats.output_tokens = tokens.output;
                 stats.cache_creation_tokens = 0;
                 stats.cache_read_tokens = 0;
