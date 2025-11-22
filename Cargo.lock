@@ -1941,7 +1941,7 @@ dependencies = [
 
 [[package]]
 name = "splitrail-dashboard"
-version = "2.0.0-dash-0.4"
+version = "2.0.0-dash-0.5"
 dependencies = [
  "anyhow",
  "async-trait",
