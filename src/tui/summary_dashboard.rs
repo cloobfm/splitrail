@@ -508,15 +508,33 @@ pub fn draw_summary_view(
     }
 
     let cli_rows = vec![
-        // Cached Tokens row
+        // Streak row (replacing Cached Tokens)
         {
             let mut cells = vec![Cell::new(
-                Line::from("💾 Cached Tks").style(Style::default().fg(Color::LightMagenta)),
+                Line::from("🔥 Streak").style(Style::default().fg(Color::Red)),
             )];
             for &idx in visible_indices {
-                let (_, cached, _, _, _, _, _, _, _, _, _) = &cli_data[idx];
+                let analyzer_stats = &filtered_stats[idx];
+
+                // Count days in the last 30 days that have data
+                let now = chrono::Local::now().date_naive();
+                let thirty_days_ago = now - chrono::Duration::days(30);
+
+                let days_with_data = analyzer_stats
+                    .daily_stats
+                    .iter()
+                    .filter(|(date_str, _)| {
+                        if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                            date >= thirty_days_ago && date <= now
+                        } else {
+                            false
+                        }
+                    })
+                    .count();
+
                 cells.push(Cell::new(
-                    Line::from(format_number(*cached, format_options)).right_aligned(),
+                    Line::from(format!("{}", days_with_data))
+                        .right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -543,19 +561,6 @@ pub fn draw_summary_view(
                 let (_, _, _, output, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*output, format_options)).right_aligned(),
-                ));
-            }
-            Row::new(cells)
-        },
-        // Reasoning row
-        {
-            let mut cells = vec![Cell::new(
-                Line::from("🧠 Reasoning").style(Style::default().fg(Color::Red)),
-            )];
-            for &idx in visible_indices {
-                let (_, _, _, _, reasoning, _, _, _, _, _, _) = &cli_data[idx];
-                cells.push(Cell::new(
-                    Line::from(format_number(*reasoning, format_options)).right_aligned(),
                 ));
             }
             Row::new(cells)
