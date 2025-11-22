@@ -1074,7 +1074,7 @@ pub fn draw_visual_cli_panels(
                 .map(|(model, _)| model)
                 .unwrap_or_else(|| String::from("—"));
             
-            // Truncate long model names
+            // Truncate long model names and pad to fixed width for alignment
             let model_display = if most_used_model.len() > 15 {
                 format!("{}…", &most_used_model[..14])
             } else {
@@ -1086,7 +1086,7 @@ pub fn draw_visual_cli_panels(
                 Style::default().fg(name_color).bold(),
             ));
             line_spans.push(Span::styled(
-                format!(" [{}]", model_display),
+                format!(" [{:15}]", model_display),  // Fixed width of 15 for alignment
                 Style::default().fg(Color::DarkGray).italic(),
             ));
             line_spans.push(Span::raw(" "));
