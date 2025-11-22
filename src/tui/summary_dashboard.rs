@@ -31,6 +31,8 @@ pub struct SummaryData {
     pub selected_day_stats: AggregatedStats,
     pub selected_day_offset: usize,
     pub active_clis: usize,
+    // Cache sparklines to avoid expensive recalculation on every redraw
+    pub sparkline_cache: HashMap<String, Vec<Span<'static>>>,
 }
 
 impl AggregatedStats {
@@ -86,6 +88,14 @@ pub fn calculate_summary_data(
         }
     }
 
+    // Pre-calculate sparklines for all CLIs to cache them
+    let mut sparkline_cache = HashMap::new();
+    let render_time = chrono::Utc::now();
+    for stats in filtered_stats {
+        let sparkline = create_activity_sparkline(stats, render_time);
+        sparkline_cache.insert(stats.analyzer_name.clone(), sparkline);
+    }
+    
     SummaryData {
         today_stats,
         yesterday_stats,
@@ -94,6 +104,7 @@ pub fn calculate_summary_data(
         selected_day_stats,
         selected_day_offset: day_offset,
         active_clis: filtered_stats.len(),
+        sparkline_cache,
     }
 }
 
@@ -118,6 +129,7 @@ pub fn draw_summary_view(
         selected_day_stats: _,
         selected_day_offset,
         active_clis,
+        sparkline_cache: _,  // Accessed directly from summary_data below
     } = summary_data;
 
     // Split area into parts: spacing + overview table + spacing + CLI breakdown table + visual panels
@@ -707,6 +719,7 @@ pub fn draw_summary_view(
         tui_state,
         render_time_utc,
         render_time_system,
+        summary_data,  // Pass summary_data to access sparkline cache
     );
 }
 
@@ -985,6 +998,7 @@ pub fn draw_visual_cli_panels(
     tui_state: &mut crate::tui::TuiState,
     render_time_utc: chrono::DateTime<chrono::Utc>,
     render_time_system: std::time::SystemTime,
+    summary_data: &SummaryData,  // Access to sparkline cache
 ) {
     if filtered_stats.is_empty() {
         return;
@@ -1052,7 +1066,11 @@ pub fn draw_visual_cli_panels(
         ) = &cli_data[ordered_idx];
 
         // Line 1: CLI name, state, activity sparkline
-        let sparkline = create_activity_sparkline(stats, render_time_utc);
+        // Use cached sparkline instead of recalculating every second
+        let sparkline = summary_data.sparkline_cache
+            .get(&stats.analyzer_name)
+            .cloned()
+            .unwrap_or_else(|| create_activity_sparkline(stats, render_time_utc));
         let (_last_role, message_lines) = get_last_message_preview(stats, 50);
 
         let name_color = match state.as_str() {
