@@ -1074,20 +1074,34 @@ pub fn draw_visual_cli_panels(
                 .map(|(model, _)| model)
                 .unwrap_or_else(|| String::from("—"));
             
-            // Smart truncation that preserves version numbers at the end
+            // Scrolling animation for long model names
             let model_display = if most_used_model.len() > 15 {
-                // Try to preserve version number at the end (e.g., "-4", "-4.5", "-3-5")
-                if let Some(last_dash) = most_used_model.rfind('-') {
-                    let version_part = &most_used_model[last_dash..];
-                    if version_part.len() <= 6 {  // Reasonable version length
-                        let prefix_len = 15 - version_part.len() - 1; // -1 for ellipsis
-                        format!("{}…{}", &most_used_model[..prefix_len], version_part)
-                    } else {
-                        format!("{}…", &most_used_model[..14])
-                    }
-                } else {
-                    format!("{}…", &most_used_model[..14])
-                }
+                // Use time-based scrolling animation
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                
+                // Scroll position updates every 2 seconds, wrapping around
+                let max_width = 15;
+                let scroll_speed = 1; // characters per interval
+                let scroll_interval = 2; // seconds per scroll step
+                
+                let scroll_position = ((now / scroll_interval) * scroll_speed) as usize % (most_used_model.len() + 3);
+                
+                // Create scrolling window with padding
+                let padded_text = format!("{}   {}", most_used_model, most_used_model); // Add spacing and repeat
+                let chars: Vec<char> = padded_text.chars().collect();
+                
+                // Extract visible window
+                let visible: String = chars
+                    .iter()
+                    .cycle()
+                    .skip(scroll_position)
+                    .take(max_width)
+                    .collect();
+                
+                visible
             } else {
                 most_used_model.clone()
             };
