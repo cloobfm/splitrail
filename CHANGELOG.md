@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.5] - 2025-11-22
+
+### Fixed
+- OpenCode analyzer now properly displays actual conversation content for both user and assistant messages
+- Fixed OpenCode schema to include summary.body field for message content
+- Fixed timezone conversion for OpenCode daily stats (UTC to local time)
+- OpenCode messages now read from part files to show real conversation text instead of action descriptions
+- OpenCode role detection now properly distinguishes between user and assistant messages
+- Live activity feed now shows meaningful OpenCode conversations matching other CLI patterns
+
 ## [2.0.0-dash-0.4] - 2025-11-20
 
 ### Fixed
