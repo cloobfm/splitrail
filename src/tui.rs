@@ -156,18 +156,10 @@ async fn run_app(
         tui_state.summary_day_offset,
     ));
 
-    // Clock timer for live time updates (but now much cheaper with time caching)
-    let mut clock_timer = std::time::Instant::now();
-    
     // Rate limit warning cleanup to once per minute
     let mut last_warning_cleanup = std::time::Instant::now();
 
     loop {
-        // Update clock every second for live time displays
-        if clock_timer.elapsed() >= Duration::from_secs(1) {
-            needs_redraw = true;
-            clock_timer = std::time::Instant::now();
-        }
         // Check for stats updates
         if stats_receiver.has_changed()? {
             current_stats = stats_receiver.borrow_and_update().clone();
