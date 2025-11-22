@@ -1074,9 +1074,20 @@ pub fn draw_visual_cli_panels(
                 .map(|(model, _)| model)
                 .unwrap_or_else(|| String::from("—"));
             
-            // Truncate long model names and pad to fixed width for alignment
+            // Smart truncation that preserves version numbers at the end
             let model_display = if most_used_model.len() > 15 {
-                format!("{}…", &most_used_model[..14])
+                // Try to preserve version number at the end (e.g., "-4", "-4.5", "-3-5")
+                if let Some(last_dash) = most_used_model.rfind('-') {
+                    let version_part = &most_used_model[last_dash..];
+                    if version_part.len() <= 6 {  // Reasonable version length
+                        let prefix_len = 15 - version_part.len() - 1; // -1 for ellipsis
+                        format!("{}…{}", &most_used_model[..prefix_len], version_part)
+                    } else {
+                        format!("{}…", &most_used_model[..14])
+                    }
+                } else {
+                    format!("{}…", &most_used_model[..14])
+                }
             } else {
                 most_used_model.clone()
             };
@@ -1085,10 +1096,14 @@ pub fn draw_visual_cli_panels(
                 format!("{:12}", cli_name),
                 Style::default().fg(name_color).bold(),
             ));
+            // Bracket closes after model name, then pad to fixed width for alignment
             line_spans.push(Span::styled(
-                format!(" [{:15}]", model_display),  // Fixed width of 15 for alignment
+                format!(" [{}]", model_display),
                 Style::default().fg(Color::DarkGray).italic(),
             ));
+            // Add padding after bracket to align sparklines (total width: 1 + 2 + model_display + 1 = variable, pad to 19)
+            let padding_needed = 19usize.saturating_sub(3 + model_display.len());
+            line_spans.push(Span::raw(" ".repeat(padding_needed)));
             line_spans.push(Span::raw(" "));
         } else {
             line_spans.push(Span::styled(
