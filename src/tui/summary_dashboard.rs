@@ -1082,12 +1082,18 @@ pub fn draw_visual_cli_panels(
                     .unwrap()
                     .as_secs();
                 
-                // Scroll position updates every 2 seconds, wrapping around
+                // Scroll position updates every 0.3 seconds, wrapping around
                 let max_width = 15;
                 let scroll_speed = 1; // characters per interval
-                let scroll_interval = 2; // seconds per scroll step
+                let scroll_interval_millis = 300; // milliseconds per scroll step
                 
-                let scroll_position = ((now / scroll_interval) * scroll_speed) as usize % (most_used_model.len() + 3);
+                // Use milliseconds for smoother scrolling
+                let now_millis = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                
+                let scroll_position = ((now_millis / scroll_interval_millis) * scroll_speed) as usize % (most_used_model.len() + 3);
                 
                 // Create scrolling window with padding
                 let padded_text = format!("{}   {}", most_used_model, most_used_model); // Add spacing and repeat
