@@ -46,6 +46,7 @@ pub struct TuiState {
     pub layout: UiLayout,
     pub mouse_mode_enabled: bool, // Toggle between mouse scroll and text selection
     pub summary_verbose_mode: bool,
+    pub daily_stats_view_start: usize, // For daily stats pagination (0 = most recent 30 days)
 }
 
 #[derive(Debug, Clone)]
@@ -331,18 +332,17 @@ async fn run_app(
                                 if analyzer_index < table_states.len()
                                     && let Some(current_stats) = filtered_stats.get(analyzer_index)
                                 {
-                                    let total_rows = current_stats.daily_stats.len() + 3; // header + data + separator + totals
+                                    // Calculate visible rows (only showing last 30 days by default)
+                                    let total_days = current_stats.daily_stats.len();
+                                    let view_limit = 30;
+                                    let visible_days = std::cmp::min(view_limit, total_days);
+                                    let total_rows = visible_days + 2; // data rows + separator + totals
+
                                     if let Some(table_state) = table_states.get_mut(analyzer_index)
                                         && let Some(selected) = table_state.selected()
                                         && selected < total_rows.saturating_sub(1)
                                     {
-                                        table_state.select(Some(
-                                            if selected == current_stats.daily_stats.len() {
-                                                selected + 2 // Skip separator row
-                                            } else {
-                                                selected + 1
-                                            },
-                                        ));
+                                        table_state.select(Some(selected + 1));
                                         needs_redraw = true;
                                     }
                                 }
@@ -373,13 +373,7 @@ async fn run_app(
                                     && let Some(selected) = table_state.selected()
                                     && selected > 0
                                 {
-                                    table_state.select(Some(selected.saturating_sub(
-                                        if selected == current_stats.daily_stats.len() + 1 {
-                                            2 // Skip separator row
-                                        } else {
-                                            1
-                                        },
-                                    )));
+                                    table_state.select(Some(selected.saturating_sub(1)));
                                     needs_redraw = true;
                                 }
                             }
@@ -409,7 +403,11 @@ async fn run_app(
                                 if analyzer_index < table_states.len()
                                     && let Some(current_stats) = filtered_stats.get(analyzer_index)
                                 {
-                                    let total_rows = current_stats.daily_stats.len() + 2;
+                                    // Calculate visible rows (only showing last 30 days by default)
+                                    let total_days = current_stats.daily_stats.len();
+                                    let view_limit = 30;
+                                    let visible_days = std::cmp::min(view_limit, total_days);
+                                    let total_rows = visible_days + 2; // data rows + separator + totals
                                     if let Some(table_state) = table_states.get_mut(analyzer_index)
                                     {
                                         table_state.select(Some(total_rows.saturating_sub(1)));
@@ -428,7 +426,11 @@ async fn run_app(
                                 if analyzer_index < table_states.len()
                                     && let Some(current_stats) = filtered_stats.get(analyzer_index)
                                 {
-                                    let total_rows = current_stats.daily_stats.len() + 2;
+                                    // Calculate visible rows (only showing last 30 days by default)
+                                    let total_days = current_stats.daily_stats.len();
+                                    let view_limit = 30;
+                                    let visible_days = std::cmp::min(view_limit, total_days);
+                                    let total_rows = visible_days + 2; // data rows + separator + totals
                                     if let Some(table_state) = table_states.get_mut(analyzer_index)
                                         && let Some(selected) = table_state.selected()
                                     {
@@ -455,6 +457,25 @@ async fn run_app(
                                     table_state.select(Some(new_selected));
                                     needs_redraw = true;
                                 }
+                            }
+                        }
+                        // Add pagination controls for loading more historical data
+                        KeyCode::Char('+') => {
+                            // Load more historical data (go back in time)
+                            if tui_state.selected_tab > 0
+                                && tui_state.selected_tab <= filtered_stats.len()
+                            {
+                                tui_state.daily_stats_view_start = tui_state.daily_stats_view_start.saturating_add(30);
+                                needs_redraw = true;
+                            }
+                        }
+                        KeyCode::Char('-') => {
+                            // Load more recent data (go forward in time)
+                            if tui_state.selected_tab > 0
+                                && tui_state.selected_tab <= filtered_stats.len()
+                            {
+                                tui_state.daily_stats_view_start = tui_state.daily_stats_view_start.saturating_sub(30);
+                                needs_redraw = true;
                             }
                         }
                         _ => {}
@@ -671,7 +692,7 @@ fn draw_ui(
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, m: toggle {} mode, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, m: toggle {} mode, q/Esc: quit",
                 mouse_mode_indicator
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
@@ -764,25 +785,20 @@ fn draw_daily_stats_table(
     format_options: &NumberFormatOptions,
     table_state: &mut TableState,
 ) -> usize {
-    let header = Row::new(vec![
-        Cell::new(""),
-        Cell::new("Date"),
-        Cell::new(Text::from("Cost").right_aligned()),
-        Cell::new(Text::from("Cached Tks").right_aligned()),
-        Cell::new(Text::from("Inp Tks").right_aligned()),
-        Cell::new(Text::from("Outp Tks").right_aligned()),
-        Cell::new(Text::from("Reason Tks").right_aligned()),
-        Cell::new(Text::from("Convs").right_aligned()),
-        Cell::new(Text::from("Tools").right_aligned()),
-        // Cell::new(Text::from("Lines").right_aligned()),
-        Cell::new("Models"),
-    ])
-    .style(Style::default().add_modifier(Modifier::BOLD))
-    .height(1);
+    // Convert BTreeMap to Vec and reverse to show most recent first
+    let all_dates: Vec<(&String, &crate::types::DailyStats)> = stats.daily_stats.iter().collect();
+    let total_days = all_dates.len();
 
-    // Find best values for highlighting
-    // TODO: Let's refactor this.
+    // Show only the most recent 30 days by default
+    let view_limit = 30; // Show last 30 days by default
+    let start_idx = 0; // For now, show most recent 30 days only
+    let end_idx = std::cmp::min(start_idx + view_limit, total_days);
+    let visible_dates = &all_dates[start_idx..end_idx];
 
+    // Show most recent first (reverse the slice)
+    let visible_dates_reversed: Vec<_> = visible_dates.iter().rev().collect();
+
+    // Find best values for highlighting among visible dates only
     let mut best_cost = 0.0;
     let mut best_cost_i = 0;
     let mut best_cached_tokens = 0;
@@ -798,7 +814,7 @@ fn draw_daily_stats_table(
     let mut best_tool_calls = 0;
     let mut best_tool_calls_i = 0;
 
-    for (i, day_stats) in stats.daily_stats.values().enumerate() {
+    for (i, (_, day_stats)) in visible_dates_reversed.iter().enumerate() {
         if day_stats.stats.cost > best_cost {
             best_cost = day_stats.stats.cost;
             best_cost_i = i;
@@ -829,6 +845,41 @@ fn draw_daily_stats_table(
         }
     }
 
+    let header = Row::new(vec![
+        Cell::new(""),
+        Cell::new("Date"),
+        Cell::new(Text::from("Cost").right_aligned()),
+        Cell::new(Text::from("Cached Tks").right_aligned()),
+        Cell::new(Text::from("Inp Tks").right_aligned()),
+        Cell::new(Text::from("Outp Tks").right_aligned()),
+        Cell::new(Text::from("Reason Tks").right_aligned()),
+        Cell::new(Text::from("Convs").right_aligned()),
+        Cell::new(Text::from("Tools").right_aligned()),
+        // Cell::new(Text::from("Lines").right_aligned()),
+        Cell::new("Models"),
+    ])
+    .style(Style::default().add_modifier(Modifier::BOLD))
+    .height(1);
+
+    // Show most recent first (reverse the slice)
+    let visible_dates_reversed: Vec<_> = visible_dates.iter().rev().collect();
+
+    let header = Row::new(vec![
+        Cell::new(""),
+        Cell::new("Date"),
+        Cell::new(Text::from("Cost").right_aligned()),
+        Cell::new(Text::from("Cached Tks").right_aligned()),
+        Cell::new(Text::from("Inp Tks").right_aligned()),
+        Cell::new(Text::from("Outp Tks").right_aligned()),
+        Cell::new(Text::from("Reason Tks").right_aligned()),
+        Cell::new(Text::from("Convs").right_aligned()),
+        Cell::new(Text::from("Tools").right_aligned()),
+        // Cell::new(Text::from("Lines").right_aligned()),
+        Cell::new("Models"),
+    ])
+    .style(Style::default().add_modifier(Modifier::BOLD))
+    .height(1);
+
     let mut rows = Vec::new();
     let mut total_cost = 0.0;
     let mut total_cached = 0;
@@ -837,7 +888,7 @@ fn draw_daily_stats_table(
     let mut total_reasoning = 0;
     let mut total_tool_calls = 0;
 
-    for (i, (date, day_stats)) in stats.daily_stats.iter().enumerate() {
+    for (i, (date, day_stats)) in visible_dates_reversed.iter().enumerate() {
         total_cost += day_stats.stats.cost;
         total_cached += day_stats.stats.cached_tokens;
         total_input += day_stats.stats.input_tokens;
@@ -1050,9 +1101,9 @@ fn draw_daily_stats_table(
         rows.push(row);
     }
 
-    // Collect all unique models for the totals row
+    // Collect all unique models for the totals row (only from visible dates)
     let mut all_models = std::collections::HashSet::new();
-    for day_stats in stats.daily_stats.values() {
+    for (_, day_stats) in visible_dates_reversed.iter() {
         for model in day_stats.models.keys() {
             all_models.insert(model);
         }
@@ -1115,22 +1166,19 @@ fn draw_daily_stats_table(
     ]);
     rows.push(separator_row);
 
-    // Add totals row
-    let _total_lines_r = stats
-        .daily_stats
-        .values()
-        .map(|s| s.stats.lines_read)
-        .sum::<u64>();
-    let _total_lines_e = stats
-        .daily_stats
-        .values()
-        .map(|s| s.stats.lines_edited)
-        .sum::<u64>();
-    let _total_lines_a = stats
-        .daily_stats
-        .values()
-        .map(|s| s.stats.lines_added)
-        .sum::<u64>();
+    // Add totals row (only for visible dates)
+    let _total_lines_r: u64 = visible_dates_reversed
+        .iter()
+        .map(|(_, s)| s.stats.lines_read)
+        .sum();
+    let _total_lines_e: u64 = visible_dates_reversed
+        .iter()
+        .map(|(_, s)| s.stats.lines_edited)
+        .sum();
+    let _total_lines_a: u64 = visible_dates_reversed
+        .iter()
+        .map(|(_, s)| s.stats.lines_added)
+        .sum();
 
     let totals_row = Row::new(vec![
         // Arrow indicator for totals row when selected
@@ -1145,7 +1193,7 @@ fn draw_daily_stats_table(
             Line::from(Span::raw(""))
         },
         Line::from(Span::styled(
-            format!("Total ({}d)", stats.daily_stats.len()),
+            format!("Total ({}d of {} shown)", visible_dates_reversed.len(), stats.daily_stats.len()),
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
@@ -1178,7 +1226,7 @@ fn draw_daily_stats_table(
         ))
         .right_aligned(),
         Line::from(Span::styled(
-            format_number(stats.num_conversations, format_options),
+            format_number(visible_dates_reversed.len() as u64, format_options), // Show number of visible days
             Style::default().add_modifier(Modifier::BOLD),
         ))
         .right_aligned(),
