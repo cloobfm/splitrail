@@ -12,6 +12,7 @@ mod analyzer;
 mod analyzers;
 mod config;
 mod models;
+mod notifications;
 mod reqwest_simd_json;
 mod tui;
 mod types;
@@ -69,7 +70,7 @@ enum ConfigSubcommands {
     Show,
     /// Set configuration value
     Set {
-        /// Configuration key (api-token, auto-upload, number-comma, number-human, locale, decimal-places, health-display-style)
+        /// Configuration key (api-token, auto-upload, number-comma, number-human, locale, decimal-places, health-display-style, notifications-enabled, notifications-wait-seconds, notifications-stale-minutes, notifications-sample-messages, slack-enabled, slack-webhook-url, slack-channel, slack-username)
         key: String,
         /// Configuration value
         value: String,
@@ -87,7 +88,9 @@ async fn main() {
     let format_options = utils::NumberFormatOptions {
         use_comma: cli.number_comma || config.formatting.number_comma,
         use_human: cli.number_human || config.formatting.number_human,
-        locale: cli.locale.unwrap_or(config.formatting.locale),
+        locale: cli
+            .locale
+            .unwrap_or_else(|| config.formatting.locale.clone()),
         decimal_places: cli
             .decimal_places
             .unwrap_or(config.formatting.decimal_places),
@@ -96,7 +99,7 @@ async fn main() {
     match cli.command {
         None => {
             // No subcommand - run default behavior
-            run_default(format_options).await;
+            run_default(format_options, config).await;
         }
         Some(Commands::Upload) => match run_upload().await.context("Failed to run upload") {
             Ok(_) => {}
@@ -131,7 +134,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     registry
 }
 
-async fn run_default(format_options: utils::NumberFormatOptions) {
+async fn run_default(format_options: utils::NumberFormatOptions, config: config::Config) {
     let registry = create_analyzer_registry();
 
     // Create file watcher
@@ -161,8 +164,17 @@ async fn run_default(format_options: utils::NumberFormatOptions) {
     // Set upload status on stats manager for real-time upload tracking
     stats_manager.set_upload_status(upload_status.clone());
 
+    // Start notification manager if enabled
+    if let Some(manager) = notifications::NotificationManager::from_config(&config) {
+        let stats_rx = stats_manager.get_stats_receiver();
+        tokio::spawn(async move {
+            if let Err(e) = manager.run(stats_rx).await {
+                eprintln!("Notification task stopped: {e:#}");
+            }
+        });
+    }
+
     // Check if auto-upload is enabled and start background upload
-    let config = config::Config::load().unwrap_or(None).unwrap_or_default();
     if config.upload.auto_upload {
         if config.is_configured() {
             let upload_status_clone = upload_status.clone();

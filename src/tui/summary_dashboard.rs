@@ -1,3 +1,4 @@
+use crate::notifications::{last_notification_age_seconds, next_notification_eta_seconds};
 use crate::types::{AgenticCodingToolStats, Application};
 use crate::utils::{
     NumberFormatOptions, calculate_overall_health, format_number, format_timestamp_for_live_view,
@@ -1390,11 +1391,53 @@ pub fn draw_visual_cli_panels(
 
     let now = chrono::Local::now();
     let clock_text = now.format("%H:%M:%S").to_string();
-    let title = format!("📊 Activity: {}", clock_text);
+
+    // Notification status (Slack + next ETA + last send)
+    let config = crate::config::Config::load()
+        .unwrap_or(None)
+        .unwrap_or_default();
+    let notif_cfg = &config.notifications;
+    let notifications_enabled = notif_cfg.enabled
+        && notif_cfg.slack.enabled
+        && notif_cfg.slack.webhook_url.is_some();
+    let waiting_secs = notif_cfg.waiting_seconds as i64;
+    let stale_secs = (notif_cfg.stale_minutes * 60) as i64;
+
+    let eta = if notifications_enabled {
+        next_notification_eta_seconds(filtered_stats, waiting_secs, stale_secs)
+    } else {
+        None
+    };
+    let last_age = if notif_cfg.enabled {
+        last_notification_age_seconds(90)
+    } else {
+        None
+    };
+
+    let slack_icon = if notifications_enabled { "✅" } else { "⬜" };
+    let eta_text = eta.map(|s| format!("{s}s")).unwrap_or_else(|| "—".to_string());
+    let last_icon = if last_age.is_some() { "✅" } else { "⬜" };
+    let last_text = last_age
+        .map(|s| format!("{s}s ago"))
+        .unwrap_or_else(|| "—".to_string());
+    let right_text = format!("Slack {slack_icon} | next {eta_text} | last {last_icon} {last_text}");
+
+    let left_text = format!("📊 Activity: {clock_text}");
+    let total_width = area.width as usize;
+    let padding = total_width
+        .saturating_sub(left_text.len().min(total_width))
+        .saturating_sub(right_text.len().min(total_width));
+    let spacer = " ".repeat(padding.saturating_sub(1));
+
+    let title_line = Line::from(vec![
+        Span::raw(left_text),
+        Span::raw(spacer),
+        Span::styled(right_text, Style::default().fg(Color::Green)),
+    ]);
 
     let paragraph = Paragraph::new(lines).block(
         Block::default()
-            .title(title)
+            .title(title_line)
             .title_style(Style::default().bold().fg(Color::Cyan)),
     );
 
