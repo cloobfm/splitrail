@@ -102,6 +102,7 @@ struct OpenCodeCache {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OpenCodeMessageSummary {
     title: String,
+    body: Option<String>,  // Full message body text
     diffs: Vec<serde_json::Value>,
 }
 
@@ -210,7 +211,7 @@ impl Analyzer for OpenCodeAnalyzer {
                         .map(|s| s.directory.clone())
                         .unwrap_or_else(|| "unknown".to_string());
                     
-                    // Read text content from part files for this message
+                    // Read actual message content from part files for both user and assistant
                     let message_content = self.read_message_text_content(&opencode_msg.id);
                     
                     // Convert to our internal format
@@ -235,7 +236,9 @@ impl Analyzer for OpenCodeAnalyzer {
         let mut num_conversations = 0;
         
         for message in &messages {
-            let date_str = message.date.format("%Y-%m-%d").to_string();
+            // Convert UTC timestamp to local timezone for daily stats grouping
+            let local_date = message.date.with_timezone(&chrono::Local);
+            let date_str = local_date.format("%Y-%m-%d").to_string();
             let daily = daily_stats.entry(date_str.clone()).or_insert_with(|| crate::types::DailyStats {
                 date: date_str,
                 user_messages: 0,
@@ -362,11 +365,11 @@ impl OpenCodeAnalyzer {
         project_path: &str,
         content: Option<String>,
     ) -> Option<ConversationMessage> {
-        // Convert role
+        // Determine role: user messages have actual user text in part files
         let role = match msg.role.to_lowercase().as_str() {
             "user" => MessageRole::User,
             "assistant" | "ai" => MessageRole::Assistant,
-            _ => return None, // Skip unknown roles
+            _ => return None,
         };
 
         // Generate hashes
