@@ -310,7 +310,7 @@ pub fn draw_summary_view(
     .header(header)
     .block(
         Block::default()
-            .title("📈 Summary Overview")
+            .title("📈 Overview")
             .title_style(Style::default().bold()),
     )
     .column_spacing(2);
@@ -668,6 +668,37 @@ pub fn draw_summary_view(
             }
             Row::new(cells)
         },
+        // Streak row
+        {
+            let mut cells = vec![Cell::new(
+                Line::from("🔥 Streak").style(Style::default().fg(Color::Red)),
+            )];
+            for &idx in visible_indices {
+                let analyzer_stats = &filtered_stats[idx];
+
+                // Count days in the last 30 days that have data
+                let now = chrono::Local::now().date_naive();
+                let thirty_days_ago = now - chrono::Duration::days(30);
+
+                let days_with_data = analyzer_stats
+                    .daily_stats
+                    .iter()
+                    .filter(|(date_str, _)| {
+                        if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                            date >= thirty_days_ago && date <= now
+                        } else {
+                            false
+                        }
+                    })
+                    .count();
+
+                cells.push(Cell::new(
+                    Line::from(format!("{}", days_with_data))
+                        .right_aligned(),
+                ));
+            }
+            Row::new(cells)
+        },
         // Status row
         {
             let mut cells = vec![Cell::new(
@@ -683,14 +714,14 @@ pub fn draw_summary_view(
 
     // Format the title based on the selected day offset
     let table_title = if *selected_day_offset == 0 {
-        "📊 Today by CLI".to_string()
+        "📊 Today".to_string()
     } else {
         // Format the selected date as "Weekday, Month Day, Year"
         let selected_date_with_tz = now - ChronoDuration::days(*selected_day_offset as i64);
         let weekday = selected_date_with_tz.format("%A").to_string(); // Monday, Tuesday, etc.
         let formatted_date = selected_date_with_tz.format("%B %d, %Y").to_string(); // November 15, 2025
         format!(
-            "📊 {} ({}, {} days ago) by CLI",
+            "📊 {} ({}, {} days ago)",
             weekday,
             formatted_date,
             selected_day_offset,
@@ -1267,7 +1298,7 @@ pub fn draw_visual_cli_panels(
 
     let now = chrono::Local::now();
     let clock_text = now.format("%H:%M:%S").to_string();
-    let title = format!("📊 Live Activity: {}", clock_text);
+    let title = format!("📊 Live: {}", clock_text);
 
     let paragraph = Paragraph::new(lines).block(
         Block::default()
