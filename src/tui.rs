@@ -257,8 +257,9 @@ async fn run_app(
             needs_redraw = false;
         }
 
-        // Use a timeout to allow periodic refreshes for upload status updates
-        if let Ok(event_available) = event::poll(Duration::from_millis(100)) {
+        // Use a timeout to allow periodic refreshes for upload status updates  
+        // 250ms poll interval reduces CPU by reducing loop iterations (still responsive)
+        if let Ok(event_available) = event::poll(Duration::from_millis(250)) {
             if !event_available {
                 continue;
             }
