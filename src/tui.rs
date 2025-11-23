@@ -45,6 +45,8 @@ pub struct TuiState {
     pub mouse_mode_enabled: bool, // Toggle between mouse scroll and text selection
     pub summary_verbose_mode: bool,
     pub daily_stats_view_start: usize, // For daily stats pagination (0 = most recent 30 days)
+    pub status_message: Option<String>, // Temporary status messages (Slack toggle, etc.)
+    pub status_message_timer: Option<std::time::Instant>, // Auto-clear timer for status messages
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +271,15 @@ async fn run_app(
             needs_redraw = true;
             last_clock_tick = Instant::now();
         }
+        
+        // Auto-clear status messages after 3 seconds
+        if let (Some(_), Some(timer)) = (&tui_state.status_message, &tui_state.status_message_timer) {
+            if timer.elapsed() >= Duration::from_secs(3) {
+                tui_state.status_message = None;
+                tui_state.status_message_timer = None;
+                needs_redraw = true;
+            }
+        }
 
         // Use a timeout to allow periodic refreshes for upload status updates
         // 250ms poll interval reduces CPU by reducing loop iterations (still responsive)
@@ -317,7 +328,7 @@ async fn run_app(
                         continue;
                     }
 
-                    // Handle Slack notifications toggle
+                        // Handle Slack notifications toggle
                     if key.code == KeyCode::Char('s') {
                         match crate::config::Config::load() {
                             Ok(Some(mut config)) => {
@@ -328,19 +339,23 @@ async fn run_app(
                                 if let Err(e) = config.save(false) {
                                     eprintln!("Failed to save config: {}", e);
                                 } else {
+                                    // Set status message with auto-clear timer
                                     let status = if config.notifications.slack.enabled {
                                         "✅ Slack notifications enabled"
                                     } else {
                                         "❌ Slack notifications disabled"
                                     };
-                                    println!("{}", status);
+                                    tui_state.status_message = Some(status.to_string());
+                                    tui_state.status_message_timer = Some(std::time::Instant::now());
                                 }
                             }
                             Ok(None) => {
-                                println!("❌ No configuration found. Run 'splitrail config init' to create one.");
+                                tui_state.status_message = Some("❌ No configuration found. Run 'splitrail config init' to create one.".to_string());
+                                tui_state.status_message_timer = Some(std::time::Instant::now());
                             }
                             Err(e) => {
-                                eprintln!("❌ Failed to load configuration: {}", e);
+                                tui_state.status_message = Some(format!("❌ Failed to load configuration: {}", e));
+                                tui_state.status_message_timer = Some(std::time::Instant::now());
                             }
                         }
                         needs_redraw = true;
@@ -628,12 +643,14 @@ fn draw_ui(
     let chunks = if has_data {
         // For Summary view (tui_state.selected_tab == 0), give more space to main table since no totals shown
         let summary_stats_height = if tui_state.selected_tab == 0 { 0 } else { 9 };
+        let has_status_message = tui_state.status_message.is_some();
         Layout::vertical([
             Constraint::Length(3),                             // Header
             Constraint::Length(1),                             // Tabs
             Constraint::Min(3),                                // Main table
             Constraint::Length(summary_stats_height),          // Summary stats (0 for Summary tab)
             Constraint::Length(if has_error { 3 } else { 1 }), // Help text
+            Constraint::Length(if has_status_message { 1 } else { 0 }), // Status bar
         ])
         .split(frame.area())
     } else {
@@ -797,6 +814,21 @@ fn draw_ui(
                     .alignment(ratatui::layout::Alignment::Right)
                     .wrap(ratatui::widgets::Wrap { trim: true });
                 frame.render_widget(status_widget, help_chunks[1]);
+            }
+        }
+        
+        // Status bar for temporary messages (Slack toggle, etc.)
+        if let (Some(status_msg), Some(timer)) = (&tui_state.status_message, &tui_state.status_message_timer) {
+            // Auto-clear after 3 seconds
+            if timer.elapsed().as_secs() >= 3 {
+                tui_state.status_message = None;
+                tui_state.status_message_timer = None;
+            } else {
+                let status_widget = Paragraph::new(status_msg.clone())
+                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                    .alignment(ratatui::layout::Alignment::Center)
+                    .wrap(ratatui::widgets::Wrap { trim: true });
+                frame.render_widget(status_widget, help_chunks[if tui_state.status_message.is_some() { 2 } else { 1 }]);
             }
         }
     } else {
