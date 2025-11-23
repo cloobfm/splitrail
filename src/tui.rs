@@ -230,15 +230,18 @@ async fn run_app(
         // Periodically refresh sparkline cache so sliding windows stay up to date without heavy recompute
         if last_sparkline_refresh.elapsed() >= Duration::from_secs(5) {
             if let Some(summary) = cached_summary_data.as_mut() {
+                let now_utc = chrono::Utc::now();
                 let (cache, max_cache, buffers) = build_activity_sparkline_cache_with_prev(
                     &filtered_stats,
-                    chrono::Utc::now(),
+                    now_utc,
                     Some(&summary.sparkline_max_cache),
                     Some(&summary.sparkline_buffers),
                 );
                 summary.sparkline_cache = cache;
                 summary.sparkline_max_cache = max_cache;
                 summary.sparkline_buffers = buffers;
+                // Also refresh tokens per second (same 5-second cadence)
+                summary.tokens_per_second = calculate_tokens_per_second(&filtered_stats, now_utc);
                 needs_redraw = true;
             }
             last_sparkline_refresh = Instant::now();

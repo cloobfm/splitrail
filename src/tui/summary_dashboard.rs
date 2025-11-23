@@ -40,6 +40,8 @@ pub struct SummaryData {
     pub sparkline_cache: HashMap<String, Vec<Span<'static>>>,
     pub sparkline_max_cache: HashMap<String, u64>,
     pub sparkline_buffers: HashMap<String, SparklineState>,
+    // Cached tokens per second to avoid recalculating on every redraw
+    pub tokens_per_second: f64,
 }
 
 pub fn build_activity_sparkline_cache(
@@ -89,6 +91,39 @@ impl AggregatedStats {
         self.reasoning_tokens += day_stats.stats.reasoning_tokens;
         self.tool_calls += day_stats.stats.tool_calls as u64;
         self.conversations += day_stats.conversations as u64;
+    }
+}
+
+/// Calculate 15-minute moving average of output tokens per second
+pub fn calculate_tokens_per_second(
+    filtered_stats: &[&AgenticCodingToolStats],
+    render_time: chrono::DateTime<chrono::Utc>,
+) -> f64 {
+    let fifteen_minutes_ago = render_time - ChronoDuration::minutes(15);
+
+    // Collect all assistant messages from the last 15 minutes
+    let mut total_output_tokens: u64 = 0;
+
+    for analyzer_stats in filtered_stats {
+        for message in &analyzer_stats.messages {
+            // Only count assistant messages (they have output tokens)
+            if message.role == crate::types::MessageRole::Assistant
+                && message.date >= fifteen_minutes_ago
+                && message.date <= render_time
+            {
+                total_output_tokens += message.stats.output_tokens;
+            }
+        }
+    }
+
+    // Calculate tokens per second over the 15-minute window
+    // Always divide by full 15 minutes (900 seconds) for a true moving average
+    let time_window_seconds = 15.0 * 60.0; // 900 seconds
+
+    if total_output_tokens == 0 {
+        0.0
+    } else {
+        total_output_tokens as f64 / time_window_seconds
     }
 }
 
@@ -143,6 +178,9 @@ pub fn calculate_summary_data(
     let (sparkline_cache, sparkline_max_cache, sparkline_buffers) =
         build_activity_sparkline_cache(filtered_stats, render_time);
 
+    // Pre-calculate tokens per second to cache it
+    let tokens_per_second = calculate_tokens_per_second(filtered_stats, render_time);
+
     SummaryData {
         today_stats,
         yesterday_stats,
@@ -155,6 +193,7 @@ pub fn calculate_summary_data(
         sparkline_cache,
         sparkline_max_cache,
         sparkline_buffers,
+        tokens_per_second,
     }
 }
 
@@ -185,6 +224,7 @@ pub fn draw_summary_view(
         sparkline_cache: _,     // Accessed directly from summary_data below
         sparkline_max_cache: _, // Accessed directly from summary_data below
         sparkline_buffers: _,   // Accessed directly from summary_data below
+        tokens_per_second: _,   // Accessed directly from summary_data below
     } = summary_data;
 
     // Split area into parts: spacing + overview table + spacing + CLI breakdown table + visual panels
@@ -1479,13 +1519,26 @@ pub fn draw_visual_cli_panels(
     let slack_section = format!("| {} Slack", slack_icon); // Fixed 8 chars
     let next_section = format!("|{countdown_bar}| {remaining_display}"); // Fixed 25 chars with left boundary
     let last_section = format!("last {last_icon} {last_text:>7}"); // Fixed 16 chars for "XXs ago" or "—"
-    
-    let left_text = format!("📊 Activity: {clock_text}");
+
+    // Use cached 15-minute moving average tokens per second (refreshed every 5 seconds)
+    let tks_per_sec = summary_data.tokens_per_second;
+    // Fixed-width format optimized for typical < 100 range: "42.3 tk/s", " 8.7 tk/s", " 0.7 tk/s"
+    let tks_display = if tks_per_sec >= 100.0 {
+        format!("{:.0} tk/s", tks_per_sec)           // "123 tk/s" (no decimal for 100+, rare)
+    } else if tks_per_sec >= 1.0 {
+        format!("{:>4.1} tk/s", tks_per_sec)         // "42.3 tk/s" or " 8.7 tk/s" (9 chars total)
+    } else if tks_per_sec > 0.0 {
+        format!("{:>4.1} tk/s", tks_per_sec)         // " 0.7 tk/s" (9 chars total)
+    } else {
+        "  — tk/s".to_string()                       // "  — tk/s" (9 chars total)
+    };
+
+    let left_text = format!("📊 Activity: {} | {}", clock_text, tks_display);
     
     // Build title line with fixed positioning - no dynamic width calculations
     let mut title_spans = vec![
         Span::raw(left_text),
-        Span::raw("                             "), // Much larger spacer to push entire right section far right
+        Span::raw("                 "), // Much larger spacer to push entire right section far right
         Span::styled(next_section, Style::default().fg(countdown_color)), // Countdown with color
         Span::raw(" | "), // Fixed separator
         Span::raw(last_section), // Fixed width last section
