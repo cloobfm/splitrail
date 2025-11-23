@@ -745,16 +745,28 @@ fn draw_ui(
             "📝 Select"
         };
 
+        // Get Slack status
+        let slack_status = match crate::config::Config::load() {
+            Ok(Some(config)) => {
+                if config.notifications.slack.enabled {
+                    "☑ Slack"
+                } else {
+                    "☐ Slack"
+                }
+            }
+            _ => "☐ Slack",
+        };
+
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, s: Slack toggle, m: {} mode, q/Esc: quit",
-                mouse_mode_indicator
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, {} | Next | Last, m: {} mode, q/Esc: quit",
+                slack_status, mouse_mode_indicator
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, s: Slack toggle, m: toggle {} mode, q/Esc: quit",
-                mouse_mode_indicator
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, {} | Next | Last, m: toggle {} mode, q/Esc: quit",
+                slack_status, mouse_mode_indicator
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
         };
