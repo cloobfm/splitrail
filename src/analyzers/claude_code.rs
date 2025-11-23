@@ -583,11 +583,8 @@ where
             }
         }
 
-        // Determine role based on message role
-        let role = entry.message.as_ref()
-            .and_then(|m| m.role.as_ref())
-            .map(|r| if r == "assistant" { MessageRole::Assistant } else { MessageRole::User })
-            .unwrap_or(MessageRole::User);
+        // Determine role: assistant if there's usage OR tool results (since tool results are Claude's outputs)
+        let is_assistant = usage.is_some() || tool_use_result.is_some();
 
         let msg = ConversationMessage {
             global_hash: hash_text(&format!("{session_id}_{uuid}")),
@@ -600,7 +597,11 @@ where
                 .unwrap_or_else(|| project_id_from_path.clone()),
             conversation_hash: hash_text(&file_path_str),
             stats,
-            role,
+            role: if is_assistant {
+                MessageRole::Assistant
+            } else {
+                MessageRole::User
+            },
             content: content_opt,
         };
         entries.push(msg);

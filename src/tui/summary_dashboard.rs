@@ -1402,25 +1402,102 @@ pub fn draw_visual_cli_panels(
     };
 
     let slack_icon = if notifications_enabled { "✅" } else { "⬜" };
-    let eta_text = eta.map(|s| format!("{s}s")).unwrap_or_else(|| "—".to_string());
+    
+    // Create braille countdown indicator like the health bar
+    let (countdown_bar, countdown_color, remaining_display) = if let Some(remaining) = eta {
+        // eta is remaining time, so we want full when remaining=180s, empty when remaining=0s
+        // This counts DOWN like health - depletes from left to right
+        let progress = remaining as f64 / 180.0; // 180s = full, 0s = empty
+        let bar_width = 16; // Width for countdown bar
+        let total_dots = bar_width * 8;
+        let dots_to_show = ((progress * total_dots as f64).round() as usize).max(4);
+        
+        // Calculate full characters + partial character at boundary
+        let full_chars = dots_to_show / 8;
+        let remaining_dots = dots_to_show % 8;
+        
+        // Braille characters for partial filling (right-to-left within character)
+        // These fill from right side first, so bar depletes from left (counting down)
+        let partial_chars = [
+            ' ', // 0 dots
+            '⢀', // 1 dot (top-right)
+            '⢠', // 2 dots (top-right + middle-right)
+            '⢰', // 3 dots (top-right + middle-right + bottom-right)
+            '⢸', // 4 dots (all right column)
+            '⣸', // 5 dots (right column + top-left)
+            '⣼', // 6 dots (right column + top-left + middle-left)
+            '⣾', // 7 dots (all but bottom-left)
+        ];
+        
+        // Calculate how many empty spaces to add at the left
+        let empty_chars = bar_width - full_chars - if remaining_dots > 0 { 1 } else { 0 };
+        
+        // Build the bar: empty spaces (left) -> partial char -> full chars (right)
+        let mut bar_chars = Vec::new();
+        for i in 0..bar_width {
+            let ch = if i < empty_chars {
+                ' ' // Leftmost characters are empty (time depleted)
+            } else if i == empty_chars && remaining_dots > 0 {
+                partial_chars[remaining_dots] // Transition character
+            } else {
+                '⣿' // Rightmost characters are fully filled
+            };
+            bar_chars.push(ch);
+        }
+        
+        // Hot colors as it gets closer to zero (more urgent)
+        let color = if remaining >= 120 {
+            Color::Cyan // Cool - plenty of time
+        } else if remaining >= 60 {
+            Color::Green // Getting warmer
+        } else if remaining >= 30 {
+            Color::Yellow // Getting hot
+        } else if remaining >= 15 {
+            Color::LightRed // Very hot
+        } else {
+            Color::Red // EXTREME - about to send!
+        };
+        
+        (bar_chars.into_iter().collect::<String>(), color, format!("{remaining:>3}s"))
+    } else {
+        ("                ".to_string(), Color::DarkGray, "  —".to_string())
+    };
+    
+    let countdown_indicator = format!("|{countdown_bar}| {remaining_display}");
+    
     let last_icon = if last_age.is_some() { "✅" } else { "⬜" };
     let last_text = last_age
         .map(|s| format!("{s}s ago"))
         .unwrap_or_else(|| "—".to_string());
-    let right_text = format!("Slack {slack_icon} | next {eta_text} | last {last_icon} {last_text}");
-
+    
+    // Fixed width sections to prevent position shifts - everything has fixed width
+    // Slack: Slack ✅ = 8 chars (fixed)
+    // Last: last ✅ 67s ago = 16 chars (fixed)
+    // Countdown: |⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿| 108s = 30 chars
+    // Total right section: 8 + 3 + 30 + 3 + 16 = 60 chars fixed
+    
+    let slack_section = format!("| {} Slack", slack_icon); // Fixed 8 chars
+    let next_section = format!("|{countdown_bar}| {remaining_display}"); // Fixed 25 chars with left boundary
+    let last_section = format!("last {last_icon} {last_text:>7}"); // Fixed 16 chars for "XXs ago" or "—"
+    
     let left_text = format!("📊 Activity: {clock_text}");
-    let total_width = area.width as usize;
-    let padding = total_width
-        .saturating_sub(left_text.len().min(total_width))
-        .saturating_sub(right_text.len().min(total_width));
-    let spacer = " ".repeat(padding.saturating_sub(1));
-
-    let title_line = Line::from(vec![
+    
+    // Build title line with fixed positioning - no dynamic width calculations
+    let mut title_spans = vec![
         Span::raw(left_text),
-        Span::raw(spacer),
-        Span::styled(right_text, Style::default().fg(Color::Green)),
-    ]);
+        Span::raw("                             "), // Much larger spacer to push entire right section far right
+        Span::styled(next_section, Style::default().fg(countdown_color)), // Countdown with color
+        Span::raw(" | "), // Fixed separator
+        Span::raw(last_section), // Fixed width last section
+        Span::raw("     "), // Normal spacing before Slack
+        Span::styled(
+            slack_icon.to_string(), 
+            Style::default().fg(if notifications_enabled { Color::Green } else { Color::DarkGray })
+        ), // Colored checkmark only
+        Span::raw(" Slack"), // Normal white text for "Slack"
+    ];
+    
+    let title_line = Line::from(title_spans);
 
     let paragraph = Paragraph::new(lines).block(
         Block::default()
