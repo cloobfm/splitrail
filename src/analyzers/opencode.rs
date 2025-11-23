@@ -192,10 +192,10 @@ impl Analyzer for OpenCodeAnalyzer {
 
         for source in sources {
             let path_str = source.path.to_string_lossy();
-            if path_str.contains("session/") {
+            if path_str.contains("ses_") {
                 session_files.push(source);
             } else {
-                // Assume all other files are message files (for testing)
+                // Assume all other files are message files
                 message_files.push(source);
             }
         }
