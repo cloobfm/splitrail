@@ -218,33 +218,29 @@ fn find_waiting_conversations(
 
 fn build_notification_text(alert: &WaitingAlert) -> String {
     let model = alert.model.as_deref().unwrap_or("unknown");
+    let app = format_application(&alert.application);
+    
+    // Ultra-compact header
     let header = format!(
-        "🟡 Waiting – {} ({}) | {} idle | {}",
-        alert.analyzer_name,
-        format_application(&alert.application),
+        "🟡 {} {} | {} | {}",
+        app,
         format_duration(alert.idle_seconds),
+        abbreviate(&alert.project_hash, 6),
         model
     );
-    let meta = format!("Project {}", abbreviate(&alert.project_hash, 8));
 
-    let mut lines = vec![header, meta];
+    let mut lines = vec![header];
 
-    for msg in &alert.recent_messages {
-        // Skip empty/blank content
-        let role_label = match msg.role {
-            MessageRole::User => "You",
-            MessageRole::Assistant => alert.analyzer_name.as_str(),
-        };
-        let Some(content_raw) = msg.content.as_deref() else {
-            continue;
+    // Show only the last assistant message (most recent)
+    if let Some(last_msg) = alert.recent_messages.iter().rev().find(|msg| msg.role == MessageRole::Assistant) {
+        let Some(content_raw) = last_msg.content.as_deref() else {
+            return lines.join("\n");
         };
         let cleaned = clean_message(content_raw);
-        if cleaned.is_empty() {
-            continue;
+        if !cleaned.is_empty() {
+            let trimmed = truncate_content(&cleaned, 80); // Shorter for compactness
+            lines.push(format!("💬 {trimmed}"));
         }
-        let trimmed = truncate_content(&cleaned, 120);
-        let timestamp = format_timestamp(msg.date);
-        lines.push(format!("- [{timestamp}] {role_label}: {trimmed}"));
     }
 
     lines.join("\n")
@@ -266,8 +262,7 @@ fn abbreviate(text: &str, max_len: usize) -> String {
     if text.len() <= max_len {
         text.to_string()
     } else {
-        let take = max_len.saturating_sub(3);
-        format!("{}...", &text[..take])
+        format!("{}...", &text[..max_len.saturating_sub(3)])
     }
 }
 
@@ -279,20 +274,14 @@ fn format_duration(seconds: i64) -> String {
     if seconds < 60 {
         format!("{seconds}s")
     } else if seconds < 3600 {
-        let minutes = seconds / 60;
-        let secs = seconds % 60;
-        if secs == 0 {
-            format!("{minutes}m")
-        } else {
-            format!("{minutes}m {secs}s")
-        }
+        format!("{}m", seconds / 60)
     } else {
         let hours = seconds / 3600;
         let minutes = (seconds % 3600) / 60;
         if minutes == 0 {
             format!("{hours}h")
         } else {
-            format!("{hours}h {minutes}m")
+            format!("{}h{}m", hours, minutes)
         }
     }
 }
