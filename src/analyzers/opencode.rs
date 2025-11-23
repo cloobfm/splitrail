@@ -382,8 +382,22 @@ impl OpenCodeAnalyzer {
             _ => return None,
         };
 
-        // Generate hashes
-        let project_hash = hash_text(project_path);
+        // Use cwd from message path if available, otherwise fall back to session directory
+        let effective_project_path = msg.path
+            .as_ref()
+            .and_then(|p| p.cwd.as_ref())
+            .filter(|cwd| !cwd.is_empty())
+            .map(|cwd| {
+                // Extract just the directory name from the full path
+                Path::new(cwd)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(cwd)
+            })
+            .unwrap_or_else(|| project_path);
+        
+        // Generate hashes - use the actual project name directly like other analyzers
+        let project_hash = effective_project_path.to_string();
         let conversation_hash = hash_text(&msg.session_id);
         let local_hash = Some(hash_text(&format!("{}-{}", msg.id, msg.time.created)));
         let global_hash = hash_text(&format!("opencode-{}-{}", msg.id, msg.time.created));
