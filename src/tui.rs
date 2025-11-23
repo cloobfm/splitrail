@@ -759,14 +759,14 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, {} | Next | Last, m: {} mode, q/Esc: quit",
-                slack_status, mouse_mode_indicator
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, Next | Last | Slack, m: {} mode, q/Esc: quit",
+                mouse_mode_indicator
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, {} | Next | Last, m: toggle {} mode, q/Esc: quit",
-                slack_status, mouse_mode_indicator
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, Next | Last | Slack, m: toggle {} mode, q/Esc: quit",
+                mouse_mode_indicator
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
         };
