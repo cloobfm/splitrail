@@ -317,6 +317,36 @@ async fn run_app(
                         continue;
                     }
 
+                    // Handle Slack notifications toggle
+                    if key.code == KeyCode::Char('s') {
+                        match crate::config::Config::load() {
+                            Ok(Some(mut config)) => {
+                                let was_enabled = config.notifications.slack.enabled;
+                                config.notifications.slack.enabled = !config.notifications.slack.enabled;
+                                
+                                // Save the updated config
+                                if let Err(e) = config.save(false) {
+                                    eprintln!("Failed to save config: {}", e);
+                                } else {
+                                    let status = if config.notifications.slack.enabled {
+                                        "✅ Slack notifications enabled"
+                                    } else {
+                                        "❌ Slack notifications disabled"
+                                    };
+                                    println!("{}", status);
+                                }
+                            }
+                            Ok(None) => {
+                                println!("❌ No configuration found. Run 'splitrail config init' to create one.");
+                            }
+                            Err(e) => {
+                                eprintln!("❌ Failed to load configuration: {}", e);
+                            }
+                        }
+                        needs_redraw = true;
+                        continue;
+                    }
+
                     match key.code {
                         KeyCode::Left | KeyCode::Char('h') => {
                             if tui_state.selected_tab > 0 {
@@ -700,13 +730,13 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, m: {} mode, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, s: Slack toggle, m: {} mode, q/Esc: quit",
                 mouse_mode_indicator
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, m: toggle {} mode, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, s: Slack toggle, m: toggle {} mode, q/Esc: quit",
                 mouse_mode_indicator
             ))
             .style(Style::default().add_modifier(Modifier::DIM))

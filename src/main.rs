@@ -50,14 +50,10 @@ enum Commands {
     /// Manually upload stats to Splitrail Cloud
     Upload,
     /// Manage configuration
+    #[command(about = "Manage Splitrail configuration settings")]
     Config(ConfigArgs),
 }
 
-#[derive(Args)]
-struct ConfigArgs {
-    #[command(subcommand)]
-    subcommand: ConfigSubcommands,
-}
 
 #[derive(Subcommand)]
 enum ConfigSubcommands {
@@ -75,6 +71,14 @@ enum ConfigSubcommands {
         /// Configuration value
         value: String,
     },
+    /// Toggle Slack notifications on/off
+    SlackToggle,
+}
+
+#[derive(Args)]
+struct ConfigArgs {
+    #[command(subcommand)]
+    subcommand: ConfigSubcommands,
 }
 
 #[tokio::main]
@@ -280,6 +284,35 @@ async fn handle_config_subcommand(config_args: ConfigArgs) {
             if let Err(e) = config::set_config_value(&key, &value) {
                 eprintln!("Error setting config: {e}");
                 std::process::exit(1);
+            }
+        }
+        ConfigSubcommands::SlackToggle => {
+            match config::Config::load() {
+                Ok(Some(mut config)) => {
+                    let was_enabled = config.notifications.slack.enabled;
+                    config.notifications.slack.enabled = !config.notifications.slack.enabled;
+                    
+                    // Save the updated config
+                    if let Err(e) = config.save(false) {
+                        eprintln!("Failed to save config: {}", e);
+                        std::process::exit(1);
+                    } else {
+                        let status = if config.notifications.slack.enabled {
+                            "✅ Slack notifications enabled"
+                        } else {
+                            "❌ Slack notifications disabled"
+                        };
+                        println!("{}", status);
+                    }
+                }
+                Ok(None) => {
+                    println!("❌ No configuration found. Run 'splitrail config init' to create one.");
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to load configuration: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
     }
