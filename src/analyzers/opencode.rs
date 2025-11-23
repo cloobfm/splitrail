@@ -191,12 +191,16 @@ impl Analyzer for OpenCodeAnalyzer {
         let mut session_files = Vec::new();
 
         for source in sources {
-            let path_str = source.path.to_string_lossy();
-            if path_str.contains("ses_") {
-                session_files.push(source);
-            } else {
-                // Assume all other files are message files
-                message_files.push(source);
+            // Check the actual filename, not the full path
+            // Message files: msg_*.json
+            // Session files: ses_*.json
+            if let Some(filename) = source.path.file_name().and_then(|f| f.to_str()) {
+                if filename.starts_with("ses_") {
+                    session_files.push(source);
+                } else if filename.starts_with("msg_") {
+                    message_files.push(source);
+                }
+                // Skip files that don't match expected patterns
             }
         }
 
