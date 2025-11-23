@@ -218,6 +218,19 @@ impl KiroCliAnalyzer {
             ));
 
             let user_content = Self::format_kiro_user_message(&history_entry.user);
+            
+            // Check if this is actually tool results (should be assistant message)
+            let (role, content) = match &history_entry.user.content {
+                KiroUserContent::ToolUseResults { .. } => {
+                    // Tool results should be treated as assistant messages
+                    (MessageRole::Assistant, user_content)
+                }
+                _ => {
+                    // Regular user message
+                    (MessageRole::User, user_content)
+                }
+            };
+            
             entries.push(ConversationMessage {
                 application: Application::KiroCli,
                 date: timestamp,
@@ -227,8 +240,8 @@ impl KiroCliAnalyzer {
                 global_hash: user_global_hash,
                 model: None,
                 stats: Stats::default(),
-                role: MessageRole::User,
-                content: Some(user_content),
+                role,
+                content: Some(content),
             });
 
             // Create assistant message with stats
@@ -305,6 +318,8 @@ impl KiroCliAnalyzer {
                 content
             }
             KiroUserContent::ToolUseResults { tool_use_results } => {
+                // Tool results are stored as user messages in Kiro CLI, but they should
+                // be treated as assistant responses since they contain the AI's output
                 let mut content = String::new();
                 for result in tool_use_results {
                     content.push_str(&format!("Tool Result ({})\n", result.tool_use_id));
@@ -322,12 +337,9 @@ impl KiroCliAnalyzer {
                 }
                 content
             }
-            KiroUserContent::CancelledToolUses { prompt, tool_use_results } => {
-                let mut content = format!("Cancelled Tool Uses\nPrompt: {}\n", prompt);
-                for result in tool_use_results {
-                    content.push_str(&format!("Cancelled Tool: {}\n", result.tool_use_id));
-                }
-                content
+            KiroUserContent::CancelledToolUses { prompt, .. } => {
+                // For cancelled tool uses, just show the prompt
+                prompt.clone()
             }
         }
     }

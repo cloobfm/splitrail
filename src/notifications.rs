@@ -164,7 +164,6 @@ fn find_waiting_conversations(
 
         // Only alert if the assistant spoke last and we've been idle long enough
         if !matches!(last.role, MessageRole::Assistant) {
-            eprintln!("DEBUG: Skipping notification - last message was from {:?}, not assistant", last.role);
             continue;
         }
         
@@ -239,11 +238,7 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
 
     let mut lines = vec![header];
 
-    // Debug: Check the actual last message role
-    if let Some(last_msg) = alert.recent_messages.last() {
-        eprintln!("DEBUG: Notification for {} - last message role: {:?}", 
-                  alert.application, last_msg.role);
-    }
+
 
     // Get last 2 messages to show interaction pace and who spoke last
     let mut messages = Vec::new();
@@ -252,8 +247,8 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
             let cleaned = clean_message(content_raw);
             if !cleaned.is_empty() {
                 let (emoji, max_len, prefix, bold_prefix, bold_suffix) = match msg.role {
-                    MessageRole::User => ("🔹", 60, "  ", "*", "*"),
-                    MessageRole::Assistant => ("◇", 60, "", "", ""),
+                    MessageRole::User => ("🔹", 60, "", "*", "*"),
+                    MessageRole::Assistant => ("NOTHING", 60, "", "", ""),
                 };
                 let trimmed = truncate_content(&cleaned, max_len);
                 let timestamp = format_timestamp(msg.date);
@@ -269,8 +264,8 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
                 let cleaned = clean_message(content_raw);
                 if !cleaned.is_empty() {
                     let (emoji, max_len, prefix, bold_prefix, bold_suffix) = match msg.role {
-                        MessageRole::User => ("🔹", 60, "  ", "*", "*"),
-                        MessageRole::Assistant => ("◇", 60, "", "", ""),
+                        MessageRole::User => ("🔹", 60, "", "*", "*"),
+                        MessageRole::Assistant => ("NOTHING", 60, "", "", ""),
                     };
                     let trimmed = truncate_content(&cleaned, max_len);
                     let timestamp = format_timestamp(msg.date);
