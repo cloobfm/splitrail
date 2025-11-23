@@ -364,37 +364,37 @@ pub fn truncate_project_label(label: &str, max_len: usize) -> String {
     format!("{:width$}", result, width = max_len)
 }
 
-/// Calculate overall health percentage (0.0 to 1.0) based on global token limits
-/// Daily limit: 200,000 tokens, Weekly limit: 1,000,000 tokens
+/// Calculate overall health percentage (0.0 to 1.0) based on output token usage
+/// Daily target: 250,000 output tokens, Weekly target: 1,750,000 output tokens
 pub fn calculate_overall_health(messages: &[ConversationMessage], current_date: &str) -> f64 {
     // Parse current date
     let current_date_parsed = chrono::NaiveDate::parse_from_str(current_date, "%Y-%m-%d")
         .unwrap_or_else(|_| chrono::Local::now().date_naive());
 
-    let mut daily_tokens = 0u64;
-    let mut weekly_tokens = 0u64;
+    let mut daily_output_tokens = 0u64;
+    let mut weekly_output_tokens = 0u64;
 
     for message in messages {
         let message_date = message.date.date_naive();
-        let tokens_used = message.stats.input_tokens + message.stats.output_tokens;
+        let output_tokens = message.stats.output_tokens;
 
-        // Daily usage (same day)
+        // Daily usage (same day) - only output tokens
         if message_date == current_date_parsed {
-            daily_tokens += tokens_used;
+            daily_output_tokens += output_tokens;
         }
 
-        // Weekly usage (last 7 days)
+        // Weekly usage (last 7 days) - only output tokens
         let days_diff = (current_date_parsed - message_date).num_days();
         if days_diff >= 0 && days_diff < 7 {
-            weekly_tokens += tokens_used;
+            weekly_output_tokens += output_tokens;
         }
     }
 
-    const DAILY_LIMIT: u64 = 200_000;
-    const WEEKLY_LIMIT: u64 = 1_000_000;
+    const DAILY_TARGET: u64 = 250_000;
+    const WEEKLY_TARGET: u64 = 1_750_000; // 250K * 7 days
 
-    let daily_health = 1.0 - (daily_tokens as f64 / DAILY_LIMIT as f64).min(1.0);
-    let weekly_health = 1.0 - (weekly_tokens as f64 / WEEKLY_LIMIT as f64).min(1.0);
+    let daily_health = 1.0 - (daily_output_tokens as f64 / DAILY_TARGET as f64).min(1.0);
+    let weekly_health = 1.0 - (weekly_output_tokens as f64 / WEEKLY_TARGET as f64).min(1.0);
 
     // Return the more restrictive health value
     daily_health.min(weekly_health).max(0.0)
