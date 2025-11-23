@@ -164,8 +164,11 @@ fn find_waiting_conversations(
 
         // Only alert if the assistant spoke last and we've been idle long enough
         if !matches!(last.role, MessageRole::Assistant) {
+            eprintln!("DEBUG: Skipping notification - last message was from {:?}, not assistant", last.role);
             continue;
         }
+        
+
 
         let idle = now
             .signed_duration_since(last.date)
@@ -194,12 +197,15 @@ fn find_waiting_conversations(
         }
 
         // Build recent message preview (oldest -> newest)
-        let mut recent: Vec<ConversationMessage> = messages
+        // Take only the last few messages, ensuring we have the most recent ones
+        let take_count = settings.sample_messages.max(3);
+        let recent: Vec<ConversationMessage> = messages
             .iter()
             .rev()
-            .take(settings.sample_messages)
+            .take(take_count)
             .map(|m| (*m).clone())
             .collect();
+        let mut recent = recent;
         recent.reverse();
 
         alerts.push(WaitingAlert {
@@ -227,11 +233,17 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
         "🟡 {} {} | {} | {}",
         app,
         format_duration(alert.idle_seconds),
-        abbreviate(&alert.project_hash, 6),
+        abbreviate(&alert.project_hash, 12),
         model
     );
 
     let mut lines = vec![header];
+
+    // Debug: Check the actual last message role
+    if let Some(last_msg) = alert.recent_messages.last() {
+        eprintln!("DEBUG: Notification for {} - last message role: {:?}", 
+                  alert.application, last_msg.role);
+    }
 
     // Get last 2 messages to show interaction pace and who spoke last
     let mut messages = Vec::new();
@@ -239,13 +251,13 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
         if let Some(content_raw) = msg.content.as_deref() {
             let cleaned = clean_message(content_raw);
             if !cleaned.is_empty() {
-                let (emoji, max_len, prefix) = match msg.role {
-                    MessageRole::User => ("🔹", 60, "  "),
-                    MessageRole::Assistant => ("◇", 60, ""),
+                let (emoji, max_len, prefix, bold_prefix, bold_suffix) = match msg.role {
+                    MessageRole::User => ("🔹", 60, "  ", "*", "*"),
+                    MessageRole::Assistant => ("◇", 60, "", "", ""),
                 };
                 let trimmed = truncate_content(&cleaned, max_len);
                 let timestamp = format_timestamp(msg.date);
-                messages.push(format!("[{}] {}{} {}", timestamp, prefix, emoji, trimmed));
+                messages.push(format!("[{}] {}{}{}{} {}", timestamp, prefix, bold_prefix, emoji, trimmed, bold_suffix));
             }
         }
     }
@@ -256,13 +268,13 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
             if let Some(content_raw) = msg.content.as_deref() {
                 let cleaned = clean_message(content_raw);
                 if !cleaned.is_empty() {
-                    let (emoji, max_len, prefix) = match msg.role {
-                        MessageRole::User => ("🔹", 60, "  "),
-                        MessageRole::Assistant => ("◇", 60, ""),
+                    let (emoji, max_len, prefix, bold_prefix, bold_suffix) = match msg.role {
+                        MessageRole::User => ("🔹", 60, "  ", "*", "*"),
+                        MessageRole::Assistant => ("◇", 60, "", "", ""),
                     };
                     let trimmed = truncate_content(&cleaned, max_len);
                     let timestamp = format_timestamp(msg.date);
-                    messages.push(format!("[{}] {}{} {}", timestamp, prefix, emoji, trimmed));
+                    messages.push(format!("[{}] {}{}{}{} {}", timestamp, prefix, bold_prefix, emoji, trimmed, bold_suffix));
                 }
             }
         }
