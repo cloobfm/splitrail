@@ -189,10 +189,10 @@ impl Analyzer for OpenCodeAnalyzer {
 
         for source in sources {
             let path_str = source.path.to_string_lossy();
-            if path_str.contains("message/") {
-                message_files.push(source);
-            } else if path_str.contains("session/") {
+            if path_str.contains("ses_") {
                 session_files.push(source);
+            } else {
+                message_files.push(source);
             }
         }
 
@@ -474,8 +474,8 @@ mod tests {
         // Create a temporary file with sample OpenCode data
         let mut temp_file = NamedTempFile::new().unwrap();
         let sample_data = r#"
-{"id":"msg1","timestamp":"2024-01-01T12:00:00Z","role":"user","content":"Hello","model":null,"tokens":null,"tools":null,"files":null}
-{"id":"msg2","timestamp":"2024-01-01T12:01:00Z","role":"assistant","content":"Hi there!","model":"opencode-zen","tokens":{"input":10,"output":5},"tools":[{"name":"read","duration_ms":100,"success":true}],"files":[{"path":"test.rs","operation":"read","bytes":100,"lines":10}]}
+{"id":"msg1","sessionID":"test-session","messageID":"msg1","role":"user","time":{"created":1704110400000},"model":null,"tokens":null,"tools":null}
+{"id":"msg2","sessionID":"test-session","messageID":"msg2","role":"assistant","time":{"created":1704110460000},"model":{"providerID":"opencode","modelID":"zen"},"tokens":{"input":10,"output":5,"reasoning":0},"tools":{"todowrite":null,"todoread":null,"task":null},"finish":"tool-calls"}
 "#;
         temp_file.write_all(sample_data.as_bytes()).unwrap();
 
@@ -489,9 +489,9 @@ mod tests {
         // Check the assistant message
         let assistant_msg = &messages[1];
         assert_eq!(assistant_msg.role, MessageRole::Assistant);
-        assert_eq!(assistant_msg.model, Some("opencode-zen".to_string()));
+        assert_eq!(assistant_msg.model, Some("zen".to_string()));
         assert_eq!(assistant_msg.stats.input_tokens, 10);
         assert_eq!(assistant_msg.stats.output_tokens, 5);
-        assert_eq!(assistant_msg.stats.files_read, 2); // 1 from tools + 1 from files
+        assert_eq!(assistant_msg.stats.tool_calls, 1);
     }
 }
