@@ -239,13 +239,13 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
         if let Some(content_raw) = msg.content.as_deref() {
             let cleaned = clean_message(content_raw);
             if !cleaned.is_empty() {
-                let (emoji, max_len) = match msg.role {
-                    MessageRole::User => ("👤", 50),
-                    MessageRole::Assistant => ("💬", 70),
+                let (emoji, max_len, prefix) = match msg.role {
+                    MessageRole::User => ("🔹", 60, "  "),
+                    MessageRole::Assistant => ("◇", 60, ""),
                 };
                 let trimmed = truncate_content(&cleaned, max_len);
                 let timestamp = format_timestamp(msg.date);
-                messages.push(format!("[{}] {} {}", timestamp, emoji, trimmed));
+                messages.push(format!("[{}] {}{} {}", timestamp, prefix, emoji, trimmed));
             }
         }
     }
@@ -256,13 +256,13 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
             if let Some(content_raw) = msg.content.as_deref() {
                 let cleaned = clean_message(content_raw);
                 if !cleaned.is_empty() {
-                    let (emoji, max_len) = match msg.role {
-                        MessageRole::User => ("👤", 40),
-                        MessageRole::Assistant => ("💬", 60),
+                    let (emoji, max_len, prefix) = match msg.role {
+                        MessageRole::User => ("🔹", 60, "  "),
+                        MessageRole::Assistant => ("◇", 60, ""),
                     };
                     let trimmed = truncate_content(&cleaned, max_len);
                     let timestamp = format_timestamp(msg.date);
-                    messages.push(format!("[{}] {} {}", timestamp, emoji, trimmed));
+                    messages.push(format!("[{}] {}{} {}", timestamp, prefix, emoji, trimmed));
                 }
             }
         }
