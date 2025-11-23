@@ -213,32 +213,26 @@ impl Analyzer for OpenCodeAnalyzer {
         // Process message files
         for message_file in message_files {
             if let Ok(content) = std::fs::read_to_string(&message_file.path) {
-                // Parse JSONL format - each line is a JSON object
-                for line in content.lines() {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    if let Ok(opencode_msg) = serde_json::from_str::<OpenCodeMessageData>(line) {
-                        // Get session info for directory path
-                        let session_dir = sessions
-                            .get(&opencode_msg.session_id)
-                            .map(|s| s.directory.clone())
-                            .unwrap_or_else(|| "unknown".to_string());
+                // Parse as single JSON object (not JSONL)
+                if let Ok(opencode_msg) = serde_json::from_str::<OpenCodeMessageData>(&content) {
+                    // Get session info for directory path
+                    let session_dir = sessions
+                        .get(&opencode_msg.session_id)
+                        .map(|s| s.directory.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
 
-                        // Read actual message content from part files for both user and assistant
-                        let message_content = self.read_message_text_content(&opencode_msg.id);
+                    // Read actual message content from part files for both user and assistant
+                    let message_content = self.read_message_text_content(&opencode_msg.id);
 
-                        // Convert to our internal format
-                        if let Some(msg) = self.convert_opencode_message_data(
-                            opencode_msg,
-                            &session_dir,
-                            message_content,
-                        ) {
-                            // Deduplicate by global hash
-                            if seen_hashes.insert(msg.global_hash.clone()) {
-                                messages.push(msg);
-                            }
+                    // Convert to our internal format
+                    if let Some(msg) = self.convert_opencode_message_data(
+                        opencode_msg,
+                        &session_dir,
+                        message_content,
+                    ) {
+                        // Deduplicate by global hash
+                        if seen_hashes.insert(msg.global_hash.clone()) {
+                            messages.push(msg);
                         }
                     }
                 }
