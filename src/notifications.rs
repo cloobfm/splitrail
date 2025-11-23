@@ -50,6 +50,8 @@ impl NotificationManager {
         let mut latest_stats = stats_rx.borrow().clone();
         // Check every 15 seconds for stalled sessions
         let mut ticker = tokio::time::interval(Duration::from_secs(15));
+        // Skip first tick to avoid startup notifications
+        ticker.tick().await;
 
         loop {
             tokio::select! {
@@ -232,7 +234,7 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
     let mut lines = vec![header];
 
     // Get last 2 messages to show interaction pace and who spoke last
-    let mut last_two_messages = Vec::new();
+    let mut messages = Vec::new();
     for msg in alert.recent_messages.iter().rev().take(2) {
         if let Some(content_raw) = msg.content.as_deref() {
             let cleaned = clean_message(content_raw);
@@ -243,14 +245,14 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
                 };
                 let trimmed = truncate_content(&cleaned, max_len);
                 let timestamp = format_timestamp(msg.date);
-                last_two_messages.push(format!("[{}] {} {}", timestamp, emoji, trimmed));
+                messages.push(format!("[{}] {} {}", timestamp, emoji, trimmed));
             }
         }
     }
 
-    // If we have less than 2 messages, add more to reach minimum 3 total
-    if last_two_messages.len() < 2 {
-        for msg in alert.recent_messages.iter().rev().skip(2).take(3 - last_two_messages.len()) {
+    // If we have less than 3 messages, add more to reach minimum 3 total
+    if messages.len() < 3 {
+        for msg in alert.recent_messages.iter().rev().skip(2).take(3 - messages.len()) {
             if let Some(content_raw) = msg.content.as_deref() {
                 let cleaned = clean_message(content_raw);
                 if !cleaned.is_empty() {
@@ -260,13 +262,13 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
                     };
                     let trimmed = truncate_content(&cleaned, max_len);
                     let timestamp = format_timestamp(msg.date);
-                    last_two_messages.push(format!("[{}] {} {}", timestamp, emoji, trimmed));
+                    messages.push(format!("[{}] {} {}", timestamp, emoji, trimmed));
                 }
             }
         }
     }
 
-    lines.extend(last_two_messages);
+    lines.extend(messages);
     lines.join("\n")
 }
 
@@ -291,7 +293,7 @@ fn abbreviate(text: &str, max_len: usize) -> String {
 }
 
 fn format_timestamp(ts: DateTime<Utc>) -> String {
-    ts.with_timezone(&Local).format("%H:%M:%S").to_string()
+    ts.with_timezone(&Local).format("%H:%M").to_string()
 }
 
 fn format_duration(seconds: i64) -> String {
