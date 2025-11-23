@@ -148,9 +148,12 @@ impl Analyzer for OpenCodeAnalyzer {
                 "{home_str}/.local/share/opencode/storage/message/*/msg_*.json"
             ));
 
-            // Session metadata (read once for project context)
+            // Session metadata (read once for project context) - handle both directory structures
             patterns.push(format!(
                 "{home_str}/.local/share/opencode/storage/session/*/ses_*.json"
+            ));
+            patterns.push(format!(
+                "{home_str}/.local/share/opencode/storage/message/ses_*.json"
             ));
 
             // REMOVED: Part files - these are individual message fragments, text content not needed for stats
