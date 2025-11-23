@@ -220,9 +220,9 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
     let model = alert.model.as_deref().unwrap_or("unknown");
     let app = format_application(&alert.application);
     
-    // Ultra-compact header with "ago" timestamp
+    // Ultra-compact header (no "ago" since notification timing implies recency)
     let header = format!(
-        "🟡 {} {} ago | {} | {}",
+        "🟡 {} {} | {} | {}",
         app,
         format_duration(alert.idle_seconds),
         abbreviate(&alert.project_hash, 6),
@@ -231,32 +231,42 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
 
     let mut lines = vec![header];
 
-    // Find last user message for context, then last assistant message
-    let last_user_msg = alert.recent_messages.iter().rev().find(|msg| msg.role == MessageRole::User);
-    let last_assistant_msg = alert.recent_messages.iter().rev().find(|msg| msg.role == MessageRole::Assistant);
-
-    if let Some(user_msg) = last_user_msg {
-        let Some(content_raw) = user_msg.content.as_deref() else {
-            return lines.join("\n");
-        };
-        let cleaned = clean_message(content_raw);
-        if !cleaned.is_empty() {
-            let trimmed = truncate_content(&cleaned, 60); // Shorter for context
-            lines.push(format!("👤 {trimmed}"));
+    // Get last 2 messages to show interaction pace and who spoke last
+    let mut last_two_messages = Vec::new();
+    for msg in alert.recent_messages.iter().rev().take(2) {
+        if let Some(content_raw) = msg.content.as_deref() {
+            let cleaned = clean_message(content_raw);
+            if !cleaned.is_empty() {
+                let (emoji, max_len) = match msg.role {
+                    MessageRole::User => ("👤", 50),
+                    MessageRole::Assistant => ("💬", 70),
+                };
+                let trimmed = truncate_content(&cleaned, max_len);
+                let timestamp = format_timestamp(msg.date);
+                last_two_messages.push(format!("[{}] {} {}", timestamp, emoji, trimmed));
+            }
         }
     }
 
-    if let Some(assistant_msg) = last_assistant_msg {
-        let Some(content_raw) = assistant_msg.content.as_deref() else {
-            return lines.join("\n");
-        };
-        let cleaned = clean_message(content_raw);
-        if !cleaned.is_empty() {
-            let trimmed = truncate_content(&cleaned, 80);
-            lines.push(format!("💬 {trimmed}"));
+    // If we have less than 2 messages, add more to reach minimum 3 total
+    if last_two_messages.len() < 2 {
+        for msg in alert.recent_messages.iter().rev().skip(2).take(3 - last_two_messages.len()) {
+            if let Some(content_raw) = msg.content.as_deref() {
+                let cleaned = clean_message(content_raw);
+                if !cleaned.is_empty() {
+                    let (emoji, max_len) = match msg.role {
+                        MessageRole::User => ("👤", 40),
+                        MessageRole::Assistant => ("💬", 60),
+                    };
+                    let trimmed = truncate_content(&cleaned, max_len);
+                    let timestamp = format_timestamp(msg.date);
+                    last_two_messages.push(format!("[{}] {} {}", timestamp, emoji, trimmed));
+                }
+            }
         }
     }
 
+    lines.extend(last_two_messages);
     lines.join("\n")
 }
 
