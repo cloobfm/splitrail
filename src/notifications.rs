@@ -220,9 +220,9 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
     let model = alert.model.as_deref().unwrap_or("unknown");
     let app = format_application(&alert.application);
     
-    // Ultra-compact header
+    // Ultra-compact header with "ago" timestamp
     let header = format!(
-        "🟡 {} {} | {} | {}",
+        "🟡 {} {} ago | {} | {}",
         app,
         format_duration(alert.idle_seconds),
         abbreviate(&alert.project_hash, 6),
@@ -231,14 +231,28 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
 
     let mut lines = vec![header];
 
-    // Show only the last assistant message (most recent)
-    if let Some(last_msg) = alert.recent_messages.iter().rev().find(|msg| msg.role == MessageRole::Assistant) {
-        let Some(content_raw) = last_msg.content.as_deref() else {
+    // Find last user message for context, then last assistant message
+    let last_user_msg = alert.recent_messages.iter().rev().find(|msg| msg.role == MessageRole::User);
+    let last_assistant_msg = alert.recent_messages.iter().rev().find(|msg| msg.role == MessageRole::Assistant);
+
+    if let Some(user_msg) = last_user_msg {
+        let Some(content_raw) = user_msg.content.as_deref() else {
             return lines.join("\n");
         };
         let cleaned = clean_message(content_raw);
         if !cleaned.is_empty() {
-            let trimmed = truncate_content(&cleaned, 80); // Shorter for compactness
+            let trimmed = truncate_content(&cleaned, 60); // Shorter for context
+            lines.push(format!("👤 {trimmed}"));
+        }
+    }
+
+    if let Some(assistant_msg) = last_assistant_msg {
+        let Some(content_raw) = assistant_msg.content.as_deref() else {
+            return lines.join("\n");
+        };
+        let cleaned = clean_message(content_raw);
+        if !cleaned.is_empty() {
+            let trimmed = truncate_content(&cleaned, 80);
             lines.push(format!("💬 {trimmed}"));
         }
     }
