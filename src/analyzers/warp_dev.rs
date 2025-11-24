@@ -563,6 +563,11 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
                                     });
 
                                     // Create assistant message with full stats
+                                    // WARP doesn't split input/output, so estimate: 40% input, 60% output
+                                    // (typical AI conversations have longer responses than prompts)
+                                    let estimated_input = (total_tokens as f64 * 0.4) as u64;
+                                    let estimated_output = (total_tokens as f64 * 0.6) as u64;
+
                                     conversations.push(ConversationMessage {
                                         date: timestamp,
                                         application: Application::Warp,
@@ -578,8 +583,9 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
                                         )),
                                         model: primary_model,
                                         stats: Stats {
-                                            // Use output_tokens for total (WARP doesn't split input/output)
-                                            output_tokens: total_tokens,
+                                            // Estimate 40/60 split (WARP doesn't provide breakdown)
+                                            input_tokens: estimated_input,
+                                            output_tokens: estimated_output,
                                             cost,
                                             terminal_commands: bash_commands as u64,
                                             files_read: file_reads as u64,
