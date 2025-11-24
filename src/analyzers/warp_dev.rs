@@ -570,11 +570,13 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
 
                                     // Create assistant message with full stats
                                     // WARP provides totalTokens but doesn't split input/output/cached
-                                    // Use simple 20/80 input/output split based on actual usage patterns
-                                    // Note: Actual token distribution likely includes significant caching,
-                                    // but WARP's creditsSpent already accounts for cache savings
-                                    let estimated_input = (total_tokens as f64 * 0.20) as u64;
-                                    let estimated_output = (total_tokens as f64 * 0.80) as u64;
+                                    // Estimate based on actual Claude Code usage: 99.5% cached, 0.5% fresh
+                                    // Fresh tokens split 20% input / 80% output
+                                    let cached_ratio = 0.995;
+                                    let estimated_cached = (total_tokens as f64 * cached_ratio) as u64;
+                                    let fresh_tokens = (total_tokens as f64 * (1.0 - cached_ratio)) as u64;
+                                    let estimated_input = (fresh_tokens as f64 * 0.20) as u64;
+                                    let estimated_output = (fresh_tokens as f64 * 0.80) as u64;
 
                                     conversations.push(ConversationMessage {
                                         date: timestamp,
@@ -591,9 +593,10 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
                                         )),
                                         model: primary_model,
                                         stats: Stats {
-                                            // Simple 20/80 split (costs already account for cache)
+                                            // Split based on 99.5% cached ratio (costs already include cache savings)
                                             input_tokens: estimated_input,
                                             output_tokens: estimated_output,
+                                            cached_tokens: estimated_cached,
                                             cost,
                                             terminal_commands: bash_commands as u64,
                                             files_read: file_reads as u64,
