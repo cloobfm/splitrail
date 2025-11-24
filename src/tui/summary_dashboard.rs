@@ -589,7 +589,7 @@ pub fn draw_summary_view(
 
                 // Count days in the last 30 days that have data
                 let now = chrono::Local::now().date_naive();
-                let thirty_days_ago = now - chrono::Duration::days(30);
+                let thirty_days_ago = now - chrono::Duration::days(29); // Use 29 for exactly 30 days inclusive
 
                 let days_with_data = analyzer_stats
                     .daily_stats
