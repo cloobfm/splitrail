@@ -217,17 +217,23 @@ mod tests {
         let original = std::env::var("TERM_PROGRAM").ok();
 
         // Test with WARP env var
-        std::env::set_var("TERM_PROGRAM", "WarpTerminal");
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "WarpTerminal");
+        }
         assert!(is_running_in_warp());
 
         // Test without WARP env var
-        std::env::remove_var("TERM_PROGRAM");
-        std::env::remove_var("WARP_USE_SSH_WRAPPER");
+        unsafe {
+            std::env::remove_var("TERM_PROGRAM");
+            std::env::remove_var("WARP_USE_SSH_WRAPPER");
+        }
         assert!(!is_running_in_warp());
 
         // Restore original
         if let Some(val) = original {
-            std::env::set_var("TERM_PROGRAM", val);
+            unsafe {
+                std::env::set_var("TERM_PROGRAM", val);
+            }
         }
     }
 }
