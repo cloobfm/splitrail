@@ -563,10 +563,10 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
                                     });
 
                                     // Create assistant message with full stats
-                                    // WARP doesn't split input/output, so estimate: 40% input, 60% output
-                                    // (typical AI conversations have longer responses than prompts)
-                                    let estimated_input = (total_tokens as f64 * 0.4) as u64;
-                                    let estimated_output = (total_tokens as f64 * 0.6) as u64;
+                                    // WARP doesn't split input/output, so estimate based on user's Claude Code pattern
+                                    // Actual usage: 19% input, 81% output (rounded to 20/80)
+                                    let estimated_input = (total_tokens as f64 * 0.20) as u64;
+                                    let estimated_output = (total_tokens as f64 * 0.80) as u64;
 
                                     conversations.push(ConversationMessage {
                                         date: timestamp,
