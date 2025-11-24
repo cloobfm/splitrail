@@ -27,8 +27,10 @@ struct WarpLogEntry {
     // For direct command execution logs
     command: Option<String>,
     output: Option<String>,
+    #[allow(dead_code)]
     exit_code: Option<i32>,
     // For AI context messages
+    #[allow(dead_code)]
     context_messages: Option<Vec<String>>,
 }
 
@@ -59,6 +61,7 @@ struct WarpAiSuggestionsRequest {
 #[derive(Debug, Deserialize)]
 struct GraphQLResponse {
     operation: String,
+    #[allow(dead_code)]
     timestamp: String,
     response: GraphQLResponseData,
 }
@@ -76,6 +79,7 @@ struct GraphQLData {
 #[derive(Debug, Deserialize)]
 struct GraphQLUser {
     #[serde(rename = "__typename")]
+    #[allow(dead_code)]
     typename: Option<String>,
     user: Option<GraphQLUserData>,
 }
@@ -103,6 +107,7 @@ struct UsageMetadata {
     context_window_usage: f64,
     #[serde(rename = "creditsSpent")]
     credits_spent: f64,
+    #[allow(dead_code)]
     summarized: bool,
     #[serde(rename = "tokenUsage")]
     token_usage: Vec<TokenUsage>,
@@ -137,6 +142,7 @@ struct ToolStats {
 
 #[derive(Debug, Deserialize)]
 struct FileDiffStats {
+    #[allow(dead_code)]
     count: u32,
     #[serde(rename = "linesAdded")]
     lines_added: Option<u32>,
@@ -544,8 +550,9 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
                                             (0, 0, 0)
                                         };
 
-                                    // Convert credits to approximate USD (1 credit ≈ $0.22)
-                                    let cost = conv.usage_metadata.credits_spent * 0.22;
+                                    // Convert credits to USD (1 credit ≈ $0.01 based on analysis)
+                                    // WARP's credits already account for cache savings
+                                    let cost = conv.usage_metadata.credits_spent * 0.01;
 
                                     // Create user message (conversation start)
                                     conversations.push(ConversationMessage {
@@ -562,14 +569,12 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
                                     });
 
                                     // Create assistant message with full stats
-                                    // WARP doesn't split tokens, so estimate based on user's Claude Code pattern
-                                    // Actual usage shows ~220:1 ratio of cached to fresh tokens
-                                    // So: ~99.5% cached, ~0.08% input, ~0.36% output
-                                    let cached_ratio = 0.995;  // Most tokens are cached reads
-                                    let fresh_tokens = (total_tokens as f64 * (1.0 - cached_ratio)) as u64;
-                                    let estimated_cached = (total_tokens as f64 * cached_ratio) as u64;
-                                    let estimated_input = (fresh_tokens as f64 * 0.20) as u64;  // 20% of fresh
-                                    let estimated_output = (fresh_tokens as f64 * 0.80) as u64; // 80% of fresh
+                                    // WARP provides totalTokens but doesn't split input/output/cached
+                                    // Use simple 20/80 input/output split based on actual usage patterns
+                                    // Note: Actual token distribution likely includes significant caching,
+                                    // but WARP's creditsSpent already accounts for cache savings
+                                    let estimated_input = (total_tokens as f64 * 0.20) as u64;
+                                    let estimated_output = (total_tokens as f64 * 0.80) as u64;
 
                                     conversations.push(ConversationMessage {
                                         date: timestamp,
@@ -586,10 +591,9 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
                                         )),
                                         model: primary_model,
                                         stats: Stats {
-                                            // Split based on 220:1 cached:fresh ratio from actual usage
+                                            // Simple 20/80 split (costs already account for cache)
                                             input_tokens: estimated_input,
                                             output_tokens: estimated_output,
-                                            cached_tokens: estimated_cached,
                                             cost,
                                             terminal_commands: bash_commands as u64,
                                             files_read: file_reads as u64,

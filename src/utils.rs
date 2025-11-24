@@ -11,6 +11,7 @@ use crate::types::{ConversationMessage, DailyStats};
 
 /// Quota limits for different time periods and types
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct QuotaLimits {
     /// Daily token limit (input + output)
     pub daily_tokens: Option<u64>,

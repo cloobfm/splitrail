@@ -35,6 +35,7 @@ pub struct UiLayout {
 #[derive(Debug, Default)]
 pub struct TuiState {
     pub selected_tab: usize,
+    #[allow(dead_code)]
     pub scroll_offset: usize,
     pub summary_day_offset: usize,
     pub cli_scroll_offset: usize,

@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 // Helper function to deserialize null as default value
+#[allow(dead_code)]
 fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
@@ -101,8 +102,10 @@ struct KiroEnvState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct KiroAssistantMessage {
-    ToolUse: Option<KiroToolUseMessage>,
-    Response: Option<KiroResponseMessage>,
+    #[serde(rename = "ToolUse")]
+    tool_use: Option<KiroToolUseMessage>,
+    #[serde(rename = "Response")]
+    response: Option<KiroResponseMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,7 +349,7 @@ impl KiroCliAnalyzer {
 
     // Format Kiro CLI assistant message content
     fn format_kiro_assistant_message(assistant: &KiroAssistantMessage) -> String {
-        if let Some(tool_use) = &assistant.ToolUse {
+        if let Some(tool_use) = &assistant.tool_use {
             let mut content = if !tool_use.content.is_empty() {
                 tool_use.content.clone()
             } else {
@@ -362,7 +365,7 @@ impl KiroCliAnalyzer {
             }
 
             content
-        } else if let Some(response) = &assistant.Response {
+        } else if let Some(response) = &assistant.response {
             response.content.clone()
         } else {
             "Empty assistant message".to_string()

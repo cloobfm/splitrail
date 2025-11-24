@@ -128,13 +128,16 @@ impl NotificationManager {
 
 #[derive(Clone)]
 struct WaitingAlert {
+    #[allow(dead_code)]
     analyzer_name: String,
     application: Application,
     last_global_hash: String,
+    #[allow(dead_code)]
     conversation_hash: String,
     project_hash: String,
     model: Option<String>,
     idle_seconds: i64,
+    #[allow(dead_code)]
     last_message_time: DateTime<Utc>,
     recent_messages: Vec<ConversationMessage>,
 }

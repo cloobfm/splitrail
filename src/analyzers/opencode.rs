@@ -251,7 +251,6 @@ impl Analyzer for OpenCodeAnalyzer {
         let messages = self.parse_conversations(sources).await?;
 
         let mut daily_stats = std::collections::BTreeMap::new();
-        let mut num_conversations = 0;
 
         for message in &messages {
             // Convert UTC timestamp to local timezone for daily stats grouping
@@ -308,7 +307,7 @@ impl Analyzer for OpenCodeAnalyzer {
         // Count unique conversations
         let unique_conversations: std::collections::HashSet<_> =
             messages.iter().map(|m| &m.conversation_hash).collect();
-        num_conversations = unique_conversations.len() as u64;
+        let num_conversations = unique_conversations.len() as u64;
 
         Ok(AgenticCodingToolStats {
             daily_stats,

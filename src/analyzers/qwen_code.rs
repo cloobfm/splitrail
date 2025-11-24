@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::analyzer::{Analyzer, DataSource};
 use crate::models::{calculate_cache_cost, calculate_input_cost, calculate_output_cost};
 use crate::types::{

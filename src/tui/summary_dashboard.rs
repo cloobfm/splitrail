@@ -30,6 +30,7 @@ pub struct SummaryData {
     pub week_stats: AggregatedStats,
     pub two_week_stats: AggregatedStats,
     pub thirty_day_stats: AggregatedStats,
+    #[allow(dead_code)]
     pub selected_day_stats: AggregatedStats,
     pub selected_day_offset: usize,
     pub active_clis: usize,
@@ -807,6 +808,7 @@ pub fn draw_summary_view(
 }
 
 // Helper function to create a horizontal bar visualization
+#[allow(dead_code)]
 pub fn create_bar(value: u64, max_value: u64, width: usize, color: Color) -> Line<'static> {
     let filled = if max_value > 0 {
         ((value as f64 / max_value as f64) * width as f64) as usize
@@ -826,6 +828,7 @@ pub fn create_bar(value: u64, max_value: u64, width: usize, color: Color) -> Lin
 }
 
 // Helper function to create a percentage display
+#[allow(dead_code)]
 pub fn create_percentage_bar(
     value: u64,
     total: u64,
@@ -906,6 +909,7 @@ pub fn create_braille_health_bar(health: f64, width: usize) -> Vec<Span<'static>
 }
 
 // Helper to create activity sparkline for last hour
+#[allow(dead_code)]
 pub fn create_activity_sparkline(
     stats: &AgenticCodingToolStats,
     now: chrono::DateTime<chrono::Utc>,

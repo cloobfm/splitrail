@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::analyzer::{Analyzer, DataSource};
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
 use crate::utils::hash_text;
