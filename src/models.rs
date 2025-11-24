@@ -625,6 +625,15 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             cached_input_per_1m: 0.02,
         },
     },
+    "x-ai/grok-4.1-fast" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.20,
+            output_per_1m: 0.50,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.05,
+        },
+    },
 
     // Minimax Models
     "minimax/minimax-m2:free" => ModelInfo {
@@ -883,8 +892,11 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "grok-free" => "grok-code",
     "grok-code-fast-1" => "grok-code-fast-1",
     "grok-fast" => "grok-code-fast-1",
+    "grok-4.1-fast" => "x-ai/grok-4.1-fast",
+    "grok-4-1-fast" => "x-ai/grok-4.1-fast",
     "xai-grok" => "grok-code",
     "xai-grok-fast" => "grok-code-fast-1",
+    "xai-grok-4.1-fast" => "x-ai/grok-4.1-fast",
     "openrouter" => "openrouter-standard",
     "openrouter-free-tier" => "openrouter-free",
     "kimi" => "kimi-k2",
