@@ -11,7 +11,6 @@ pub mod qwen_code;
 pub mod roo_code;
 pub mod warp_dev;
 
-pub use amazon_q::AmazonQAnalyzer;
 pub use claude_code::ClaudeCodeAnalyzer;
 pub use cline::ClineAnalyzer;
 pub use codex_cli::CodexCliAnalyzer;

@@ -7,7 +7,6 @@ use num_format::{Locale, ToFormattedString};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::models::get_model_info;
 use crate::types::{ConversationMessage, DailyStats};
 
 /// Quota limits for different time periods and types

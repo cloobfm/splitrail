@@ -83,7 +83,7 @@ impl NotificationManager {
             // Only alert on the freshest conversation that just crossed the threshold,
             // and ignore ones that have been idle far beyond it (to avoid noisy catch-up).
             const RECENT_WINDOW_SECS: i64 = 15 * 60; // 15 minutes after threshold
-            let mut waiting: Vec<_> =
+            let waiting: Vec<_> =
                 find_waiting_conversations(analyzer_stats, &self.settings, now)
                     .into_iter()
                     .filter(|alert| {

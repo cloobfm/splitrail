@@ -354,7 +354,7 @@ async fn handle_config_subcommand(config_args: ConfigArgs) {
         ConfigSubcommands::SlackToggle => {
             match config::Config::load() {
                 Ok(Some(mut config)) => {
-                    let was_enabled = config.notifications.slack.enabled;
+                    let _was_enabled = config.notifications.slack.enabled;
                     config.notifications.slack.enabled = !config.notifications.slack.enabled;
                     
                     // Save the updated config

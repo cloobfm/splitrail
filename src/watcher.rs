@@ -1,5 +1,5 @@
 use anyhow::Result;
-use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_types::event::{Event, EventKind};
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -139,7 +139,7 @@ fn handle_fs_event(
     event: Event,
     tx: &Sender<WatcherEvent>,
     dir_to_analyzer: &[AnalyzerWatchDir],
-    debug_config: Option<&WatchDebugConfig>,
+    _debug_config: Option<&WatchDebugConfig>,
 ) -> Result<()> {
     // Only care about create, write, and remove events
     match event.kind {

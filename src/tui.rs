@@ -1,11 +1,9 @@
-use crate::types::{AgenticCodingToolStats, Application, MultiAnalyzerStats};
+use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats};
 use crate::utils::{
     NumberFormatOptions, clear_old_warnings, format_date_for_display, format_number,
-    format_timestamp_for_live_view,
 };
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::{bail, Result};
-use chrono::Duration as ChronoDuration;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
@@ -342,7 +340,7 @@ async fn run_app(
                     if key.code == KeyCode::Char('s') {
                         match crate::config::Config::load() {
                             Ok(Some(mut config)) => {
-                                let was_enabled = config.notifications.slack.enabled;
+                                let _was_enabled = config.notifications.slack.enabled;
                                 config.notifications.slack.enabled = !config.notifications.slack.enabled;
                                 
                                 // Save the updated config
@@ -443,7 +441,7 @@ async fn run_app(
                             {
                                 let analyzer_index = tui_state.selected_tab - 1;
                                 if analyzer_index < table_states.len()
-                                    && let Some(current_stats) = filtered_stats.get(analyzer_index)
+                                    && let Some(_current_stats) = filtered_stats.get(analyzer_index)
                                     && let Some(table_state) = table_states.get_mut(analyzer_index)
                                     && let Some(selected) = table_state.selected()
                                     && selected > 0
@@ -756,7 +754,7 @@ fn draw_ui(
         };
 
         // Get Slack status
-        let slack_status = match crate::config::Config::load() {
+        let _slack_status = match crate::config::Config::load() {
             Ok(Some(config)) => {
                 if config.notifications.slack.enabled {
                     "☑ Slack"
@@ -962,7 +960,7 @@ fn draw_daily_stats_table(
         }
     }
 
-    let header = Row::new(vec![
+    let _header = Row::new(vec![
         Cell::new(""),
         Cell::new("Date"),
         Cell::new(Text::from("Cost").right_aligned()),

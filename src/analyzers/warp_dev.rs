@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use glob::glob;
 use rayon::prelude::*;
-use regex::Regex;
 use serde::Deserialize;
 use simd_json;
 use simd_json::prelude::*;
@@ -563,10 +562,14 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
                                     });
 
                                     // Create assistant message with full stats
-                                    // WARP doesn't split input/output, so estimate based on user's Claude Code pattern
-                                    // Actual usage: 19% input, 81% output (rounded to 20/80)
-                                    let estimated_input = (total_tokens as f64 * 0.20) as u64;
-                                    let estimated_output = (total_tokens as f64 * 0.80) as u64;
+                                    // WARP doesn't split tokens, so estimate based on user's Claude Code pattern
+                                    // Actual usage shows ~220:1 ratio of cached to fresh tokens
+                                    // So: ~99.5% cached, ~0.08% input, ~0.36% output
+                                    let cached_ratio = 0.995;  // Most tokens are cached reads
+                                    let fresh_tokens = (total_tokens as f64 * (1.0 - cached_ratio)) as u64;
+                                    let estimated_cached = (total_tokens as f64 * cached_ratio) as u64;
+                                    let estimated_input = (fresh_tokens as f64 * 0.20) as u64;  // 20% of fresh
+                                    let estimated_output = (fresh_tokens as f64 * 0.80) as u64; // 80% of fresh
 
                                     conversations.push(ConversationMessage {
                                         date: timestamp,
@@ -583,9 +586,10 @@ fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessa
                                         )),
                                         model: primary_model,
                                         stats: Stats {
-                                            // Estimate 40/60 split (WARP doesn't provide breakdown)
+                                            // Split based on 220:1 cached:fresh ratio from actual usage
                                             input_tokens: estimated_input,
                                             output_tokens: estimated_output,
+                                            cached_tokens: estimated_cached,
                                             cost,
                                             terminal_commands: bash_commands as u64,
                                             files_read: file_reads as u64,

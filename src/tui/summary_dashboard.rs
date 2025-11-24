@@ -1,19 +1,16 @@
 use crate::notifications::{last_notification_age_seconds, next_notification_eta_seconds};
-use crate::types::{AgenticCodingToolStats, Application};
+use crate::types::AgenticCodingToolStats;
 use crate::utils::{
     NumberFormatOptions, calculate_overall_health, format_number, format_timestamp_for_live_view,
     get_health_color, get_health_status, get_warnings,
 };
 use chrono::Duration as ChronoDuration;
-use crossterm::style::{Print, ResetColor, SetForegroundColor};
-use crossterm::{ExecutableCommand, execute};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs};
+use ratatui::widgets::{Block, Cell, Paragraph, Row, Table};
 use std::collections::HashMap;
-use std::io::{Write, stdout};
 
 #[derive(Default, Clone)]
 pub struct AggregatedStats {
@@ -1042,7 +1039,7 @@ pub fn simplify_analyzer_name(name: &str) -> &str {
 // Get last message preview
 pub fn get_last_message_preview(
     stats: &AgenticCodingToolStats,
-    max_len: usize,
+    _max_len: usize,
 ) -> (
     String,
     Vec<(
@@ -1194,11 +1191,11 @@ pub fn draw_visual_cli_panels(
             _input,
             _output,
             _reasoning,
-            cost,
+            _cost,
             _idle,
             _active,
-            sessions,
-            messages,
+            _sessions,
+            _messages,
             state,
         ) = &cli_data[ordered_idx];
 
@@ -1347,7 +1344,7 @@ pub fn draw_visual_cli_panels(
             let project_span = if tui_state.summary_verbose_mode && !project_hash.is_empty() {
                 let project_label_text = if *application == crate::types::Application::ClaudeCode {
                     // For Claude Code, just truncate without adding a hash
-                    let mut truncated = project_hash.chars().take(8).collect::<String>();
+                    let truncated = project_hash.chars().take(8).collect::<String>();
                     // Pad with spaces to ensure fixed width
                     format!("{:width$}", truncated, width = 8)
                 } else {
@@ -1503,7 +1500,7 @@ pub fn draw_visual_cli_panels(
         ("                ".to_string(), Color::DarkGray, "  —".to_string())
     };
     
-    let countdown_indicator = format!("|{countdown_bar}| {remaining_display}");
+    let _countdown_indicator = format!("|{countdown_bar}| {remaining_display}");
     
     let last_icon = if last_age.is_some() { "✅" } else { "⬜" };
     let last_text = last_age
@@ -1516,7 +1513,7 @@ pub fn draw_visual_cli_panels(
     // Countdown: |⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿| 108s = 30 chars
     // Total right section: 8 + 3 + 30 + 3 + 16 = 60 chars fixed
     
-    let slack_section = format!("| {} Slack", slack_icon); // Fixed 8 chars
+    let _slack_section = format!("| {} Slack", slack_icon); // Fixed 8 chars
     let next_section = format!("|{countdown_bar}| {remaining_display}"); // Fixed 25 chars with left boundary
     let last_section = format!("last {last_icon} {last_text:>7}"); // Fixed 16 chars for "XXs ago" or "—"
 
@@ -1536,7 +1533,7 @@ pub fn draw_visual_cli_panels(
     let left_text = format!("📊 Activity: {} | {}", clock_text, tks_display);
     
     // Build title line with fixed positioning - no dynamic width calculations
-    let mut title_spans = vec![
+    let title_spans = vec![
         Span::raw(left_text),
         Span::raw("                 "), // Much larger spacer to push entire right section far right
         Span::styled(next_section, Style::default().fg(countdown_color)), // Countdown with color

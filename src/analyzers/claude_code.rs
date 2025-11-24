@@ -489,15 +489,15 @@ where
                                                 message:
                                                 Some(Message {
                                                          id: ref message_id,
-                                                         model: ref model,
+                                                         ref model,
                                                          content: Some(ref content),
-                                                         usage: ref usage,
+                                                         ref usage,
                                                          ..
                                                      }),
-                                                timestamp: ref timestamp,
-                                                tool_use_result: ref tool_use_result,
-                                                request_id: ref request_id,
-                                                uuid: ref uuid,
+                                                ref timestamp,
+                                                ref tool_use_result,
+                                                ref request_id,
+                                                ref uuid,
                                                 ..
                                                 // Skip messages for which no model is specified, or the model is `<synthetic>`;
                                                 // i.e. Claude Code-generated system messages.  These have their token usage all
