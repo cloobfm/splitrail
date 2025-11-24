@@ -3,3 +3,8 @@
 .DS_Store
 releases/
 .claude/
+
+# WARP captured data (contains personal usage data)
+schemas/warp/captured/*.jsonl
+schemas/warp/samples/*.log
+schemas/warp/samples/.warp_offset
