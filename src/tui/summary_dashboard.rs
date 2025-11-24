@@ -1397,7 +1397,9 @@ pub fn draw_visual_cli_panels(
                     project_span.width() + timestamp_str.len() + role_with_colon.len() + 1,
                 );
                 if available_for_content > 0 && content.len() > available_for_content {
-                    format!("{}…", &content[..available_for_content])
+                    // Use char-aware truncation to avoid panicking on multi-byte UTF-8 characters
+                    let truncated: String = content.chars().take(available_for_content).collect();
+                    format!("{}…", truncated)
                 } else {
                     content.clone()
                 }
