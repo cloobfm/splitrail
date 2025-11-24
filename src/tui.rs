@@ -4,7 +4,7 @@ use crate::utils::{
     format_timestamp_for_live_view,
 };
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::Duration as ChronoDuration;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
@@ -18,7 +18,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs};
 use ratatui::{Frame, Terminal};
-use std::io::{Write, stdout};
+use std::io::{stdout, Write, IsTerminal};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -82,9 +82,16 @@ pub fn run_tui(
     file_watcher: FileWatcher,
     mut stats_manager: RealtimeStatsManager,
 ) -> Result<()> {
+    let mut stdout = stdout();
+
+    // Crossterm raw mode fails if stdout isn't a TTY (e.g., CI, log capture). Bail early with a clear message.
+    if !stdout.is_terminal() {
+        bail!("Interactive TUI requires a terminal (stdout is not a TTY). Run from a terminal or use subcommands like `splitrail config`/`splitrail upload`.");
+    }
+
     enable_raw_mode()?;
-    stdout().execute(EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout());
+    stdout.execute(EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let mut tui_state = TuiState::default();
