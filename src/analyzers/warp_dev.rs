@@ -684,7 +684,7 @@ impl Analyzer for WarpDevAnalyzer {
                 let path_str = source.path.to_string_lossy();
 
                 // Determine file type and parse accordingly
-                if path_str.contains("graphql_responses") || path_str.ends_with(".jsonl") {
+                if path_str.contains("graphql_responses") {
                     // GraphQL conversation data
                     match parse_graphql_conversations(&source.path) {
                         Ok(messages) => Some(messages),
