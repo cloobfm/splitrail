@@ -137,15 +137,19 @@ fn clean_message_text(text: &str) -> String {
     result.trim().to_string()
 }
 
-// Determine if a reasoning message will be followed by an assistant response
+// Determine if a reasoning message will be followed by a non-empty assistant response
 fn reasoning_followed_by_non_empty_text(
     messages: &[KiloCodeUiMessage],
     current_index: usize,
 ) -> bool {
     for message in messages.iter().skip(current_index + 1) {
         match message {
-            KiloCodeUiMessage::Say { say, .. } => match say.as_str() {
-                "text" | "completion_result" | "error" => return true,
+            KiloCodeUiMessage::Say { say, text, .. } => match say.as_str() {
+                "text" | "completion_result" | "error" => {
+                    // Only return true if the text is non-empty after cleaning
+                    let cleaned = clean_message_text(text);
+                    return !cleaned.is_empty();
+                }
                 "api_req_started" | "user_feedback" => return false,
                 _ => continue,
             },
@@ -267,11 +271,22 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                 }
                 "checkpoint_saved" | "condense_context" | "command_output" => continue,
                 "reasoning" => {
+                    // Skip reasoning if it will be followed by non-empty text
+                    // (the text will contain the full response including reasoning)
                     if reasoning_followed_by_non_empty_text(&ui_messages, idx) {
                         continue;
                     }
 
+                    // If reasoning is not followed by text (or followed by empty text),
+                    // use the reasoning content as the message content
                     if let Some(stats) = pending_api_stats.take() {
+                        let cleaned = clean_message_text(text);
+                        let content = if !cleaned.is_empty() {
+                            Some(cleaned)
+                        } else {
+                            None
+                        };
+
                         let date = DateTime::from_timestamp_millis(*ts).unwrap_or_else(Utc::now);
                         let local_hash = format!("{}-{}", conversation_hash, message_index);
                         let global_hash = hash_text(&format!(
@@ -288,7 +303,7 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                             model: current_model.clone(),
                             stats,
                             role: MessageRole::Assistant,
-                            content: None,
+                            content,
                         });
                         message_index += 1;
                         last_role = Some(MessageRole::Assistant);
