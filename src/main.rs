@@ -18,6 +18,7 @@ mod tui;
 mod types;
 mod upload;
 mod utils;
+mod warp;
 mod watcher;
 
 #[derive(Parser)]
@@ -52,6 +53,25 @@ enum Commands {
     /// Manage configuration
     #[command(about = "Manage Splitrail configuration settings")]
     Config(ConfigArgs),
+    /// Manage WARP integration (setup, refresh, status)
+    #[command(about = "Manage WARP integration and auth token")]
+    Warp(WarpArgs),
+}
+
+#[derive(Args)]
+struct WarpArgs {
+    #[command(subcommand)]
+    command: WarpSubcommands,
+}
+
+#[derive(Subcommand)]
+enum WarpSubcommands {
+    /// Setup WARP integration (captures auth token)
+    Setup,
+    /// Refresh expired WARP token
+    Refresh,
+    /// Check WARP token status
+    Status,
 }
 
 
@@ -115,6 +135,45 @@ async fn main() {
         Some(Commands::Config(config_args)) => {
             handle_config_subcommand(config_args).await;
         }
+        Some(Commands::Warp(warp_args)) => {
+            handle_warp_subcommand(warp_args).await;
+        }
+    }
+}
+
+async fn handle_warp_subcommand(args: WarpArgs) {
+    match args.command {
+        WarpSubcommands::Setup => {
+            println!("🔧 WARP Setup");
+            println!("This will capture your WARP auth token using proxy interception.");
+            println!("\nRun: ./scripts/start_warp_proxy_quiet.sh");
+            println!("Then use WARP normally, and stop with: ./scripts/stop_warp_proxy.sh");
+            println!("\nToken will be saved to ~/.config/splitrail/warp_token");
+        }
+        WarpSubcommands::Refresh => {
+            println!("🔄 Refreshing WARP token...");
+            println!("Run: ./scripts/start_warp_proxy_quiet.sh");
+            println!("Use WARP, then: ./scripts/stop_warp_proxy.sh");
+        }
+        WarpSubcommands::Status => {
+            println!("📊 Checking WARP token status...");
+            match warp::health::check_warp_token_health().await {
+                warp::health::WarpTokenStatus::Valid => {
+                    println!("✅ WARP token is valid");
+                }
+                warp::health::WarpTokenStatus::NotConfigured => {
+                    println!("⚠️  WARP token not configured");
+                    println!("   Run: splitrail warp setup");
+                }
+                warp::health::WarpTokenStatus::Expired => {
+                    println!("❌ WARP token expired");
+                    println!("   Run: splitrail warp refresh");
+                }
+                warp::health::WarpTokenStatus::Error(e) => {
+                    println!("❌ Error checking token: {}", e);
+                }
+            }
+        }
     }
 }
 
@@ -167,6 +226,12 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
 
     // Set upload status on stats manager for real-time upload tracking
     stats_manager.set_upload_status(upload_status.clone());
+
+    // Check WARP token health (once per day)
+    if warp::health::should_check_warp_token() {
+        let status = warp::health::check_warp_token_health().await;
+        warp::health::display_warp_status(&status);
+    }
 
     // Start notification manager if enabled
     if let Some(manager) = notifications::NotificationManager::from_config(&config) {

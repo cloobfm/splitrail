@@ -10,6 +10,8 @@ pub struct Config {
     pub formatting: FormattingConfig,
     #[serde(default)]
     pub notifications: NotificationConfig,
+    #[serde(default)]
+    pub warp: WarpConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -59,6 +61,23 @@ pub struct SlackConfig {
     pub channel: Option<String>,
     #[serde(default)]
     pub username: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct WarpConfig {
+    pub auth_token: Option<String>,
+    #[serde(default = "default_warp_auto_sync")]
+    pub auto_sync: bool,
+    #[serde(default = "default_warp_sync_interval_hours")]
+    pub sync_interval_hours: u64,
+}
+
+fn default_warp_auto_sync() -> bool {
+    true
+}
+
+fn default_warp_sync_interval_hours() -> u64 {
+    6
 }
 
 fn default_health_display_style() -> String {
@@ -112,6 +131,7 @@ impl Default for Config {
                 sample_messages: default_sample_messages(),
                 slack: SlackConfig::default(),
             },
+            warp: WarpConfig::default(),
         }
     }
 }

@@ -17,6 +17,33 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 GRAPHQL_LOG = os.path.join(OUTPUT_DIR, f"graphql_responses_{datetime.now().strftime('%Y%m%d')}.jsonl")
 USAGE_LOG = os.path.join(OUTPUT_DIR, f"usage_data_{datetime.now().strftime('%Y%m%d')}.jsonl")
 
+# Token storage path
+TOKEN_FILE = os.path.expanduser("~/.config/splitrail/warp_token")
+
+def request(flow: http.HTTPFlow) -> None:
+    """Capture auth token from WARP GraphQL requests"""
+
+    # Only process Warp GraphQL requests
+    if "app.warp.dev/graphql" not in flow.request.pretty_url:
+        return
+
+    # Extract and save auth token
+    auth_header = flow.request.headers.get("Authorization", "")
+
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            # Create config directory if it doesn't exist
+            os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
+
+            # Save token to file
+            with open(TOKEN_FILE, "w") as f:
+                f.write(auth_header)
+
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ✓ Saved WARP auth token")
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error saving token: {e}")
+
+
 def response(flow: http.HTTPFlow) -> None:
     """Intercept responses from Warp's GraphQL API"""
 
