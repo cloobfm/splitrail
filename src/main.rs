@@ -191,7 +191,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     // registry.register(AmazonQAnalyzer::new()); // Replaced by Kiro CLI
     registry.register(KiroCliAnalyzer::new());
     registry.register(OpenCodeAnalyzer::new()); // Ready when OpenCode adds local data storage
-    // registry.register(WarpDevAnalyzer::new()); // Temporarily disabled - unstable parsing
+    registry.register(WarpDevAnalyzer::new()); // Now includes GraphQL conversation data
     // registry.register(CopilotAnalyzer::new()); // Temporarily disabled
 
     registry

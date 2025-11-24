@@ -56,6 +56,97 @@ struct WarpAiSuggestionsRequest {
     context_messages: Option<Vec<String>>,
 }
 
+// GraphQL API response structures
+#[derive(Debug, Deserialize)]
+struct GraphQLResponse {
+    operation: String,
+    timestamp: String,
+    response: GraphQLResponseData,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQLResponseData {
+    data: Option<GraphQLData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQLData {
+    user: Option<GraphQLUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQLUser {
+    #[serde(rename = "__typename")]
+    typename: Option<String>,
+    user: Option<GraphQLUserData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQLUserData {
+    #[serde(rename = "conversationUsage")]
+    conversation_usage: Option<Vec<WarpConversation>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WarpConversation {
+    #[serde(rename = "conversationId")]
+    conversation_id: String,
+    #[serde(rename = "lastUpdated")]
+    last_updated: String,
+    title: String,
+    #[serde(rename = "usageMetadata")]
+    usage_metadata: UsageMetadata,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageMetadata {
+    #[serde(rename = "contextWindowUsage")]
+    context_window_usage: f64,
+    #[serde(rename = "creditsSpent")]
+    credits_spent: f64,
+    summarized: bool,
+    #[serde(rename = "tokenUsage")]
+    token_usage: Vec<TokenUsage>,
+    #[serde(rename = "toolUsageMetadata")]
+    tool_usage_metadata: Option<ToolUsageMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenUsage {
+    #[serde(rename = "modelId")]
+    model_id: String,
+    #[serde(rename = "totalTokens")]
+    total_tokens: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolUsageMetadata {
+    #[serde(rename = "runCommandsExecuted")]
+    run_commands_executed: Option<u32>,
+    #[serde(rename = "readFilesStats")]
+    read_files_stats: Option<ToolStats>,
+    #[serde(rename = "grepStats")]
+    grep_stats: Option<ToolStats>,
+    #[serde(rename = "applyFileDiffStats")]
+    apply_file_diff_stats: Option<FileDiffStats>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolStats {
+    count: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileDiffStats {
+    count: u32,
+    #[serde(rename = "linesAdded")]
+    lines_added: Option<u32>,
+    #[serde(rename = "linesRemoved")]
+    lines_removed: Option<u32>,
+    #[serde(rename = "filesChanged")]
+    files_changed: Option<u32>,
+}
+
 fn parse_warp_log_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
     let content = std::fs::read_to_string(file_path)?;
     let mut interactions = Vec::new();
@@ -381,6 +472,141 @@ fn parse_warp_log_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
     Ok(interactions)
 }
 
+// Parse GraphQL conversation data from captured JSONL files
+fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessage>> {
+    let content = std::fs::read_to_string(file_path)?;
+    let mut conversations = Vec::new();
+
+    // Parse JSONL (one JSON object per line)
+    for (line_num, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let mut mutable_line = line.to_string();
+        match unsafe { simd_json::from_str::<GraphQLResponse>(&mut mutable_line) } {
+            Ok(graphql_response) => {
+                // Only process GetConversationUsage operations
+                if graphql_response.operation != "GetConversationUsage" {
+                    continue;
+                }
+
+                // Extract conversations
+                if let Some(data) = graphql_response.response.data {
+                    if let Some(user) = data.user {
+                        if let Some(user_data) = user.user {
+                            if let Some(conv_usage) = user_data.conversation_usage {
+                                for conv in conv_usage {
+                                    // Parse timestamp
+                                    let timestamp = match DateTime::parse_from_rfc3339(&conv.last_updated) {
+                                        Ok(dt) => dt.with_timezone(&Utc),
+                                        Err(_) => {
+                                            eprintln!("Failed to parse timestamp: {}", conv.last_updated);
+                                            continue;
+                                        }
+                                    };
+
+                                    // Calculate total tokens across all models
+                                    let total_tokens: u64 = conv.usage_metadata.token_usage
+                                        .iter()
+                                        .map(|t| t.total_tokens)
+                                        .sum();
+
+                                    // Get primary model (first or most-used)
+                                    let primary_model = conv.usage_metadata.token_usage
+                                        .first()
+                                        .map(|t| t.model_id.clone());
+
+                                    // Extract tool usage stats
+                                    let (bash_commands, file_reads, grep_searches) =
+                                        if let Some(ref tool_meta) = conv.usage_metadata.tool_usage_metadata {
+                                            (
+                                                tool_meta.run_commands_executed.unwrap_or(0),
+                                                tool_meta.read_files_stats.as_ref().map(|s| s.count).unwrap_or(0),
+                                                tool_meta.grep_stats.as_ref().map(|s| s.count).unwrap_or(0),
+                                            )
+                                        } else {
+                                            (0, 0, 0)
+                                        };
+
+                                    // Extract file diff stats
+                                    let (lines_added, lines_removed, files_changed) =
+                                        if let Some(ref tool_meta) = conv.usage_metadata.tool_usage_metadata {
+                                            if let Some(ref diff_stats) = tool_meta.apply_file_diff_stats {
+                                                (
+                                                    diff_stats.lines_added.unwrap_or(0),
+                                                    diff_stats.lines_removed.unwrap_or(0),
+                                                    diff_stats.files_changed.unwrap_or(0),
+                                                )
+                                            } else {
+                                                (0, 0, 0)
+                                            }
+                                        } else {
+                                            (0, 0, 0)
+                                        };
+
+                                    // Convert credits to approximate USD (1 credit ≈ $0.22)
+                                    let cost = conv.usage_metadata.credits_spent * 0.22;
+
+                                    // Create user message (conversation start)
+                                    conversations.push(ConversationMessage {
+                                        date: timestamp,
+                                        application: Application::Warp,
+                                        project_hash: hash_text("warp_cloud"), // WARP doesn't expose project
+                                        conversation_hash: hash_text(&conv.conversation_id),
+                                        global_hash: hash_text(&format!("warp_graphql_{}", conv.conversation_id)),
+                                        role: MessageRole::User,
+                                        content: Some(conv.title.clone()),
+                                        model: None,
+                                        stats: Stats::default(),
+                                        local_hash: None,
+                                    });
+
+                                    // Create assistant message with full stats
+                                    conversations.push(ConversationMessage {
+                                        date: timestamp,
+                                        application: Application::Warp,
+                                        project_hash: hash_text("warp_cloud"),
+                                        conversation_hash: hash_text(&conv.conversation_id),
+                                        global_hash: hash_text(&format!("warp_graphql_{}__resp", conv.conversation_id)),
+                                        role: MessageRole::Assistant,
+                                        content: Some(format!(
+                                            "Conversation completed: {} (credits: {:.2}, context: {:.1}%)",
+                                            conv.title,
+                                            conv.usage_metadata.credits_spent,
+                                            conv.usage_metadata.context_window_usage * 100.0
+                                        )),
+                                        model: primary_model,
+                                        stats: Stats {
+                                            // Use output_tokens for total (WARP doesn't split input/output)
+                                            output_tokens: total_tokens,
+                                            cost,
+                                            terminal_commands: bash_commands as u64,
+                                            files_read: file_reads as u64,
+                                            file_content_searches: grep_searches as u64,
+                                            lines_added: lines_added as u64,
+                                            lines_deleted: lines_removed as u64,
+                                            files_edited: files_changed as u64,
+                                            tool_calls: (bash_commands + file_reads + grep_searches) as u32,
+                                            ..Stats::default()
+                                        },
+                                        local_hash: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to parse GraphQL line {}: {}", line_num + 1, e);
+            }
+        }
+    }
+
+    Ok(conversations)
+}
+
 #[async_trait]
 impl Analyzer for WarpDevAnalyzer {
     fn display_name(&self) -> &'static str {
@@ -412,8 +638,25 @@ impl Analyzer for WarpDevAnalyzer {
         let patterns = self.get_data_glob_patterns();
         let mut sources = Vec::new();
 
+        // Add terminal telemetry log files
         for pattern in patterns {
             for entry in glob(&pattern)? {
+                if let Ok(path) = entry {
+                    if path.is_file() {
+                        sources.push(DataSource { path });
+                    }
+                }
+            }
+        }
+
+        // Add GraphQL captured conversation data
+        if let Some(home) = dirs::home_dir() {
+            let graphql_pattern = home
+                .join("Projects/splitrail/schemas/warp/captured/*.jsonl")
+                .to_string_lossy()
+                .into_owned();
+
+            for entry in glob(&graphql_pattern)? {
                 if let Ok(path) = entry {
                     if path.is_file() {
                         sources.push(DataSource { path });
@@ -431,14 +674,34 @@ impl Analyzer for WarpDevAnalyzer {
     ) -> Result<Vec<ConversationMessage>> {
         let all_entries: Vec<ConversationMessage> = sources
             .into_par_iter()
-            .filter_map(|source| match parse_warp_log_file(&source.path) {
-                Ok(messages) => Some(messages),
-                Err(e) => {
-                    eprintln!(
-                        "Failed to parse Warp log file {}: {e:#}",
-                        source.path.display(),
-                    );
-                    None
+            .filter_map(|source| {
+                let path_str = source.path.to_string_lossy();
+
+                // Determine file type and parse accordingly
+                if path_str.contains("graphql_responses") || path_str.ends_with(".jsonl") {
+                    // GraphQL conversation data
+                    match parse_graphql_conversations(&source.path) {
+                        Ok(messages) => Some(messages),
+                        Err(e) => {
+                            eprintln!(
+                                "Failed to parse WARP GraphQL file {}: {e:#}",
+                                source.path.display(),
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    // Terminal telemetry log
+                    match parse_warp_log_file(&source.path) {
+                        Ok(messages) => Some(messages),
+                        Err(e) => {
+                            eprintln!(
+                                "Failed to parse Warp log file {}: {e:#}",
+                                source.path.display(),
+                            );
+                            None
+                        }
+                    }
                 }
             })
             .flat_map(|messages| messages)
