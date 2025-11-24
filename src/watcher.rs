@@ -177,6 +177,12 @@ pub struct RealtimeStatsManager {
     reload_debounce: Duration,
     last_poll_time: Instant,
     poll_interval: Duration,
+    /// Batch pending file events to process together
+    pending_events: HashSet<String>,
+    /// Time when first event in current batch was received
+    batch_start_time: Option<Instant>,
+    /// How long to wait for more events before processing batch
+    batch_window: Duration,
 }
 
 impl RealtimeStatsManager {
@@ -199,6 +205,9 @@ impl RealtimeStatsManager {
             reload_debounce: Duration::from_secs(2),
             last_poll_time: Instant::now(),
             poll_interval: Duration::from_secs(5), // Poll Codex CLI every 5 seconds
+            pending_events: HashSet::new(),
+            batch_start_time: None,
+            batch_window: Duration::from_millis(500), // Wait 500ms for more events
         })
     }
 
@@ -230,24 +239,47 @@ impl RealtimeStatsManager {
     pub async fn handle_watcher_event(&mut self, event: WatcherEvent) -> Result<()> {
         match event {
             WatcherEvent::DataChanged(analyzer_name) => {
-                // Check debounce - only reload if enough time has passed since last reload
-                let now = Instant::now();
-                if let Some(last_reload) = self.last_reload_times.get(&analyzer_name) {
-                    if now.duration_since(*last_reload) < self.reload_debounce {
-                        // Skip this reload, too soon
-                        return Ok(());
-                    }
-                }
+                // Add to pending batch
+                self.pending_events.insert(analyzer_name);
 
-                // Update last reload time
-                self.last_reload_times.insert(analyzer_name.clone(), now);
-
-                if let Err(e) = self.reload_analyzer_stats(&analyzer_name, true).await {
-                    eprintln!("❌ Error reloading {analyzer_name}: {e}");
+                // Start batch timer if this is the first event
+                if self.batch_start_time.is_none() {
+                    self.batch_start_time = Some(Instant::now());
                 }
             }
             WatcherEvent::Error(err) => {
                 eprintln!("❌ Watcher error: {err}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if batch window has expired and process pending events
+    pub async fn process_pending_batches(&mut self) -> Result<()> {
+        if let Some(batch_start) = self.batch_start_time {
+            let now = Instant::now();
+            if now.duration_since(batch_start) >= self.batch_window {
+                // Process all pending events
+                let events_to_process: Vec<_> = self.pending_events.drain().collect();
+
+                for analyzer_name in events_to_process {
+                    // Check debounce
+                    if let Some(last_reload) = self.last_reload_times.get(&analyzer_name) {
+                        if now.duration_since(*last_reload) < self.reload_debounce {
+                            continue; // Skip, too soon
+                        }
+                    }
+
+                    // Update last reload time
+                    self.last_reload_times.insert(analyzer_name.clone(), now);
+
+                    if let Err(e) = self.reload_analyzer_stats(&analyzer_name, true).await {
+                        eprintln!("❌ Error reloading {analyzer_name}: {e}");
+                    }
+                }
+
+                // Reset batch timer
+                self.batch_start_time = None;
             }
         }
         Ok(())

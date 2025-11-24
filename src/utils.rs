@@ -170,6 +170,101 @@ pub fn format_timestamp_for_live_view(timestamp: &DateTime<Utc>) -> String {
     }
 }
 
+/// Incrementally aggregate new messages into existing daily stats
+/// This is more efficient than re-aggregating everything when only a few messages changed
+pub fn aggregate_by_date_incremental(
+    existing_stats: &mut BTreeMap<String, DailyStats>,
+    existing_conversations: &mut BTreeMap<String, String>,
+    new_entries: &[ConversationMessage],
+) {
+    for entry in new_entries {
+        let timestamp = &entry.date.with_timezone(&Local);
+        let conversation_hash = &entry.conversation_hash;
+        let date = timestamp.format("%Y-%m-%d").to_string();
+
+        // Track conversation start dates
+        existing_conversations
+            .entry(conversation_hash.clone())
+            .and_modify(|existing_date| {
+                if date < *existing_date {
+                    *existing_date = date.clone();
+                }
+            })
+            .or_insert(date.clone());
+
+        let daily_stats_entry = existing_stats
+            .entry(date.clone())
+            .or_insert_with(|| DailyStats {
+                date: date.clone(),
+                ..Default::default()
+            });
+
+        match &entry.model {
+            Some(model) => {
+                // AI message
+                daily_stats_entry.ai_messages += 1;
+                *daily_stats_entry
+                    .models
+                    .entry(model.to_string())
+                    .or_insert(0) += 1;
+
+                // Aggregate all stats
+                daily_stats_entry.stats.cost += entry.stats.cost;
+                daily_stats_entry.stats.input_tokens += entry.stats.input_tokens;
+                daily_stats_entry.stats.output_tokens += entry.stats.output_tokens;
+                daily_stats_entry.stats.reasoning_tokens += entry.stats.reasoning_tokens;
+                daily_stats_entry.stats.cache_creation_tokens += entry.stats.cache_creation_tokens;
+                daily_stats_entry.stats.cache_read_tokens += entry.stats.cache_read_tokens;
+                daily_stats_entry.stats.cached_tokens += entry.stats.cached_tokens;
+                daily_stats_entry.stats.tool_calls += entry.stats.tool_calls;
+                daily_stats_entry.stats.terminal_commands += entry.stats.terminal_commands;
+                daily_stats_entry.stats.file_searches += entry.stats.file_searches;
+                daily_stats_entry.stats.file_content_searches += entry.stats.file_content_searches;
+                daily_stats_entry.stats.files_read += entry.stats.files_read;
+                daily_stats_entry.stats.files_added += entry.stats.files_added;
+                daily_stats_entry.stats.files_edited += entry.stats.files_edited;
+                daily_stats_entry.stats.files_deleted += entry.stats.files_deleted;
+                daily_stats_entry.stats.lines_read += entry.stats.lines_read;
+                daily_stats_entry.stats.lines_added += entry.stats.lines_added;
+                daily_stats_entry.stats.lines_edited += entry.stats.lines_edited;
+                daily_stats_entry.stats.lines_deleted += entry.stats.lines_deleted;
+                daily_stats_entry.stats.bytes_read += entry.stats.bytes_read;
+                daily_stats_entry.stats.bytes_added += entry.stats.bytes_added;
+                daily_stats_entry.stats.bytes_edited += entry.stats.bytes_edited;
+                daily_stats_entry.stats.bytes_deleted += entry.stats.bytes_deleted;
+                daily_stats_entry.stats.todo_writes += entry.stats.todo_writes;
+                daily_stats_entry.stats.todos_completed += entry.stats.todos_completed;
+                daily_stats_entry.stats.todo_reads += entry.stats.todo_reads;
+            }
+            None => {
+                // User message
+                daily_stats_entry.user_messages += 1;
+            }
+        }
+    }
+
+    // Count unique conversations per day
+    for (conversation_hash, start_date) in existing_conversations.iter() {
+        if let Some(day_stats) = existing_stats.get_mut(start_date) {
+            // This is a simple approximation - we're counting all conversations that started on this day
+            // A more accurate version would track which conversations we've already counted
+            let mut conversations = HashSet::new();
+            for entry in new_entries {
+                if entry.conversation_hash == *conversation_hash {
+                    conversations.insert(conversation_hash.clone());
+                }
+            }
+            // Only increment if this is a new conversation for this batch
+            if !conversations.is_empty() {
+                day_stats.conversations = existing_conversations
+                    .values()
+                    .filter(|d| d == &start_date)
+                    .count() as u32;
+            }
+        }
+    }
+}
+
 pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, DailyStats> {
     let mut daily_stats: BTreeMap<String, DailyStats> = BTreeMap::new();
     let mut conversation_start_dates: BTreeMap<String, String> = BTreeMap::new();

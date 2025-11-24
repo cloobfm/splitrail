@@ -199,11 +199,16 @@ async fn run_app(
             current_poll_ms = base_poll_ms;
         }
 
-        // Check for file watcher events
+        // Check for file watcher events (batched)
         while let Some(watcher_event) = file_watcher.try_recv() {
             if let Err(e) = stats_manager.handle_watcher_event(watcher_event).await {
                 eprintln!("Error handling watcher event: {e}");
             }
+        }
+
+        // Process batched file events if window has expired
+        if let Err(e) = stats_manager.process_pending_batches().await {
+            eprintln!("Error processing batched events: {e}");
         }
 
         // Poll Codex CLI periodically (every 5 seconds)
