@@ -367,6 +367,13 @@ pub fn draw_summary_view(
         ]),
     ];
 
+    // Split overview area: table on left, chart on right
+    let overview_chunks = Layout::horizontal([
+        Constraint::Length(82), // Table (15 + 13*5 + 2*5 spacing)
+        Constraint::Min(0),     // Chart (takes remaining space)
+    ])
+    .split(chunks[1]);
+
     let table = Table::new(
         rows,
         [
@@ -386,7 +393,15 @@ pub fn draw_summary_view(
     )
     .column_spacing(2);
 
-    frame.render_widget(table, chunks[1]);
+    frame.render_widget(table, overview_chunks[0]);
+
+    // Draw tokens per day chart
+    draw_tokens_chart(
+        frame,
+        overview_chunks[1],
+        filtered_stats,
+        format_options,
+    );
 
     // Calculate stats for the selected day for each CLI
     let now = chrono::Local::now();
@@ -1560,6 +1575,136 @@ pub fn draw_visual_cli_panels(
             .title(title_line)
             .title_style(Style::default().bold().fg(Color::Cyan)),
     );
+
+    frame.render_widget(paragraph, area);
+}
+
+/// Draw a stacked bar chart showing tokens per day (input/output) for the last 30 days
+fn draw_tokens_chart(
+    frame: &mut Frame,
+    area: Rect,
+    filtered_stats: &[&AgenticCodingToolStats],
+    _format_options: &NumberFormatOptions,
+) {
+    use std::collections::BTreeMap;
+    use ratatui::widgets::Borders;
+
+    // Aggregate tokens by date across all analyzers
+    let mut daily_tokens: BTreeMap<chrono::NaiveDate, (u64, u64)> = BTreeMap::new();
+
+    for stats in filtered_stats {
+        for (date_str, day_stats) in &stats.daily_stats {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                let entry = daily_tokens.entry(date).or_insert((0, 0));
+                entry.0 += day_stats.stats.input_tokens;
+                entry.1 += day_stats.stats.output_tokens;
+            }
+        }
+    }
+
+    // Get last 30 days
+    let now = chrono::Local::now().date_naive();
+    let thirty_days_ago = now - ChronoDuration::days(29);
+
+    let mut chart_data: Vec<(String, u64, u64)> = Vec::new();
+    let mut max_total = 0u64;
+
+    for i in 0..30 {
+        let date = thirty_days_ago + ChronoDuration::days(i);
+        let (input, output) = daily_tokens.get(&date).copied().unwrap_or((0, 0));
+        let total = input + output;
+        max_total = max_total.max(total);
+
+        // Format date as MM/DD
+        let date_label = date.format("%m/%d").to_string();
+        chart_data.push((date_label, input, output));
+    }
+
+    // If no data, show empty chart
+    if max_total == 0 {
+        let empty = Paragraph::new("No token data")
+            .block(Block::default()
+                .title("📊 Tokens/Day (30d)")
+                .title_style(Style::default().bold())
+                .borders(Borders::ALL));
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    // Create bar chart content
+    let mut lines = Vec::new();
+
+    // Determine bar height (leave space for title and x-axis labels)
+    let chart_height = (area.height.saturating_sub(4)) as usize; // 1 for title, 1 for border, 2 for x-axis
+
+    if chart_height < 3 {
+        // Not enough space
+        let empty = Paragraph::new("Chart too small")
+            .block(Block::default()
+                .title("📊 Tokens/Day (30d)")
+                .title_style(Style::default().bold())
+                .borders(Borders::ALL));
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    // Scale factor: map tokens to bar height
+    let scale = max_total as f64 / chart_height as f64;
+
+    // Draw bars from top to bottom
+    for row in (0..chart_height).rev() {
+        let mut spans = Vec::new();
+        let row_threshold = ((row + 1) as f64 * scale) as u64;
+
+        for (_, input, output) in &chart_data {
+            let total = input + output;
+
+            if total >= row_threshold {
+                // Determine which part of the stack we're in
+                if *input >= row_threshold {
+                    // Input tokens part (bottom of stack, blue)
+                    spans.push(Span::styled("█", Style::default().fg(Color::LightBlue)));
+                } else {
+                    // Output tokens part (top of stack, cyan)
+                    spans.push(Span::styled("█", Style::default().fg(Color::LightCyan)));
+                }
+            } else {
+                spans.push(Span::raw(" "));
+            }
+        }
+
+        lines.push(Line::from(spans));
+    }
+
+    // X-axis labels: show every 5th day
+    let mut x_labels = Vec::new();
+    for (i, (date_label, _, _)) in chart_data.iter().enumerate() {
+        if i % 5 == 0 {
+            x_labels.push(Span::styled(
+                date_label.clone(),
+                Style::default().fg(Color::DarkGray),
+            ));
+            // Add spaces for next labels
+            for _ in 0..4 {
+                x_labels.push(Span::raw(" "));
+            }
+        }
+    }
+    lines.push(Line::from(x_labels));
+
+    // Legend
+    lines.push(Line::from(vec![
+        Span::styled("█", Style::default().fg(Color::LightBlue)),
+        Span::raw(" Input  "),
+        Span::styled("█", Style::default().fg(Color::LightCyan)),
+        Span::raw(" Output"),
+    ]));
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default()
+            .title("📊 Tokens/Day (30d)")
+            .title_style(Style::default().bold())
+            .borders(Borders::ALL));
 
     frame.render_widget(paragraph, area);
 }
