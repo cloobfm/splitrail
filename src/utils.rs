@@ -172,6 +172,7 @@ pub fn format_timestamp_for_live_view(timestamp: &DateTime<Utc>) -> String {
 
 /// Incrementally aggregate new messages into existing daily stats
 /// This is more efficient than re-aggregating everything when only a few messages changed
+#[allow(dead_code)] // Retained for potential incremental ingestion path; currently unused
 pub fn aggregate_by_date_incremental(
     existing_stats: &mut BTreeMap<String, DailyStats>,
     existing_conversations: &mut BTreeMap<String, String>,

@@ -163,7 +163,6 @@ async fn run_app(
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(250);
-    let mut current_poll_ms = base_poll_ms;
     let mut last_activity = Instant::now();
     let idle_threshold = Duration::from_secs(3); // After 3s of no activity, slow down
 
@@ -196,7 +195,6 @@ async fn run_app(
             needs_redraw = true;
             // Data changed - reset to active polling
             last_activity = Instant::now();
-            current_poll_ms = base_poll_ms;
         }
 
         // Check for file watcher events (batched)
@@ -309,18 +307,17 @@ async fn run_app(
             }
         }
 
-        // Adaptive polling: slow down when idle to reduce CPU usage
+        // Use adaptive timeout to reduce CPU when idle
         let time_since_activity = Instant::now().duration_since(last_activity);
-        if time_since_activity > idle_threshold {
+        let poll_ms = if time_since_activity > idle_threshold {
             // Idle mode: slow down to 1 FPS (1000ms)
-            current_poll_ms = 1000;
+            1000
         } else {
             // Active mode: use base rate
-            current_poll_ms = base_poll_ms;
-        }
+            base_poll_ms
+        };
 
-        // Use adaptive timeout to reduce CPU when idle
-        if let Ok(event_available) = event::poll(Duration::from_millis(current_poll_ms)) {
+        if let Ok(event_available) = event::poll(Duration::from_millis(poll_ms)) {
             if !event_available {
                 continue;
             }
@@ -330,7 +327,6 @@ async fn run_app(
                 Event::Key(key) if key.is_press() => {
                     // Reset activity timer on any key press
                     last_activity = Instant::now();
-                    current_poll_ms = base_poll_ms;
 
                     // Handle quitting.
                     if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
@@ -592,7 +588,6 @@ async fn run_app(
                 Event::Mouse(mouse_event) => {
                     // Reset activity timer on mouse events
                     last_activity = Instant::now();
-                    current_poll_ms = base_poll_ms;
 
                     // Only handle mouse events if mouse mode is enabled
                     if !tui_state.mouse_mode_enabled {

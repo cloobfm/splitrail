@@ -1680,7 +1680,7 @@ fn draw_total_tokens_chart(
         return;
     }
 
-    // Calculate Y-axis scale
+    // Calculate Y-axis scale (labels only; rendering uses integer math)
     let scale = max_total as f64 / chart_height as f64;
 
     // Format token count
@@ -1694,8 +1694,25 @@ fn draw_total_tokens_chart(
         }
     };
 
+    // Dynamically size the Y-axis label column so longer labels (e.g., 60K)
+    // don't push the bars to the right and cause visual gaps.
+    let label_width = format_tokens(max_total).len().max(4);
+
     // Braille characters for bar rendering (bottom to top)
     let braille_chars = [' ', '⢀', '⢠', '⢰', '⢸', '⣸', '⣼', '⣾', '⣿'];
+
+    // Precompute bar heights in subrows (8 per row) using integer math to avoid gaps
+    let bar_subrows: Vec<usize> = chart_data
+        .iter()
+        .map(|&total| {
+            if max_total == 0 {
+                0
+            } else {
+                let numerator = total as u128 * 8 * chart_height as u128 + (max_total as u128 / 2);
+                (numerator / max_total as u128) as usize
+            }
+        })
+        .collect();
 
     // Draw bars from top to bottom with 8x granularity using braille
     for row in (0..chart_height).rev() {
@@ -1705,48 +1722,38 @@ fn draw_total_tokens_chart(
         if row == chart_height - 1 || row == chart_height / 2 || row == 0 {
             let label = format_tokens((row as f64 * scale) as u64);
             spans.push(Span::styled(
-                format!("{:>3}│", label),
+                format!("{:>width$}│", label, width = label_width),
                 Style::default().fg(Color::DarkGray),
             ));
         } else {
-            spans.push(Span::raw("   │"));
+            spans.push(Span::raw(format!("{:>width$}│", "", width = label_width)));
         }
 
         // Draw bars with braille granularity
-        for total in &chart_data {
-            // Calculate how many rows this bar fills (in units of character rows)
-            let bar_height_in_rows = *total as f64 / scale;
-
-            // Current row position from bottom (0 = bottom row)
+        for subrows in &bar_subrows {
+            let full_rows = subrows / 8;
+            let partial = subrows % 8;
             let row_from_bottom = row;
 
-            // Check if this row should have any fill
-            if bar_height_in_rows <= row_from_bottom as f64 {
-                // Bar doesn't reach this row at all - empty
-                spans.push(Span::raw(" "));
-            } else if bar_height_in_rows >= (row_from_bottom + 1) as f64 {
-                // Bar completely fills this row and extends beyond
-                spans.push(Span::styled(
-                    braille_chars[8].to_string(),
-                    Style::default().fg(Color::Blue),
-                ));
+            let ch = if row_from_bottom < full_rows {
+                braille_chars[8]
+            } else if row_from_bottom == full_rows && partial > 0 {
+                braille_chars[partial]
             } else {
-                // Bar partially fills this row (this is the top of the bar)
-                let partial_fill = bar_height_in_rows - row_from_bottom as f64;
-                // Convert 0.0-1.0 range to 1-8 braille index (never 0)
-                let braille_index = ((partial_fill * 8.0).ceil() as usize).clamp(1, 8);
-                spans.push(Span::styled(
-                    braille_chars[braille_index].to_string(),
-                    Style::default().fg(Color::Blue),
-                ));
-            }
+                ' '
+            };
+
+            spans.push(Span::styled(
+                ch.to_string(),
+                Style::default().fg(Color::Blue),
+            ));
         }
 
         lines.push(Line::from(spans));
     }
 
     // X-axis with 7-day markers
-    let mut x_axis = vec![Span::raw("   └")];
+    let mut x_axis = vec![Span::raw(format!("{:>width$}└", "", width = label_width))];
     for i in 0..30 {
         if i % 7 == 0 && i > 0 {
             x_axis.push(Span::styled("┴", Style::default().fg(Color::DarkGray)));
@@ -1757,7 +1764,7 @@ fn draw_total_tokens_chart(
     lines.push(Line::from(x_axis));
 
     // X-axis labels
-    let mut x_labels = vec![Span::raw("    ")];
+    let mut x_labels = vec![Span::raw(format!("{:>width$} ", "", width = label_width))];
     for i in 0..30 {
         if i % 7 == 0 {
             let date = thirty_days_ago + ChronoDuration::days(i);
@@ -1879,7 +1886,7 @@ fn draw_output_tokens_chart(
         return;
     }
 
-    // Calculate Y-axis scale
+    // Calculate Y-axis scale (labels only; rendering uses integer math)
     let scale = max_output as f64 / chart_height as f64;
 
     // Format token count
@@ -1893,8 +1900,25 @@ fn draw_output_tokens_chart(
         }
     };
 
+    // Dynamically size the Y-axis label column so longer labels (e.g., 60K)
+    // don't push the bars to the right and cause visual gaps.
+    let label_width = format_tokens(max_output).len().max(4);
+
     // Braille characters for bar rendering (bottom to top)
     let braille_chars = [' ', '⢀', '⢠', '⢰', '⢸', '⣸', '⣼', '⣾', '⣿'];
+
+    // Precompute bar heights in subrows (8 per row) using integer math to avoid gaps
+    let bar_subrows: Vec<usize> = chart_data
+        .iter()
+        .map(|&output| {
+            if max_output == 0 {
+                0
+            } else {
+                let numerator = output as u128 * 8 * chart_height as u128 + (max_output as u128 / 2);
+                (numerator / max_output as u128) as usize
+            }
+        })
+        .collect();
 
     // Draw bars from top to bottom with 8x granularity using braille
     for row in (0..chart_height).rev() {
@@ -1904,48 +1928,38 @@ fn draw_output_tokens_chart(
         if row == chart_height - 1 || row == chart_height / 2 || row == 0 {
             let label = format_tokens((row as f64 * scale) as u64);
             spans.push(Span::styled(
-                format!("{:>3}│", label),
+                format!("{:>width$}│", label, width = label_width),
                 Style::default().fg(Color::DarkGray),
             ));
         } else {
-            spans.push(Span::raw("   │"));
+            spans.push(Span::raw(format!("{:>width$}│", "", width = label_width)));
         }
 
         // Draw bars with braille granularity
-        for output in &chart_data {
-            // Calculate how many rows this bar fills (in units of character rows)
-            let bar_height_in_rows = *output as f64 / scale;
-
-            // Current row position from bottom (0 = bottom row)
+        for subrows in &bar_subrows {
+            let full_rows = subrows / 8;
+            let partial = subrows % 8;
             let row_from_bottom = row;
 
-            // Check if this row should have any fill
-            if bar_height_in_rows <= row_from_bottom as f64 {
-                // Bar doesn't reach this row at all - empty
-                spans.push(Span::raw(" "));
-            } else if bar_height_in_rows >= (row_from_bottom + 1) as f64 {
-                // Bar completely fills this row and extends beyond
-                spans.push(Span::styled(
-                    braille_chars[8].to_string(),
-                    Style::default().fg(Color::Green),
-                ));
+            let ch = if row_from_bottom < full_rows {
+                braille_chars[8]
+            } else if row_from_bottom == full_rows && partial > 0 {
+                braille_chars[partial]
             } else {
-                // Bar partially fills this row (this is the top of the bar)
-                let partial_fill = bar_height_in_rows - row_from_bottom as f64;
-                // Convert 0.0-1.0 range to 1-8 braille index (never 0)
-                let braille_index = ((partial_fill * 8.0).ceil() as usize).clamp(1, 8);
-                spans.push(Span::styled(
-                    braille_chars[braille_index].to_string(),
-                    Style::default().fg(Color::Green),
-                ));
-            }
+                ' '
+            };
+
+            spans.push(Span::styled(
+                ch.to_string(),
+                Style::default().fg(Color::Green),
+            ));
         }
 
         lines.push(Line::from(spans));
     }
 
     // X-axis with 7-day markers
-    let mut x_axis = vec![Span::raw("   └")];
+    let mut x_axis = vec![Span::raw(format!("{:>width$}└", "", width = label_width))];
     for i in 0..30 {
         if i % 7 == 0 && i > 0 {
             x_axis.push(Span::styled("┴", Style::default().fg(Color::DarkGray)));
@@ -1956,7 +1970,7 @@ fn draw_output_tokens_chart(
     lines.push(Line::from(x_axis));
 
     // X-axis labels
-    let mut x_labels = vec![Span::raw("    ")];
+    let mut x_labels = vec![Span::raw(format!("{:>width$} ", "", width = label_width))];
     for i in 0..30 {
         if i % 7 == 0 {
             let date = thirty_days_ago + ChronoDuration::days(i);
