@@ -666,6 +666,50 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
         caching: CachingSupport::None,
     },
+
+    // New Qwen 3‑32B (32B dense) price data
+    "qwen3-coder:32b" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.08,
+            output_per_1m: 0.24,
+        },
+        caching: CachingSupport::None,
+    },
+
+     // New Ollama Qwen3‑VL 30B variant – use same 30B pricing
+     "ollama/qwen3-vl:30b-a3b-instruct-q4_K_M" => ModelInfo {
+         pricing: PricingStructure::Flat {
+             input_per_1m: 0.20,
+             output_per_1m: 0.20,
+         },
+         caching: CachingSupport::None,
+     },
+
+     // New GPT‑OSS 20B – match o3‑mini price
+     "ollama/gpt-oss:20b" => ModelInfo {
+         pricing: PricingStructure::Flat {
+             input_per_1m: 1.10,
+             output_per_1m: 4.40,
+         },
+         caching: CachingSupport::None,
+     },
+
+     // Local variants that use the same underlying model pricing
+     "ollama-kubuntu-1/qwen3-coder:30b" => ModelInfo {
+         pricing: PricingStructure::Flat {
+             input_per_1m: 0.20,
+             output_per_1m: 0.20,
+         },
+         caching: CachingSupport::None,
+     },
+
+     "ollama-kubuntu-1/gpt-oss:20b" => ModelInfo {
+         pricing: PricingStructure::Flat {
+             input_per_1m: 1.10,
+             output_per_1m: 4.40,
+         },
+         caching: CachingSupport::None,
+     },
     "gpt-oss:20b" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 0.13,

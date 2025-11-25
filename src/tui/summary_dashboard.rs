@@ -371,7 +371,7 @@ pub fn draw_summary_view(
     let overview_chunks = Layout::horizontal([
         Constraint::Length(82), // Table (15 + 13*5 + 2*5 spacing)
         Constraint::Length(2),  // Spacing between table and chart
-        Constraint::Length(40), // Chart (30 bars + borders + scale)
+        Constraint::Min(40),    // Chart (30 bars + borders + scale + stats) - use Min to expand as needed
     ])
     .split(chunks[1]);
 
@@ -396,10 +396,26 @@ pub fn draw_summary_view(
 
     frame.render_widget(table, overview_chunks[0]);
 
-    // Draw tokens per day chart (skip spacing chunk, use chunk 2)
-    draw_tokens_chart(
+    // Split chart area into two: total tokens (left) and output tokens (right)
+    let chart_area = overview_chunks[2];
+    let chart_chunks = Layout::horizontal([
+        Constraint::Percentage(50), // Total tokens chart
+        Constraint::Percentage(50), // Output tokens chart
+    ])
+    .split(chart_area);
+
+    // Draw total tokens chart on the left
+    draw_total_tokens_chart(
         frame,
-        overview_chunks[2],
+        chart_chunks[0],
+        filtered_stats,
+        format_options,
+    );
+
+    // Draw output tokens chart on the right
+    draw_output_tokens_chart(
+        frame,
+        chart_chunks[1],
         filtered_stats,
         format_options,
     );
@@ -1580,8 +1596,8 @@ pub fn draw_visual_cli_panels(
     frame.render_widget(paragraph, area);
 }
 
-/// Draw a stacked bar chart showing tokens per day (input/output) for the last 30 days
-fn draw_tokens_chart(
+/// Draw total tokens chart (left side)
+fn draw_total_tokens_chart(
     frame: &mut Frame,
     area: Rect,
     filtered_stats: &[&AgenticCodingToolStats],
@@ -1591,14 +1607,13 @@ fn draw_tokens_chart(
     use ratatui::widgets::Borders;
 
     // Aggregate tokens by date across all analyzers
-    let mut daily_tokens: BTreeMap<chrono::NaiveDate, (u64, u64)> = BTreeMap::new();
+    let mut daily_tokens: BTreeMap<chrono::NaiveDate, u64> = BTreeMap::new();
 
     for stats in filtered_stats {
         for (date_str, day_stats) in &stats.daily_stats {
             if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                let entry = daily_tokens.entry(date).or_insert((0, 0));
-                entry.0 += day_stats.stats.input_tokens;
-                entry.1 += day_stats.stats.output_tokens;
+                let entry = daily_tokens.entry(date).or_insert(0);
+                *entry += day_stats.stats.input_tokens + day_stats.stats.output_tokens;
             }
         }
     }
@@ -1607,43 +1622,59 @@ fn draw_tokens_chart(
     let now = chrono::Local::now().date_naive();
     let thirty_days_ago = now - ChronoDuration::days(29);
 
-    let mut chart_data: Vec<(String, u64, u64)> = Vec::new();
+    let mut chart_data: Vec<u64> = Vec::new();
     let mut max_total = 0u64;
+    let mut min_total = u64::MAX;
+    let mut sum_total = 0u64;
+    let mut days_with_data = 0;
 
     // Collect last 30 days of data
     for i in 0..30 {
         let date = thirty_days_ago + ChronoDuration::days(i);
-        let (input, output) = daily_tokens.get(&date).copied().unwrap_or((0, 0));
-        let total = input + output;
-        max_total = max_total.max(total);
+        let total = daily_tokens.get(&date).copied().unwrap_or(0);
 
-        // Format date as MM/DD
-        let date_label = date.format("%m/%d").to_string();
-        chart_data.push((date_label, input, output));
+        if total > 0 {
+            max_total = max_total.max(total);
+            min_total = min_total.min(total);
+            sum_total += total;
+            days_with_data += 1;
+        }
+
+        chart_data.push(total);
     }
 
     // If no data, show empty chart
     if max_total == 0 {
-        let empty = Paragraph::new("No token data")
+        let empty = Paragraph::new("No data")
             .block(Block::default()
-                .title("📊 Tokens/Day (30d)")
+                .title("Total Tokens")
                 .title_style(Style::default().bold())
                 .borders(Borders::ALL));
         frame.render_widget(empty, area);
         return;
     }
 
+    // Calculate average (only for days with data)
+    let avg_total = if days_with_data > 0 {
+        sum_total / days_with_data
+    } else {
+        0
+    };
+
+    if min_total == u64::MAX {
+        min_total = 0;
+    }
+
     // Create bar chart content
     let mut lines = Vec::new();
 
-    // Determine bar height (leave space for title, borders, x-axis)
-    let chart_height = (area.height.saturating_sub(4)) as usize;
+    // Determine bar height
+    let chart_height = (area.height.saturating_sub(5)) as usize;
 
     if chart_height < 3 {
         let empty = Paragraph::new("Too small")
             .block(Block::default()
-                .title("📊 Tokens/Day")
-                .title_style(Style::default().bold())
+                .title("Total")
                 .borders(Borders::ALL));
         frame.render_widget(empty, area);
         return;
@@ -1652,7 +1683,7 @@ fn draw_tokens_chart(
     // Calculate Y-axis scale
     let scale = max_total as f64 / chart_height as f64;
 
-    // Format max value (K, M, etc)
+    // Format token count
     let format_tokens = |t: u64| -> String {
         if t >= 1_000_000 {
             format!("{}M", t / 1_000_000)
@@ -1663,73 +1694,300 @@ fn draw_tokens_chart(
         }
     };
 
-    // Draw bars from top to bottom with Y-axis scale
-    for row in (0..chart_height).rev() {
-        let row_threshold = ((row + 1) as f64 * scale) as u64;
+    // Braille characters for bar rendering (bottom to top)
+    let braille_chars = [' ', '⢀', '⢠', '⢰', '⢸', '⣸', '⣼', '⣾', '⣿'];
 
+    // Draw bars from top to bottom with 8x granularity using braille
+    for row in (0..chart_height).rev() {
         let mut spans = Vec::new();
 
-        // Y-axis label (every 2 rows)
+        // Y-axis label
         if row == chart_height - 1 || row == chart_height / 2 || row == 0 {
-            let label = format_tokens(row_threshold);
+            let label = format_tokens((row as f64 * scale) as u64);
             spans.push(Span::styled(
-                format!("{:>4}│", label),
+                format!("{:>3}│", label),
                 Style::default().fg(Color::DarkGray),
             ));
         } else {
-            spans.push(Span::raw("    │"));
+            spans.push(Span::raw("   │"));
         }
 
-        // Draw bars for each day
-        for (_, input, output) in &chart_data {
-            let total = input + output;
+        // Draw bars with braille granularity
+        for total in &chart_data {
+            // Calculate how many rows this bar fills (in units of character rows)
+            let bar_height_in_rows = *total as f64 / scale;
 
-            if total >= row_threshold {
-                // Use different characters for better contrast
-                if *input >= row_threshold {
-                    // Input tokens (bottom of stack)
-                    spans.push(Span::styled("▓", Style::default().fg(Color::Blue)));
-                } else {
-                    // Output tokens (top of stack)
-                    spans.push(Span::styled("▓", Style::default().fg(Color::Cyan)));
-                }
+            // Current row position from bottom (0 = bottom row)
+            let row_from_bottom = row;
+
+            // Check if this row should have any fill
+            if bar_height_in_rows <= row_from_bottom as f64 {
+                // Bar doesn't reach this row at all - empty
+                spans.push(Span::raw(" "));
+            } else if bar_height_in_rows >= (row_from_bottom + 1) as f64 {
+                // Bar completely fills this row and extends beyond
+                spans.push(Span::styled(
+                    braille_chars[8].to_string(),
+                    Style::default().fg(Color::Blue),
+                ));
             } else {
-                spans.push(Span::raw("·"));
+                // Bar partially fills this row (this is the top of the bar)
+                let partial_fill = bar_height_in_rows - row_from_bottom as f64;
+                // Convert 0.0-1.0 range to 1-8 braille index (never 0)
+                let braille_index = ((partial_fill * 8.0).ceil() as usize).clamp(1, 8);
+                spans.push(Span::styled(
+                    braille_chars[braille_index].to_string(),
+                    Style::default().fg(Color::Blue),
+                ));
             }
         }
 
         lines.push(Line::from(spans));
     }
 
-    // X-axis
-    let mut x_axis = vec![Span::raw("    └")];
-    for _ in 0..30 {
-        x_axis.push(Span::styled("─", Style::default().fg(Color::DarkGray)));
+    // X-axis with 7-day markers
+    let mut x_axis = vec![Span::raw("   └")];
+    for i in 0..30 {
+        if i % 7 == 0 && i > 0 {
+            x_axis.push(Span::styled("┴", Style::default().fg(Color::DarkGray)));
+        } else {
+            x_axis.push(Span::styled("─", Style::default().fg(Color::DarkGray)));
+        }
     }
     lines.push(Line::from(x_axis));
 
-    // X-axis labels: first and last date
-    let first_date = &chart_data.first().unwrap().0;
-    let last_date = &chart_data.last().unwrap().0;
-    let spacing = " ".repeat(30 - first_date.len() - last_date.len());
-    lines.push(Line::from(vec![
-        Span::raw("     "),
-        Span::styled(first_date, Style::default().fg(Color::DarkGray)),
-        Span::raw(spacing),
-        Span::styled(last_date, Style::default().fg(Color::DarkGray)),
-    ]));
+    // X-axis labels
+    let mut x_labels = vec![Span::raw("    ")];
+    for i in 0..30 {
+        if i % 7 == 0 {
+            let date = thirty_days_ago + ChronoDuration::days(i);
+            let date_label = date.format("%m/%d").to_string();
+            x_labels.push(Span::styled(date_label, Style::default().fg(Color::DarkGray)));
+            if i < 28 {
+                x_labels.push(Span::raw("  "));
+            }
+        }
+    }
+    lines.push(Line::from(x_labels));
 
-    // Legend
-    lines.push(Line::from(vec![
-        Span::styled("▓", Style::default().fg(Color::Blue)),
-        Span::raw(" In "),
-        Span::styled("▓", Style::default().fg(Color::Cyan)),
-        Span::raw(" Out"),
-    ]));
+    // Stats line
+    let stats = vec![
+        Span::styled("Min:", Style::default().fg(Color::DarkGray)),
+        Span::raw(" "),
+        Span::styled(format_tokens(min_total), Style::default().fg(Color::Cyan)),
+        Span::raw(" "),
+        Span::styled("Max:", Style::default().fg(Color::DarkGray)),
+        Span::raw(" "),
+        Span::styled(format_tokens(max_total), Style::default().fg(Color::Red)),
+        Span::raw(" "),
+        Span::styled("Avg:", Style::default().fg(Color::DarkGray)),
+        Span::raw(" "),
+        Span::styled(format_tokens(avg_total), Style::default().fg(Color::Yellow)),
+    ];
+    lines.push(Line::from(stats));
 
     let paragraph = Paragraph::new(lines)
         .block(Block::default()
-            .title("📊 Tokens/Day (30d)")
+            .title("📊 Total Tokens/Day")
+            .title_style(Style::default().bold())
+            .borders(Borders::ALL));
+
+    frame.render_widget(paragraph, area);
+}
+
+/// Draw output tokens chart (right side)
+fn draw_output_tokens_chart(
+    frame: &mut Frame,
+    area: Rect,
+    filtered_stats: &[&AgenticCodingToolStats],
+    _format_options: &NumberFormatOptions,
+) {
+    use std::collections::BTreeMap;
+    use ratatui::widgets::Borders;
+
+    // Aggregate output tokens by date across all analyzers
+    let mut daily_output: BTreeMap<chrono::NaiveDate, u64> = BTreeMap::new();
+
+    for stats in filtered_stats {
+        for (date_str, day_stats) in &stats.daily_stats {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                let entry = daily_output.entry(date).or_insert(0);
+                *entry += day_stats.stats.output_tokens;
+            }
+        }
+    }
+
+    // Get last 30 days (including today)
+    let now = chrono::Local::now().date_naive();
+    let thirty_days_ago = now - ChronoDuration::days(29);
+
+    let mut chart_data: Vec<u64> = Vec::new();
+    let mut max_output = 0u64;
+    let mut min_output = u64::MAX;
+    let mut sum_output = 0u64;
+    let mut days_with_data = 0;
+
+    // Collect last 30 days of data
+    for i in 0..30 {
+        let date = thirty_days_ago + ChronoDuration::days(i);
+        let output = daily_output.get(&date).copied().unwrap_or(0);
+
+        if output > 0 {
+            max_output = max_output.max(output);
+            min_output = min_output.min(output);
+            sum_output += output;
+            days_with_data += 1;
+        }
+
+        chart_data.push(output);
+    }
+
+    // If no data, show empty chart
+    if max_output == 0 {
+        let empty = Paragraph::new("No data")
+            .block(Block::default()
+                .title("Output Tokens")
+                .title_style(Style::default().bold())
+                .borders(Borders::ALL));
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    // Calculate average (only for days with data)
+    let avg_output = if days_with_data > 0 {
+        sum_output / days_with_data
+    } else {
+        0
+    };
+
+    if min_output == u64::MAX {
+        min_output = 0;
+    }
+
+    // Create bar chart content
+    let mut lines = Vec::new();
+
+    // Determine bar height
+    let chart_height = (area.height.saturating_sub(5)) as usize;
+
+    if chart_height < 3 {
+        let empty = Paragraph::new("Too small")
+            .block(Block::default()
+                .title("Output")
+                .borders(Borders::ALL));
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    // Calculate Y-axis scale
+    let scale = max_output as f64 / chart_height as f64;
+
+    // Format token count
+    let format_tokens = |t: u64| -> String {
+        if t >= 1_000_000 {
+            format!("{}M", t / 1_000_000)
+        } else if t >= 1_000 {
+            format!("{}K", t / 1_000)
+        } else {
+            format!("{}", t)
+        }
+    };
+
+    // Braille characters for bar rendering (bottom to top)
+    let braille_chars = [' ', '⢀', '⢠', '⢰', '⢸', '⣸', '⣼', '⣾', '⣿'];
+
+    // Draw bars from top to bottom with 8x granularity using braille
+    for row in (0..chart_height).rev() {
+        let mut spans = Vec::new();
+
+        // Y-axis label
+        if row == chart_height - 1 || row == chart_height / 2 || row == 0 {
+            let label = format_tokens((row as f64 * scale) as u64);
+            spans.push(Span::styled(
+                format!("{:>3}│", label),
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            spans.push(Span::raw("   │"));
+        }
+
+        // Draw bars with braille granularity
+        for output in &chart_data {
+            // Calculate how many rows this bar fills (in units of character rows)
+            let bar_height_in_rows = *output as f64 / scale;
+
+            // Current row position from bottom (0 = bottom row)
+            let row_from_bottom = row;
+
+            // Check if this row should have any fill
+            if bar_height_in_rows <= row_from_bottom as f64 {
+                // Bar doesn't reach this row at all - empty
+                spans.push(Span::raw(" "));
+            } else if bar_height_in_rows >= (row_from_bottom + 1) as f64 {
+                // Bar completely fills this row and extends beyond
+                spans.push(Span::styled(
+                    braille_chars[8].to_string(),
+                    Style::default().fg(Color::Green),
+                ));
+            } else {
+                // Bar partially fills this row (this is the top of the bar)
+                let partial_fill = bar_height_in_rows - row_from_bottom as f64;
+                // Convert 0.0-1.0 range to 1-8 braille index (never 0)
+                let braille_index = ((partial_fill * 8.0).ceil() as usize).clamp(1, 8);
+                spans.push(Span::styled(
+                    braille_chars[braille_index].to_string(),
+                    Style::default().fg(Color::Green),
+                ));
+            }
+        }
+
+        lines.push(Line::from(spans));
+    }
+
+    // X-axis with 7-day markers
+    let mut x_axis = vec![Span::raw("   └")];
+    for i in 0..30 {
+        if i % 7 == 0 && i > 0 {
+            x_axis.push(Span::styled("┴", Style::default().fg(Color::DarkGray)));
+        } else {
+            x_axis.push(Span::styled("─", Style::default().fg(Color::DarkGray)));
+        }
+    }
+    lines.push(Line::from(x_axis));
+
+    // X-axis labels
+    let mut x_labels = vec![Span::raw("    ")];
+    for i in 0..30 {
+        if i % 7 == 0 {
+            let date = thirty_days_ago + ChronoDuration::days(i);
+            let date_label = date.format("%m/%d").to_string();
+            x_labels.push(Span::styled(date_label, Style::default().fg(Color::DarkGray)));
+            if i < 28 {
+                x_labels.push(Span::raw("  "));
+            }
+        }
+    }
+    lines.push(Line::from(x_labels));
+
+    // Stats line
+    let stats = vec![
+        Span::styled("Min:", Style::default().fg(Color::DarkGray)),
+        Span::raw(" "),
+        Span::styled(format_tokens(min_output), Style::default().fg(Color::Cyan)),
+        Span::raw(" "),
+        Span::styled("Max:", Style::default().fg(Color::DarkGray)),
+        Span::raw(" "),
+        Span::styled(format_tokens(max_output), Style::default().fg(Color::Red)),
+        Span::raw(" "),
+        Span::styled("Avg:", Style::default().fg(Color::DarkGray)),
+        Span::raw(" "),
+        Span::styled(format_tokens(avg_output), Style::default().fg(Color::Yellow)),
+    ];
+    lines.push(Line::from(stats));
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default()
+            .title("📤 Output Tokens/Day")
             .title_style(Style::default().bold())
             .borders(Borders::ALL));
 
