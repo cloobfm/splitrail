@@ -370,7 +370,8 @@ pub fn draw_summary_view(
     // Split overview area: table on left, chart on right
     let overview_chunks = Layout::horizontal([
         Constraint::Length(82), // Table (15 + 13*5 + 2*5 spacing)
-        Constraint::Min(0),     // Chart (takes remaining space)
+        Constraint::Length(2),  // Spacing between table and chart
+        Constraint::Length(40), // Chart (30 bars + borders + scale)
     ])
     .split(chunks[1]);
 
@@ -395,10 +396,10 @@ pub fn draw_summary_view(
 
     frame.render_widget(table, overview_chunks[0]);
 
-    // Draw tokens per day chart
+    // Draw tokens per day chart (skip spacing chunk, use chunk 2)
     draw_tokens_chart(
         frame,
-        overview_chunks[1],
+        overview_chunks[2],
         filtered_stats,
         format_options,
     );
@@ -1602,13 +1603,14 @@ fn draw_tokens_chart(
         }
     }
 
-    // Get last 30 days
+    // Get last 30 days (including today)
     let now = chrono::Local::now().date_naive();
     let thirty_days_ago = now - ChronoDuration::days(29);
 
     let mut chart_data: Vec<(String, u64, u64)> = Vec::new();
     let mut max_total = 0u64;
 
+    // Collect last 30 days of data
     for i in 0..30 {
         let date = thirty_days_ago + ChronoDuration::days(i);
         let (input, output) = daily_tokens.get(&date).copied().unwrap_or((0, 0));
@@ -1634,70 +1636,95 @@ fn draw_tokens_chart(
     // Create bar chart content
     let mut lines = Vec::new();
 
-    // Determine bar height (leave space for title and x-axis labels)
-    let chart_height = (area.height.saturating_sub(4)) as usize; // 1 for title, 1 for border, 2 for x-axis
+    // Determine bar height (leave space for title, borders, x-axis)
+    let chart_height = (area.height.saturating_sub(4)) as usize;
 
     if chart_height < 3 {
-        // Not enough space
-        let empty = Paragraph::new("Chart too small")
+        let empty = Paragraph::new("Too small")
             .block(Block::default()
-                .title("📊 Tokens/Day (30d)")
+                .title("📊 Tokens/Day")
                 .title_style(Style::default().bold())
                 .borders(Borders::ALL));
         frame.render_widget(empty, area);
         return;
     }
 
-    // Scale factor: map tokens to bar height
+    // Calculate Y-axis scale
     let scale = max_total as f64 / chart_height as f64;
 
-    // Draw bars from top to bottom
+    // Format max value (K, M, etc)
+    let format_tokens = |t: u64| -> String {
+        if t >= 1_000_000 {
+            format!("{}M", t / 1_000_000)
+        } else if t >= 1_000 {
+            format!("{}K", t / 1_000)
+        } else {
+            format!("{}", t)
+        }
+    };
+
+    // Draw bars from top to bottom with Y-axis scale
     for row in (0..chart_height).rev() {
-        let mut spans = Vec::new();
         let row_threshold = ((row + 1) as f64 * scale) as u64;
 
+        let mut spans = Vec::new();
+
+        // Y-axis label (every 2 rows)
+        if row == chart_height - 1 || row == chart_height / 2 || row == 0 {
+            let label = format_tokens(row_threshold);
+            spans.push(Span::styled(
+                format!("{:>4}│", label),
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            spans.push(Span::raw("    │"));
+        }
+
+        // Draw bars for each day
         for (_, input, output) in &chart_data {
             let total = input + output;
 
             if total >= row_threshold {
-                // Determine which part of the stack we're in
+                // Use different characters for better contrast
                 if *input >= row_threshold {
-                    // Input tokens part (bottom of stack, blue)
-                    spans.push(Span::styled("█", Style::default().fg(Color::LightBlue)));
+                    // Input tokens (bottom of stack)
+                    spans.push(Span::styled("▓", Style::default().fg(Color::Blue)));
                 } else {
-                    // Output tokens part (top of stack, cyan)
-                    spans.push(Span::styled("█", Style::default().fg(Color::LightCyan)));
+                    // Output tokens (top of stack)
+                    spans.push(Span::styled("▓", Style::default().fg(Color::Cyan)));
                 }
             } else {
-                spans.push(Span::raw(" "));
+                spans.push(Span::raw("·"));
             }
         }
 
         lines.push(Line::from(spans));
     }
 
-    // X-axis labels: show every 5th day
-    let mut x_labels = Vec::new();
-    for (i, (date_label, _, _)) in chart_data.iter().enumerate() {
-        if i % 5 == 0 {
-            x_labels.push(Span::styled(
-                date_label.clone(),
-                Style::default().fg(Color::DarkGray),
-            ));
-            // Add spaces for next labels
-            for _ in 0..4 {
-                x_labels.push(Span::raw(" "));
-            }
-        }
+    // X-axis
+    let mut x_axis = vec![Span::raw("    └")];
+    for _ in 0..30 {
+        x_axis.push(Span::styled("─", Style::default().fg(Color::DarkGray)));
     }
-    lines.push(Line::from(x_labels));
+    lines.push(Line::from(x_axis));
+
+    // X-axis labels: first and last date
+    let first_date = &chart_data.first().unwrap().0;
+    let last_date = &chart_data.last().unwrap().0;
+    let spacing = " ".repeat(30 - first_date.len() - last_date.len());
+    lines.push(Line::from(vec![
+        Span::raw("     "),
+        Span::styled(first_date, Style::default().fg(Color::DarkGray)),
+        Span::raw(spacing),
+        Span::styled(last_date, Style::default().fg(Color::DarkGray)),
+    ]));
 
     // Legend
     lines.push(Line::from(vec![
-        Span::styled("█", Style::default().fg(Color::LightBlue)),
-        Span::raw(" Input  "),
-        Span::styled("█", Style::default().fg(Color::LightCyan)),
-        Span::raw(" Output"),
+        Span::styled("▓", Style::default().fg(Color::Blue)),
+        Span::raw(" In "),
+        Span::styled("▓", Style::default().fg(Color::Cyan)),
+        Span::raw(" Out"),
     ]));
 
     let paragraph = Paragraph::new(lines)
