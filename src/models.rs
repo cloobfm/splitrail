@@ -657,14 +657,18 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             input_per_1m: 0.15,
             output_per_1m: 0.15,
         },
-        caching: CachingSupport::None,
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.15,
+        },
     },
     "qwen3-coder:30b" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 0.20,
             output_per_1m: 0.20,
         },
-        caching: CachingSupport::None,
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.20,
+        },
     },
 
     // New Qwen 3‑32B (32B dense) price data
@@ -686,36 +690,44 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
      },
 
      // New GPT‑OSS 20B – match o3‑mini price
-     "ollama/gpt-oss:20b" => ModelInfo {
-         pricing: PricingStructure::Flat {
-             input_per_1m: 1.10,
-             output_per_1m: 4.40,
-         },
-         caching: CachingSupport::None,
-     },
+    "ollama/gpt-oss:20b" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.13,
+            output_per_1m: 0.13,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.13,
+        },
+    },
 
      // Local variants that use the same underlying model pricing
-     "ollama-kubuntu-1/qwen3-coder:30b" => ModelInfo {
-         pricing: PricingStructure::Flat {
-             input_per_1m: 0.20,
-             output_per_1m: 0.20,
-         },
-         caching: CachingSupport::None,
-     },
+    "ollama-kubuntu-1/qwen3-coder:30b" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.20,
+            output_per_1m: 0.20,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.20,
+        },
+    },
 
-     "ollama-kubuntu-1/gpt-oss:20b" => ModelInfo {
-         pricing: PricingStructure::Flat {
-             input_per_1m: 1.10,
-             output_per_1m: 4.40,
-         },
-         caching: CachingSupport::None,
-     },
+    "ollama-kubuntu-1/gpt-oss:20b" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.13,
+            output_per_1m: 0.13,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.13,
+        },
+    },
     "gpt-oss:20b" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 0.13,
             output_per_1m: 0.13,
         },
-        caching: CachingSupport::None,
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.13,
+        },
     },
 
     // OpenCode Models
