@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.7] - 2025-11-24
+
+### Added
+- Dual stacked bar charts for tokens/day with separate scales for total and output tokens
+- Braille character rendering (⢀⢠⢰⢸⣸⣼⣾⣿) for smoother chart visualization
+- Phase 2 CPU optimizations: batched file watching to reduce analyzer reloads (20-30% reduction during high file activity)
+- Phase 1 CPU optimizations: adaptive polling with dynamic rates based on user activity (50-75% idle CPU reduction)
+- Lazy clock updates and optional clock disable via SPLITRAIL_DISABLE_CLOCK environment variable
+- xAI Grok 4.1 Fast model pricing and aliases
+- CPU measurement scripts and benchmark guide
+- Incremental aggregation infrastructure for future optimizations
+
+### Changed
+- Improved tokens/day chart with Y-axis scale, better contrast, and fixed width
+- Split tokens/day chart into dual displays: total tokens/day (blue) and output tokens/day (green)
+- Updated internal pricing for qwen3 and gpt-oss models
+- Enhanced chart X-axis with 7-day interval markers and date labels
+- Switched from block characters to smooth braille characters for chart rendering
+- Reduced Y-axis width from 4 to 3 characters for more horizontal space
+- Added Min/Max/Avg statistics for each chart
+- Implemented batched processing with 500ms window for file events
+- Optimized polling rates: 1000ms when idle, 250ms when active
+
+### Fixed
+- Chart bar alignment and cleaned compiler warnings
+- UTF-8 panic in verbose mode message truncation
+- Streak calculation to show exactly 30 days (not 31)
+- Fixed indentation errors in models.rs pricing definitions
+
 ## [2.0.0-dash-0.6] - 2025-11-22
 
 ### Added
