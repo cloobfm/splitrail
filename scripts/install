@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# Splitrail Dashboard Install Script
+# Installs the binary using cargo install
+
+set -e
+
+echo "🔧 Installing Splitrail Dashboard..."
+
+# Check if Rust is installed
+if ! command -v rustc &> /dev/null; then
+    echo "❌ Rust is not installed. Please install Rust first from https://rust-lang.org/tools/install"
+    exit 1
+fi
+
+# Check if rustup is available
+if ! command -v rustup &> /dev/null; then
+    echo "❌ rustup is not available. Please install Rust from https://rust-lang.org/tools/install"
+    exit 1
+fi
+
+# Check if we're in the project directory
+if [ ! -f "Cargo.toml" ] || ! grep -q "splitrail-dashboard" Cargo.toml; then
+    echo "❌ Not in a splitrail-dashboard project directory"
+    echo "   Please run this script from the splitrail project root"
+    exit 1
+fi
+
+# Install using cargo with nightly toolchain
+echo "📦 Installing splitrail-dashboard using cargo install..."
+cargo +nightly install --path . --force --locked
+
+# Verify installation
+if command -v splitrail-dashboard &> /dev/null; then
+    echo "✅ Splitrail Dashboard installed successfully!"
+    echo "   Binary location: $(which splitrail-dashboard)"
+    echo ""
+    # Detect shell and add alias
+    if [ -n "$ZSH_VERSION" ]; then
+        # Using zsh
+        SHELL_CONFIG="$HOME/.zshrc"
+    elif [ -n "$BASH_VERSION" ]; then
+        # Using bash
+        SHELL_CONFIG="$HOME/.bashrc"
+        if [ -f "$HOME/.bash_profile" ]; then
+            SHELL_CONFIG="$HOME/.bash_profile"
+        fi
+    else
+        # Default to zsh for macOS
+        SHELL_CONFIG="$HOME/.zshrc"
+    fi
+
+    # Create alias if it doesn't exist
+    if ! grep -q "alias sr='splitrail-dashboard'" "$SHELL_CONFIG" 2>/dev/null; then
+        echo "alias sr='splitrail-dashboard'" >> "$SHELL_CONFIG" 2>/dev/null || echo "alias sr='splitrail-dashboard'" >> "$SHELL_CONFIG"
+        echo "   Added alias 'sr' to $SHELL_CONFIG"
+    else
+        echo "   Alias 'sr' already exists in $SHELL_CONFIG"
+    fi
+
+    # Source the config file to make the alias available immediately
+    if [ -n "$ZSH_VERSION" ]; then
+        source "$HOME/.zshrc" 2>/dev/null || true
+    elif [ -n "$BASH_VERSION" ]; then
+        if [ -f "$HOME/.bash_profile" ]; then
+            source "$HOME/.bash_profile" 2>/dev/null || true
+        else
+            source "$HOME/.bashrc" 2>/dev/null || true
+        fi
+    fi
+
+    echo ""
+    echo "🚀 To run splitrail-dashboard using the alias:"
+    echo "   sr"
+    echo ""
+    echo "🚀 Or to run directly:"
+    echo "   splitrail-dashboard"
+    echo ""
+    echo "🔧 To run with human-readable numbers (recommended):"
+    echo "   sr --number-human"
+else
+    echo "❌ Installation failed - binary not found in PATH"
+    echo "   Make sure ~/.cargo/bin is in your PATH environment variable"
+    echo "   Add to your shell config: export PATH=\"\$HOME/.cargo/bin:\$PATH\""
+    echo ""
+    echo "💡 To create an alias 'sr' for splitrail-dashboard, add this to your shell config:"
+    echo "   echo \"alias sr='splitrail-dashboard'\" >> ~/.zshrc && source ~/.zshrc"
+    exit 1
+fi
