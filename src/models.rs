@@ -380,6 +380,16 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             cache_read_per_1m: 0.03,
         },
     },
+    "claude-opus-4-5-20251101" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 5.0,
+            output_per_1m: 25.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 6.25,
+            cache_read_per_1m: 0.5,
+        },
+    },
 
     // Google Models
     "gemini-3-pro-preview-11-2025" => ModelInfo {
@@ -652,6 +662,24 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
         caching: CachingSupport::None,
     },
+    "zai-glm-4.6" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.60,
+            output_per_1m: 2.20,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.11,
+        },
+    },
+    "qwen-3-235b-a22b-instruct-2507" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.60,
+            output_per_1m: 4.80,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 1.60,
+        },
+    },
     "qwen3-coder:latest" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 0.15,
@@ -662,6 +690,24 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
     },
     "qwen3-coder:30b" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.20,
+            output_per_1m: 0.20,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.20,
+        },
+    },
+    "deepseek-coder-v2:latest" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.20,
+            output_per_1m: 0.20,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.20,
+        },
+    },
+    "ollama/qwen3-coder:30b" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 0.20,
             output_per_1m: 0.20,
@@ -935,6 +981,12 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "gemini-1.5-pro-exp-0801" => "gemini-1.5-pro",
 
     // Qwen aliases
+    "qwen-3-235b-a22b-instruct" => "qwen-3-235b-a22b-instruct-2507",
+    "qwen-3-235b" => "qwen-3-235b-a22b-instruct-2507",
+    "glm-4.6" => "zai-glm-4.6",
+    "zai-glm-4.6" => "zai-glm-4.6",
+    "deepseek-coder-v2" => "deepseek-coder-v2:latest",
+    "deepseek-coder" => "deepseek-coder-v2:latest",
 
     // OpenCode aliases
     "zen" => "opencode-zen",

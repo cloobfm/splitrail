@@ -4,7 +4,7 @@ use crate::utils::{
 };
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::{bail, Result};
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -327,6 +327,16 @@ async fn run_app(
                 Event::Key(key) if key.is_press() => {
                     // Reset activity timer on any key press
                     last_activity = Instant::now();
+
+                    // Handle Shift+Enter for upload
+                    if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::SHIFT) {
+                        // Trigger upload
+                        if let Err(e) = stats_manager.trigger_manual_upload().await {
+                            eprintln!("Error triggering upload: {e}");
+                        }
+                        needs_redraw = true;
+                        continue;
+                    }
 
                     // Handle quitting.
                     if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {

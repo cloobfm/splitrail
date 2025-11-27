@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_types::event::{Event, EventKind};
 use std::collections::HashSet;
@@ -419,6 +419,96 @@ impl RealtimeStatsManager {
             self.trigger_auto_upload_if_enabled().await;
         }
 
+        Ok(())
+    }
+
+    /// Trigger a manual upload regardless of auto-upload settings
+    pub async fn trigger_manual_upload(&mut self) -> Result<()> {
+        use crate::config::Config;
+        use crate::upload;
+        use crate::utils;
+
+        // Check if an upload is already in progress
+        if let Ok(in_progress) = self.upload_in_progress.lock()
+            && *in_progress
+        {
+            return Ok(()); // Upload already in progress
+        }
+
+        // Check config is available
+        let mut config = match Config::load() {
+            Ok(Some(cfg)) if cfg.is_configured() => cfg,
+            _ => return Ok(()), // Config not available or incomplete
+        };
+
+        // Collect all messages from current stats
+        let mut messages = vec![];
+        for analyzer_stats in &self.current_stats.analyzer_stats {
+            messages.extend(analyzer_stats.messages.clone());
+        }
+
+        // Filter messages to upload only those not yet uploaded
+        let messages_to_upload = utils::get_messages_later_than(config.upload.last_date_uploaded, messages)
+            .await
+            .context("Failed to get messages later than last saved date")?;
+
+        if messages_to_upload.is_empty() {
+            return Ok(()); // Nothing to upload
+        }
+
+        // Set upload status
+        if let Some(upload_status) = &self.upload_status {
+            if let Ok(mut status) = upload_status.lock() {
+                *status = tui::UploadStatus::Uploading {
+                    current: 0,
+                    total: messages_to_upload.len(),
+                    dots: 0,
+                };
+            }
+        }
+
+        // Mark upload as in progress
+        if let Ok(mut in_progress) = self.upload_in_progress.lock() {
+            *in_progress = true;
+        }
+
+        let messages_len = messages_to_upload.len();
+        let upload_status = self.upload_status.clone();
+        let upload_in_progress = self.upload_in_progress.clone();
+
+        // Spawn upload task
+        tokio::spawn(async move {
+            let result = upload::upload_message_stats(&messages_to_upload, &mut config, |current, total| {
+                if let Some(status) = &upload_status {
+                    if let Ok(mut status_guard) = status.lock() {
+                        if let tui::UploadStatus::Uploading { dots, .. } = &mut *status_guard {
+                            *dots = (*dots + 1) % 4;
+                        }
+                    }
+                }
+            }).await;
+
+            // Update status based on result
+            if let Some(status) = &upload_status {
+                if let Ok(mut status_guard) = status.lock() {
+                    match result {
+                        Ok(_) => {
+                            *status_guard = tui::UploadStatus::Uploaded;
+                        }
+                        Err(e) => {
+                            *status_guard = tui::UploadStatus::Failed(e.to_string());
+                        }
+                    }
+                }
+            }
+
+            // Mark upload as complete
+            if let Ok(mut in_progress) = upload_in_progress.lock() {
+                *in_progress = false;
+            }
+        });
+
+        self.last_upload_time = Some(Instant::now());
         Ok(())
     }
 }
