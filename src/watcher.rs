@@ -459,7 +459,7 @@ impl RealtimeStatsManager {
         // Set upload status
         if let Some(upload_status) = &self.upload_status {
             if let Ok(mut status) = upload_status.lock() {
-                *status = tui::UploadStatus::Uploading {
+                *status = UploadStatus::Uploading {
                     current: 0,
                     total: messages_to_upload.len(),
                     dots: 0,
@@ -472,16 +472,16 @@ impl RealtimeStatsManager {
             *in_progress = true;
         }
 
-        let messages_len = messages_to_upload.len();
+        let _messages_len = messages_to_upload.len();
         let upload_status = self.upload_status.clone();
         let upload_in_progress = self.upload_in_progress.clone();
 
         // Spawn upload task
         tokio::spawn(async move {
-            let result = upload::upload_message_stats(&messages_to_upload, &mut config, |current, total| {
+            let result = upload::upload_message_stats(&messages_to_upload, &mut config, |_current, _total| {
                 if let Some(status) = &upload_status {
                     if let Ok(mut status_guard) = status.lock() {
-                        if let tui::UploadStatus::Uploading { dots, .. } = &mut *status_guard {
+                        if let UploadStatus::Uploading { dots, .. } = &mut *status_guard {
                             *dots = (*dots + 1) % 4;
                         }
                     }
@@ -493,10 +493,10 @@ impl RealtimeStatsManager {
                 if let Ok(mut status_guard) = status.lock() {
                     match result {
                         Ok(_) => {
-                            *status_guard = tui::UploadStatus::Uploaded;
+                            *status_guard = UploadStatus::Uploaded;
                         }
                         Err(e) => {
-                            *status_guard = tui::UploadStatus::Failed(e.to_string());
+                            *status_guard = UploadStatus::Failed(e.to_string());
                         }
                     }
                 }
