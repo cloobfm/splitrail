@@ -1267,22 +1267,37 @@ pub fn draw_visual_cli_panels(
 
         // In verbose mode, show model name next to CLI name
         if tui_state.summary_verbose_mode {
-            // Find the most commonly used model for this CLI
-            let most_used_model = stats
-                .messages
-                .iter()
-                .filter_map(|msg| msg.model.as_ref())
-                .fold(std::collections::HashMap::new(), |mut acc, model| {
-                    *acc.entry(model.clone()).or_insert(0) += 1;
-                    acc
-                })
-                .into_iter()
-                .max_by_key(|(_, count)| *count)
-                .map(|(model, _)| model)
-                .unwrap_or_else(|| String::from("—"));
+            // Find the most recently used model for this CLI (more responsive to model switches)
+            let most_recent_model = {
+                // Find the message with the most recent timestamp that has a model
+                let recent_msg_with_model = stats
+                    .messages
+                    .iter()
+                    .filter(|msg| msg.model.is_some())
+                    .max_by_key(|msg| msg.date.timestamp());
+
+                match recent_msg_with_model {
+                    Some(msg) => msg.model.as_ref().unwrap().clone(),
+                    None => {
+                        // Fallback to most commonly used model if no recent model found
+                        stats
+                            .messages
+                            .iter()
+                            .filter_map(|msg| msg.model.as_ref())
+                            .fold(std::collections::HashMap::new(), |mut acc, model| {
+                                *acc.entry(model.clone()).or_insert(0) += 1;
+                                acc
+                            })
+                            .into_iter()
+                            .max_by_key(|(_, count)| *count)
+                            .map(|(model, _)| model)
+                            .unwrap_or_else(|| String::from("—"))
+                    }
+                }
+            };
 
             // Scrolling animation for long model names
-            let model_display = if most_used_model.len() > 15 {
+            let model_display = if most_recent_model.len() > 15 {
                 // Use time-based scrolling animation with cached time
                 let now_millis = render_time_system
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1296,10 +1311,10 @@ pub fn draw_visual_cli_panels(
 
                 let scroll_position = ((now_millis / scroll_interval_millis) * scroll_speed)
                     as usize
-                    % (most_used_model.len() + 3);
+                    % (most_recent_model.len() + 3);
 
                 // Create scrolling window with padding
-                let padded_text = format!("{}   {}", most_used_model, most_used_model); // Add spacing and repeat
+                let padded_text = format!("{}   {}", most_recent_model, most_recent_model); // Add spacing and repeat
                 let chars: Vec<char> = padded_text.chars().collect();
 
                 // Extract visible window
@@ -1312,7 +1327,7 @@ pub fn draw_visual_cli_panels(
 
                 visible
             } else {
-                most_used_model.clone()
+                most_recent_model.clone()
             };
 
             line_spans.push(Span::styled(
