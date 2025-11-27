@@ -21,7 +21,7 @@ USAGE_LOG = os.path.join(OUTPUT_DIR, f"usage_data_{datetime.now().strftime('%Y%m
 TOKEN_FILE = os.path.expanduser("~/.config/splitrail/warp_token")
 
 def request(flow: http.HTTPFlow) -> None:
-    """Capture auth token from WARP GraphQL requests"""
+    """Capture auth token and log GraphQL requests from WARP"""
 
     # Only process Warp GraphQL requests
     if "app.warp.dev/graphql" not in flow.request.pretty_url:
@@ -42,6 +42,13 @@ def request(flow: http.HTTPFlow) -> None:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ✓ Saved WARP auth token")
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error saving token: {e}")
+
+    # Log the request for debugging
+    try:
+        operation_name = flow.request.query.get("op", "Unknown")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] WARP Request: {operation_name}")
+    except Exception as e:
+        print(f"Error logging request: {e}")
 
 
 def response(flow: http.HTTPFlow) -> None:
@@ -143,14 +150,4 @@ def response(flow: http.HTTPFlow) -> None:
         print(f"Error processing response: {e}")
 
 
-def request(flow: http.HTTPFlow) -> None:
-    """Log GraphQL requests for correlation"""
 
-    if "app.warp.dev/graphql" not in flow.request.pretty_url:
-        return
-
-    try:
-        operation_name = flow.request.query.get("op", "Unknown")
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Request: {operation_name}")
-    except Exception as e:
-        print(f"Error logging request: {e}")

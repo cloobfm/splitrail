@@ -6,7 +6,7 @@
 //! - Monitor token health with daily checks
 //! - Provide user-friendly error messages
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -76,25 +76,43 @@ pub fn is_running_in_warp() -> bool {
         || std::env::var("WARP_USE_SSH_WRAPPER").is_ok()
 }
 
-/// Get WARP auth token from config
+/// Get WARP auth token from config or separate token file
 fn get_warp_token() -> Result<String> {
-    let config_path = dirs::config_dir()
-        .context("Could not find config directory")?
-        .join("splitrail")
-        .join("config.toml");
+    // Try multiple possible config directories
+    let config_dirs = vec![
+        dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")),
+        PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string())).join(".config"),
+    ];
 
-    let content = fs::read_to_string(&config_path)
-        .context("Could not read config file. Run 'splitrail config init' first.")?;
+    for config_dir in config_dirs {
+        // First try to get from config.toml (new method)
+        let config_path = config_dir.join("splitrail").join("config.toml");
 
-    let config: toml::Value = toml::from_str(&content)
-        .context("Invalid TOML in config file")?;
+        if config_path.exists() {
+            if let Ok(content) = fs::read_to_string(&config_path) {
+                if let Ok(config) = toml::from_str::<toml::Value>(&content) {
+                    if let Some(token) = config
+                        .get("warp")
+                        .and_then(|w| w.get("auth_token"))
+                        .and_then(|t| t.as_str())
+                    {
+                        return Ok(token.to_string());
+                    }
+                }
+            }
+        }
 
-    config
-        .get("warp")
-        .and_then(|w| w.get("auth_token"))
-        .and_then(|t| t.as_str())
-        .map(|s| s.to_string())
-        .context("WARP auth_token not found in config. Run 'splitrail warp setup'")
+        // Fallback to separate token file (current method)
+        let token_path = config_dir.join("splitrail").join("warp_token");
+
+        if token_path.exists() {
+            if let Ok(token) = fs::read_to_string(&token_path) {
+                return Ok(token);
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("WARP auth_token not found. Run 'splitrail warp setup'"))
 }
 
 /// Check if WARP token health should be checked (daily limit)
@@ -111,10 +129,10 @@ async fn test_token(token: &str) -> Result<bool> {
         .timeout(Duration::from_secs(5))
         .build()?;
 
+    // Use the same endpoint format WARP uses (URL parameter)
     let response = client
-        .post("https://app.warp.dev/graphql/v2?op=GetRequestLimitInfo")
+        .get("https://app.warp.dev/graphql/v2?op=GetUser")
         .header("Authorization", token)
-        .header("Content-Type", "application/json")
         .send()
         .await?;
 
@@ -139,7 +157,7 @@ pub async fn check_warp_token_health() -> WarpTokenStatus {
     // Get token from config
     let token = match get_warp_token() {
         Ok(t) => t,
-        Err(_) => {
+        Err(_e) => {
             // Save "not configured" status to cache
             let cache = WarpHealthCache {
                 last_check: Utc::now(),
