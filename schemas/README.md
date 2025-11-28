@@ -87,6 +87,10 @@ These schemas can be used for:
 - Testing parser implementations
 - Debugging format changes from tool updates
 
+## API Upload Format
+
+For the **Splitrail Cloud API upload specification**, including payload format, aggregation structure, and authentication details, see: [API_SPECIFICATION.md](../docs/API_SPECIFICATION.md)
+
 ## Validation
 
 The schemas follow JSON Schema Draft 2020-12 and can be validated using standard JSON Schema validators.
