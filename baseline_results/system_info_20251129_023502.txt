@@ -1,0 +1,14 @@
+=== Basic System Info ===
+Date: Sat Nov 29 02:35:02 PST 2025
+OS: Darwin
+CPU Cores: 10
+Memory: N/A
+
+=== Rust Info ===
+Rustc: rustc 1.93.0-nightly (518b42830 2025-11-16)
+Cargo: cargo 1.93.0-nightly (2d4fa1395 2025-11-12)
+
+=== Git Info ===
+Commit: aadb07b
+Branch: dashboard
+

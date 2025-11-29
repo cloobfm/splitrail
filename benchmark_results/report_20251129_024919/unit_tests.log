@@ -1,0 +1,23 @@
+warning: unused import: `std::collections::BTreeMap`
+ --> src/utils/tests.rs:6:9
+  |
+6 |     use std::collections::BTreeMap;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `splitrail-dashboard` (lib test) generated 1 warning (run `cargo fix --lib -p splitrail-dashboard --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running unittests src/lib.rs (target/debug/deps/splitrail_dashboard-94c2a27de9abf873)
+
+running 60 tests
+test analyzers::amazon_q::tests::test_amazon_q_database_path ... ok
+test analyzers::claude_code::tests::test_deduplicate_skips_identical_after_partial_aggregate ... ok
+test analyzers::claude_code::tests::test_deduplicate_partial_split_messages ... ok
+test analyzers::codex_cli::tests::drops_message_that_is_only_environment_context ... ok
+test analyzers::claude_code::tests::test_identical_tokens_merge_tool_stats ... ok
+test analyzers::claude_code::tests::test_deduplicate_redundant_split_messages ... ok
+test analyzers::codex_cli::tests::strips_other_tagged_blocks ... ok
+test analyzers::codex_cli::tests::strips_environment_context_block ... ok
+test analyzers::copilot::tests::test_extract_model_from_model_id ... ok
+test analyzers::kilo_code::tests::test_extract_project_hash ... ok

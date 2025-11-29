@@ -1,0 +1,12 @@
+=== System Info ===
+Date: Sat Nov 29 02:36:12 PST 2025
+OS: Darwin
+CPU: Apple M1 Max
+Cores: 10
+Memory: 64GB
+
+=== Rust Info ===
+Rustc: rustc 1.93.0-nightly (518b42830 2025-11-16)
+
+=== Git Info ===
+Commit: aadb07b

@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
+#[cfg(test)]
+mod tests;
+
 use anyhow::Result;
 use chrono::{DateTime, Datelike, Local, Utc};
 use num_format::{Locale, ToFormattedString};
@@ -81,7 +84,7 @@ pub fn clear_old_warnings() {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct NumberFormatOptions {
     pub use_comma: bool,
     pub use_human: bool,

@@ -1,0 +1,58 @@
+=== System Information ===
+Date: Sat Nov 29 02:49:20 PST 2025
+OS: Darwin
+Kernel: 24.6.0
+Architecture: arm64
+
+=== CPU Information ===
+Apple M1 Max
+10
+
+=== Memory Information ===
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                3712.
+Pages active:                           1108184.
+Pages inactive:                         1100643.
+Pages speculative:                         6123.
+Pages throttled:                              0.
+Pages wired down:                        458528.
+Pages purgeable:                           5489.
+"Translation faults":              163280685391.
+Pages copy-on-write:                40340705130.
+Pages zero filled:                  26043700300.
+Pages reactivated:                   1371685167.
+Pages purged:                         123215584.
+File-backed pages:                       731561.
+Anonymous pages:                        1483389.
+Pages stored in compressor:             3434198.
+Pages occupied by compressor:           1462189.
+Decompressions:                      1646337046.
+Compressions:                        1082155913.
+Pageins:                              597529422.
+Pageouts:                               5748041.
+Swapins:                               13319885.
+Swapouts:                              19682122.
+
+=== Rust Information ===
+rustc 1.93.0-nightly (518b42830 2025-11-16)
+cargo 1.93.0-nightly (2d4fa1395 2025-11-12)
+
+=== Git Information ===
+aadb07bcd827f92b6aecec9c168eed41699408c8
+ M Cargo.lock
+ M Cargo.toml
+ M benches/performance_bench.rs
+ D examples/test_droid.rs
+ D examples/test_droid_content.rs
+ M src/utils.rs
+?? BASELINE_RESULTS.md
+?? baseline_results/
+?? benches/performance_regression.rs
+?? benchmark_results/
+?? docs/TESTING_GUIDE.md
+?? scripts/benchmark_suite.sh
+?? scripts/minimal_baseline.sh
+?? scripts/quick_baseline.sh
+?? src/utils/
+?? tests/
+
