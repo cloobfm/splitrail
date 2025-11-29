@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use analyzer::AnalyzerRegistry;
 use analyzers::{
-    ClaudeCodeAnalyzer, ClineAnalyzer, CodexCliAnalyzer, GeminiCliAnalyzer, KiloCodeAnalyzer,
+    ClaudeCodeAnalyzer, ClineAnalyzer, CodexCliAnalyzer, DroidCliAnalyzer, GeminiCliAnalyzer, KiloCodeAnalyzer,
     KiroCliAnalyzer, OpenCodeAnalyzer, QwenCodeAnalyzer, WarpDevAnalyzer,
 };
 
@@ -188,6 +188,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     registry.register(GeminiCliAnalyzer::new());
     registry.register(QwenCodeAnalyzer::new());
     registry.register(CodexCliAnalyzer::new());
+    registry.register(DroidCliAnalyzer::new());
     // registry.register(AmazonQAnalyzer::new()); // Replaced by Kiro CLI
     registry.register(KiroCliAnalyzer::new());
     registry.register(OpenCodeAnalyzer::new()); // Ready when OpenCode adds local data storage

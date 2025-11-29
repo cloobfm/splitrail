@@ -18,6 +18,7 @@ pub enum Application {
     KiroCli,
     Warp,
     OpenCode,
+    DroidCli,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

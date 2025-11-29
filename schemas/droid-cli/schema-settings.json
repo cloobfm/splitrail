@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Droid CLI Session Settings Schema",
+  "description": "Schema for Droid CLI session settings and token usage",
+  "type": "object",
+  "properties": {
+    "assistantActiveTimeMs": {
+      "type": "integer",
+      "description": "Time spent with assistant active in milliseconds"
+    },
+    "model": {
+      "type": "string",
+      "description": "AI model used for the session",
+      "enum": [
+        "claude-opus-4-5-20251101",
+        "claude-sonnet-4-20250514",
+        "claude-sonnet-4-1-20250714",
+        "claude-haiku-4-20250514",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano"
+      ]
+    },
+    "reasoningEffort": {
+      "type": "string",
+      "description": "Reasoning effort level",
+      "enum": ["off", "low", "medium", "high"]
+    },
+    "autonomyMode": {
+      "type": "string",
+      "description": "Autonomy mode for the session",
+      "enum": ["normal", "high"]
+    },
+    "tokenUsage": {
+      "$ref": "#/definitions/TokenUsage",
+      "description": "Detailed token usage breakdown"
+    }
+  },
+  "required": ["assistantActiveTimeMs", "model", "reasoningEffort", "autonomyMode", "tokenUsage"],
+  "definitions": {
+    "TokenUsage": {
+      "type": "object",
+      "properties": {
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of input tokens"
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of output tokens"
+        },
+        "cacheCreationTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tokens used for cache creation"
+        },
+        "cacheReadTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tokens read from cache"
+        },
+        "thinkingTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tokens used for internal reasoning"
+        }
+      },
+      "required": ["inputTokens", "outputTokens", "cacheCreationTokens", "cacheReadTokens", "thinkingTokens"]
+    }
+  }
+}

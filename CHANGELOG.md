@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.8] - 2025-11-29
+
+### Added
+- **Droid CLI (Factory AI) support**: Complete analyzer for Factory AI's Droid CLI usage data
+  - Comprehensive token tracking including input, output, cache creation, cache read, and thinking tokens
+  - Session metadata extraction (working directory, duration, autonomy mode, reasoning effort)
+  - Project context detection from working directories
+  - Cost calculation using model-specific pricing for Claude Opus 4.5, Sonnet 4, GPT-5, and more
+  - Full schema documentation with JSON validation files and sample data
+  - Integration with Splitrail TUI and dashboard alongside existing AI tools
+- **Model pricing support**: Added pricing for Claude Opus 4.5 (`claude-opus-4-5-20251101`) with Anthropic-style cache pricing
+- **Data source coverage**: Droid CLI sessions stored in `~/.factory/sessions/*/` with JSONL format for conversations and JSON for settings
+
+### Changed
+- Enhanced application enum with `DroidCli` variant for proper categorization
+- Updated notifications module to display "Droid" as the friendly name for Droid CLI data
+- Extended analyzer registry to include Droid CLI analyzer in the default tool set
+
 ## [2.0.0-dash-0.7] - 2025-11-24
 
 ### Added

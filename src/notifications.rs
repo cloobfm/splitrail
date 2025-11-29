@@ -336,6 +336,7 @@ fn format_application(app: &Application) -> &'static str {
         Application::KiroCli => "Kiro",
         Application::Warp => "Warp",
         Application::OpenCode => "OpenCode",
+        Application::DroidCli => "Droid",
     }
 }
 
