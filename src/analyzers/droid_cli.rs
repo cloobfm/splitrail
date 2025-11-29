@@ -22,6 +22,25 @@ struct DroidSession {
     cwd: String,
 }
 
+/// Droid CLI message data structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DroidMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+    id: String,
+    timestamp: String,
+    message: DroidMessageContent,
+    #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
+    parent_id: Option<String>,
+}
+
+/// Droid CLI message content
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DroidMessageContent {
+    role: String,
+    content: Vec<serde_json::Value>,
+}
+
 /// Droid CLI session settings with token usage
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DroidSessionSettings {
@@ -164,22 +183,44 @@ impl DroidCliAnalyzer {
     async fn parse_session_file(&self, file_path: &Path) -> Result<Vec<ConversationMessage>> {
         let content = fs::read_to_string(file_path)?;
         let mut messages = Vec::new();
-
-        // Parse JSONL file
+        
+        // First, load the session settings to get token usage info
+        let settings_path = file_path.with_extension("settings.json");
+        let settings = if let Ok(settings_content) = fs::read_to_string(&settings_path) {
+            serde_json::from_str::<DroidSessionSettings>(&settings_content).ok()
+        } else {
+            None
+        };
+        
+        // Track session info from session_start event
+        let mut session_info: Option<DroidSession> = None;
+        
+        // Parse JSONL file line by line
         for line in content.lines() {
             if line.trim().is_empty() {
                 continue;
             }
 
-            if let Ok(session) = serde_json::from_str::<DroidSession>(line) {
-                if session.session_type == "session_start" {
-                    // Look for corresponding settings file
-                    let settings_path = file_path.with_extension("settings.json");
-                    if let Ok(settings_content) = fs::read_to_string(&settings_path) {
-                        if let Ok(settings) = serde_json::from_str::<DroidSessionSettings>(&settings_content) {
-                            if let Ok(message) = self.create_conversation_message(&session, &settings, file_path) {
-                                messages.push(message);
+            // Try to parse as a generic JSON value to check the type
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(msg_type) = value.get("type").and_then(|v| v.as_str()) {
+                    match msg_type {
+                        "session_start" => {
+                            // Parse session info
+                            if let Ok(session) = serde_json::from_str::<DroidSession>(line) {
+                                session_info = Some(session);
                             }
+                        }
+                        "message" => {
+                            // Parse individual messages
+                            if let (Some(session), Some(settings)) = (&session_info, &settings) {
+                                if let Ok(message) = self.create_message_from_line(&value, session, settings, file_path) {
+                                    messages.push(message);
+                                }
+                            }
+                        }
+                        _ => {
+                            // Ignore other event types (todo_state, etc.)
                         }
                     }
                 }
@@ -189,53 +230,89 @@ impl DroidCliAnalyzer {
         Ok(messages)
     }
 
-    fn create_conversation_message(
+    fn create_message_from_line(
         &self,
+        value: &serde_json::Value,
         session: &DroidSession,
         settings: &DroidSessionSettings,
         file_path: &Path,
     ) -> Result<ConversationMessage> {
-        let timestamp = self.extract_timestamp_from_path(file_path)?;
+        // Parse the message
+        let message: DroidMessage = serde_json::from_value(value.clone())?;
+        
+        // Parse timestamp
+        let timestamp = message.timestamp.parse::<DateTime<Utc>>()
+            .unwrap_or_else(|_| self.extract_timestamp_from_path(file_path).unwrap_or_else(|_| Utc::now()));
+        
+        // Determine role
+        let role = match message.message.role.as_str() {
+            "user" => MessageRole::User,
+            "assistant" => MessageRole::Assistant,
+            _ => MessageRole::Assistant, // Default to assistant for unknown roles
+        };
+        
+        // Extract content text
+        let content_text = self.extract_content_text(&message.message.content);
+        
+        // Count tool calls if assistant message
+        let tool_calls = if role == MessageRole::Assistant {
+            self.count_tool_calls(&message.message.content)
+        } else {
+            0
+        };
         
         // Calculate costs using Droid CLI's model pricing
         let model_name = self.normalize_model_name(&settings.model);
+        
+        // For individual messages, we need to distribute tokens
+        // Since we don't have per-message token counts, we'll estimate based on content
+        let (input_tokens, output_tokens) = if role == MessageRole::User {
+            // Estimate user tokens based on content length (rough approximation: 4 chars per token)
+            let estimated = (content_text.len() as u64 / 4).max(1);
+            (estimated, 0)
+        } else {
+            // Estimate assistant tokens based on content length
+            let estimated = (content_text.len() as u64 / 4).max(1);
+            (0, estimated)
+        };
+        
         let total_cost = calculate_total_cost(
             &model_name,
-            settings.token_usage.input_tokens as u64,
-            settings.token_usage.output_tokens as u64,
-            settings.token_usage.cache_creation_tokens as u64,
-            settings.token_usage.cache_read_tokens as u64,
+            input_tokens,
+            output_tokens,
+            0, // No cache info per message
+            0,
         );
 
         // Extract project info from working directory
         let project_hash = self.extract_project_hash(&session.cwd);
 
         // Create global hash
-        let global_hash = format!("droid-cli:{}:{}", session.id, timestamp.timestamp());
+        let global_hash = format!("droid-cli:{}:{}:{}", session.id, message.id, timestamp.timestamp());
 
         Ok(ConversationMessage {
             application: Application::DroidCli,
             date: timestamp,
             project_hash,
             conversation_hash: session.id.clone(),
-            local_hash: Some(session.id.clone()),
+            local_hash: Some(message.id.clone()),
             global_hash,
             model: Some(model_name.clone()),
             stats: Stats {
-                input_tokens: settings.token_usage.input_tokens as u64,
-                output_tokens: settings.token_usage.output_tokens as u64,
-                reasoning_tokens: settings.token_usage.thinking_tokens as u64,
-                cache_creation_tokens: settings.token_usage.cache_creation_tokens as u64,
-                cache_read_tokens: settings.token_usage.cache_read_tokens as u64,
-                cached_tokens: settings.token_usage.cache_read_tokens as u64, // Droid uses cache_read as cached
+                input_tokens,
+                output_tokens,
+                reasoning_tokens: 0, // No reasoning info per message
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+                cached_tokens: 0,
                 cost: total_cost,
-                tool_calls: 0, // Droid CLI doesn't track tool calls in session data
-                terminal_commands: 0,
-                file_searches: 0,
+tool_calls: tool_calls as u32,
+                terminal_commands: if tool_calls > 0 { self.count_terminal_commands(&message.message.content) } else { 0 },
+                file_searches: if tool_calls > 0 { self.count_file_searches(&message.message.content) } else { 0 },
                 file_content_searches: 0,
-                files_read: 0,
+                files_read: if tool_calls > 0 { self.count_file_reads(&message.message.content) } else { 0 },
                 files_added: 0,
-                files_edited: 0,
+                files_edited: if tool_calls > 0 { self.count_file_edits(&message.message.content) } else { 0 },
                 files_deleted: 0,
                 lines_read: 0,
                 lines_added: 0,
@@ -245,10 +322,10 @@ impl DroidCliAnalyzer {
                 bytes_added: 0,
                 bytes_edited: 0,
                 bytes_deleted: 0,
-                todos_created: 0,
+                todos_created: if tool_calls > 0 { self.count_todo_writes(&message.message.content) } else { 0 },
                 todos_completed: 0,
                 todos_in_progress: 0,
-                todo_writes: 0,
+                todo_writes: if tool_calls > 0 { self.count_todo_writes(&message.message.content) } else { 0 },
                 todo_reads: 0,
                 code_lines: 0,
                 docs_lines: 0,
@@ -258,9 +335,124 @@ impl DroidCliAnalyzer {
                 other_lines: 0,
                 rate_limits: None, // Droid CLI doesn't provide rate limit info
             },
-            role: MessageRole::Assistant, // Droid CLI sessions are always from assistant
-            content: Some(format!("Droid CLI session: {}", session.title)),
+            role,
+            content: Some(content_text),
         })
+    }
+    
+    fn extract_content_text(&self, content: &[serde_json::Value]) -> String {
+        for item in content {
+            if let Some(obj) = item.as_object() {
+                if let (Some(text_type), Some(text)) = (
+                    obj.get("type").and_then(|v| v.as_str()),
+                    obj.get("text").and_then(|v| v.as_str())
+                ) {
+                    if text_type == "text" {
+                        return text.to_string();
+                    }
+                }
+            }
+        }
+        "Empty message".to_string()
+    }
+    
+    fn count_tool_calls(&self, content: &[serde_json::Value]) -> u64 {
+        let mut count = 0;
+        for item in content {
+            if let Some(obj) = item.as_object() {
+                if let Some(text_type) = obj.get("type").and_then(|v| v.as_str()) {
+                    if text_type == "tool_use" {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+    
+    fn count_terminal_commands(&self, content: &[serde_json::Value]) -> u64 {
+        let mut count = 0;
+        for item in content {
+            if let Some(obj) = item.as_object() {
+                if let (Some(text_type), Some(name)) = (
+                    obj.get("type").and_then(|v| v.as_str()),
+                    obj.get("name").and_then(|v| v.as_str())
+                ) {
+                    if text_type == "tool_use" && name == "Execute" {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+    
+    fn count_file_searches(&self, content: &[serde_json::Value]) -> u64 {
+        let mut count = 0;
+        for item in content {
+            if let Some(obj) = item.as_object() {
+                if let (Some(text_type), Some(name)) = (
+                    obj.get("type").and_then(|v| v.as_str()),
+                    obj.get("name").and_then(|v| v.as_str())
+                ) {
+                    if text_type == "tool_use" && (name == "Grep" || name == "Glob") {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+    
+    fn count_file_reads(&self, content: &[serde_json::Value]) -> u64 {
+        let mut count = 0;
+        for item in content {
+            if let Some(obj) = item.as_object() {
+                if let (Some(text_type), Some(name)) = (
+                    obj.get("type").and_then(|v| v.as_str()),
+                    obj.get("name").and_then(|v| v.as_str())
+                ) {
+                    if text_type == "tool_use" && name == "Read" {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+    
+    fn count_file_edits(&self, content: &[serde_json::Value]) -> u64 {
+        let mut count = 0;
+        for item in content {
+            if let Some(obj) = item.as_object() {
+                if let (Some(text_type), Some(name)) = (
+                    obj.get("type").and_then(|v| v.as_str()),
+                    obj.get("name").and_then(|v| v.as_str())
+                ) {
+                    if text_type == "tool_use" && name == "Edit" {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+    
+    fn count_todo_writes(&self, content: &[serde_json::Value]) -> u64 {
+        let mut count = 0;
+        for item in content {
+            if let Some(obj) = item.as_object() {
+                if let (Some(text_type), Some(name)) = (
+                    obj.get("type").and_then(|v| v.as_str()),
+                    obj.get("name").and_then(|v| v.as_str())
+                ) {
+                    if text_type == "tool_use" && name == "TodoWrite" {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
     }
 
     fn extract_timestamp_from_path(&self, file_path: &Path) -> Result<DateTime<Utc>> {
@@ -307,12 +499,20 @@ mod tests {
         let session_dir = temp_dir.path().join("test-session");
         fs::create_dir_all(&session_dir).unwrap();
 
-        // Create a mock session file
+        // Create a mock session file with multiple messages
         let session_file = session_dir.join("session.jsonl");
         let mut file = File::create(&session_file).unwrap();
         writeln!(
             file,
             r#"{{"type":"session_start","id":"test-id","title":"Test Session","owner":"user","version":2,"cwd":"/Users/user/test-project"}}"#
+        ).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"message","id":"msg-1","timestamp":"2025-11-29T09:46:17.825Z","message":{{"role":"user","content":[{{"type":"text","text":"Hello world"}}]}}}}"#
+        ).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"message","id":"msg-2","timestamp":"2025-11-29T09:46:23.094Z","message":{{"role":"assistant","content":[{{"type":"text","text":"I'll help you"}},{{"type":"tool_use","id":"tool-1","name":"Read","input":{{"file_path":"test.txt"}}}}]}}}}"#
         ).unwrap();
 
         // Create a mock settings file
@@ -338,12 +538,26 @@ mod tests {
         let analyzer = DroidCliAnalyzer;
         let messages = analyzer.parse_session_file(&session_file).await.unwrap();
 
-        assert_eq!(messages.len(), 1);
-        let message = &messages[0];
-        assert_eq!(message.conversation_hash, "test-id");
-        assert_eq!(message.application, Application::DroidCli);
-        assert_eq!(message.model, Some("claude-opus-4-5-20251101".to_string()));
-        assert_eq!(message.stats.input_tokens, 1000);
-        assert_eq!(message.stats.output_tokens, 500);
+        // Should parse 2 messages (user and assistant)
+        assert_eq!(messages.len(), 2);
+        
+        // Check user message
+        let user_msg = &messages[0];
+        assert_eq!(user_msg.conversation_hash, "test-id");
+        assert_eq!(user_msg.application, Application::DroidCli);
+        assert_eq!(user_msg.role, MessageRole::User);
+        assert_eq!(user_msg.content, Some("Hello world".to_string()));
+        assert!(user_msg.stats.input_tokens > 0);
+        assert_eq!(user_msg.stats.output_tokens, 0);
+        
+        // Check assistant message
+        let assistant_msg = &messages[1];
+        assert_eq!(assistant_msg.conversation_hash, "test-id");
+        assert_eq!(assistant_msg.role, MessageRole::Assistant);
+        assert!(assistant_msg.content.as_ref().unwrap().contains("I'll help you"));
+        assert_eq!(assistant_msg.stats.input_tokens, 0);
+        assert!(assistant_msg.stats.output_tokens > 0);
+        assert_eq!(assistant_msg.stats.tool_calls, 1);
+        assert_eq!(assistant_msg.stats.files_read, 1);
     }
 }
