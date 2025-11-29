@@ -5,6 +5,7 @@ use crate::utils::{
     get_health_color, get_health_status, get_warnings,
 };
 use chrono::Duration as ChronoDuration;
+use super::ClockTitleCache;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -437,6 +438,7 @@ pub fn draw_summary_view(
         u64,
         u64,
         String,
+        f64, // New field: tokens per second
     )> = Vec::new();
     let mut cli_meta: Vec<(i64, u8)> = Vec::new();
     for analyzer_stats in filtered_stats {
@@ -458,6 +460,9 @@ pub fn draw_summary_view(
                 }
             }
         }
+
+        // Calculate per-CLI tokens per second
+        let cli_tks_per_sec = calculate_cli_tokens_per_second(analyzer_stats, now_utc);
 
         // Find most recent message timestamp
         let last_activity = analyzer_stats.messages.iter().map(|msg| msg.date).max();
@@ -579,6 +584,7 @@ pub fn draw_summary_view(
             session_count,
             message_count,
             state,
+            cli_tks_per_sec,
         ));
         cli_meta.push((activity_age, activity_bucket));
     }
@@ -598,7 +604,7 @@ pub fn draw_summary_view(
 
     let mut cli_header_cells = vec![Cell::new("")];
     for &idx in visible_indices {
-        let (cli_name, _, _, _, _, _, _, _, _, _, _) = &cli_data[idx];
+        let (cli_name, _, _, _, _, _, _, _, _, _, _, _) = &cli_data[idx];
         cli_header_cells.push(Cell::new(Text::from(cli_name.clone()).right_aligned()));
     }
     let cli_header = Row::new(cli_header_cells)
@@ -647,7 +653,7 @@ pub fn draw_summary_view(
                 Line::from("📥 Input Tks").style(Style::default().fg(Color::LightBlue)),
             )];
             for &idx in visible_indices {
-                let (_, _, input, _, _, _, _, _, _, _, _) = &cli_data[idx];
+                let (_, _, input, _, _, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*input, format_options)).right_aligned(),
                 ));
@@ -660,7 +666,7 @@ pub fn draw_summary_view(
                 Line::from("📤 Output Tks").style(Style::default().fg(Color::LightCyan)),
             )];
             for &idx in visible_indices {
-                let (_, _, _, output, _, _, _, _, _, _, _) = &cli_data[idx];
+                let (_, _, _, output, _, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*output, format_options)).right_aligned(),
                 ));
@@ -673,7 +679,7 @@ pub fn draw_summary_view(
                 Line::from("💬 Sessions").style(Style::default().fg(Color::Cyan)),
             )];
             for &idx in visible_indices {
-                let (_, _, _, _, _, _, _, _, sessions, _, _) = &cli_data[idx];
+                let (_, _, _, _, _, _, _, _, sessions, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*sessions, format_options)).right_aligned(),
                 ));
@@ -686,7 +692,7 @@ pub fn draw_summary_view(
                 Line::from("📨 Messages").style(Style::default().fg(Color::LightYellow)),
             )];
             for &idx in visible_indices {
-                let (_, _, _, _, _, _, _, _, _, messages, _) = &cli_data[idx];
+                let (_, _, _, _, _, _, _, _, _, messages, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format_number(*messages, format_options)).right_aligned(),
                 ));
@@ -699,7 +705,7 @@ pub fn draw_summary_view(
                 Line::from("⏱️ Active Time").style(Style::default().fg(Color::LightGreen)),
             )];
             for &idx in visible_indices {
-                let (_, _, _, _, _, _, _, active_time, _, _, _) = &cli_data[idx];
+                let (_, _, _, _, _, _, _, active_time, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(Line::from(active_time.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -710,7 +716,7 @@ pub fn draw_summary_view(
                 Line::from("⏰ Idle Time").style(Style::default().fg(Color::DarkGray)),
             )];
             for &idx in visible_indices {
-                let (_, _, _, _, _, _, idle_time, _, _, _, _) = &cli_data[idx];
+                let (_, _, _, _, _, _, idle_time, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(Line::from(idle_time.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -721,7 +727,7 @@ pub fn draw_summary_view(
                 Line::from("💰 Cost").style(Style::default().fg(Color::Yellow)),
             )];
             for &idx in visible_indices {
-                let (_, _, _, _, _, cost, _, _, _, _, _) = &cli_data[idx];
+                let (_, _, _, _, _, cost, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
                     Line::from(format!("${:.2}", cost)).right_aligned(),
                 ));
@@ -792,7 +798,7 @@ pub fn draw_summary_view(
                 Line::from("📡 Status").style(Style::default().fg(Color::White).bold()),
             )];
             for &idx in visible_indices {
-                let (_, _, _, _, _, _, _, _, _, _, state) = &cli_data[idx];
+                let (_, _, _, _, _, _, _, _, _, _, state, _) = &cli_data[idx];
                 cells.push(Cell::new(Line::from(state.clone()).right_aligned()));
             }
             Row::new(cells)
@@ -1017,12 +1023,12 @@ pub fn create_activity_sparkline_with_prev(
     let raw_max = *state.buckets.iter().max().unwrap_or(&1).max(&1);
     let stable_max = prev_max.unwrap_or(raw_max).max(1);
 
-    // Create sparkline with braille ramps (truncate to 80 most recent)
+    // Create sparkline with braille ramps (truncate to 60 most recent)
     let chars = [' ', '⡀', '⡄', '⡆', '⡇', '⣇', '⣧', '⣷', '⣿'];
     let spans = state
         .buckets
         .iter()
-        .skip(state.buckets.len().saturating_sub(80)) // Show the most recent 80 buckets (40 minutes)
+        .skip(state.buckets.len().saturating_sub(60)) // Show the most recent 60 buckets (30 minutes)
         .map(|&count| {
             if count == 0 {
                 Span::raw(" ")
@@ -1047,6 +1053,31 @@ pub fn create_activity_sparkline_with_prev(
         .collect();
 
     (spans, stable_max, state)
+}
+
+/// Calculate 15-minute moving average of output tokens per second for a single CLI
+pub fn calculate_cli_tokens_per_second(
+    stats: &AgenticCodingToolStats,
+    render_time: chrono::DateTime<chrono::Utc>,
+) -> f64 {
+    let fifteen_minutes_ago = render_time - ChronoDuration::minutes(15);
+    let mut total_output_tokens: u64 = 0;
+
+    for message in &stats.messages {
+        if message.role == crate::types::MessageRole::Assistant
+            && message.date >= fifteen_minutes_ago
+            && message.date <= render_time
+        {
+            total_output_tokens += message.stats.output_tokens;
+        }
+    }
+
+    let time_window_seconds = 15.0 * 60.0; // 900 seconds
+    if total_output_tokens == 0 {
+        0.0
+    } else {
+        total_output_tokens as f64 / time_window_seconds
+    }
 }
 
 // Helper function to get the current username
@@ -1162,6 +1193,7 @@ pub fn draw_visual_cli_panels(
         u64,
         u64,
         String,
+        f64, // New field: tokens per second
     )],
     cli_order: &[usize],
     _format_options: &NumberFormatOptions,
@@ -1233,6 +1265,7 @@ pub fn draw_visual_cli_panels(
             _sessions,
             _messages,
             state,
+            tks_per_sec,
         ) = &cli_data[ordered_idx];
 
         // Line 1: CLI name, state, activity sparkline
@@ -1342,12 +1375,40 @@ pub fn draw_visual_cli_panels(
             // Add padding after bracket to align sparklines (total width: 1 + 2 + model_display + 1 = variable, pad to 19)
             let padding_needed = 19usize.saturating_sub(3 + model_display.len());
             line_spans.push(Span::raw(" ".repeat(padding_needed)));
+            
+            // Add tokens per second
+            let tks_display = if *tks_per_sec >= 100.0 {
+                format!("{:>3.0}tk/s ", tks_per_sec)
+            } else if *tks_per_sec >= 10.0 {
+                format!("{:>4.1}tk/s ", tks_per_sec)
+            } else if *tks_per_sec > 0.0 {
+                format!("{:>4.1}tk/s ", tks_per_sec)
+            } else {
+                "         ".to_string()
+            };
+            
+            line_spans.push(Span::raw("| "));
+            line_spans.push(Span::styled(tks_display, Style::default().fg(Color::Cyan).dim()));
             line_spans.push(Span::raw(" "));
         } else {
             line_spans.push(Span::styled(
                 format!("{:12}", cli_name),
                 Style::default().fg(name_color).bold(),
             ));
+            
+            // Add tokens per second
+            let tks_display = if *tks_per_sec >= 100.0 {
+                format!("{:>3.0}tk/s ", tks_per_sec)
+            } else if *tks_per_sec >= 10.0 {
+                format!("{:>4.1}tk/s ", tks_per_sec)
+            } else if *tks_per_sec > 0.0 {
+                format!("{:>4.1}tk/s ", tks_per_sec)
+            } else {
+                "         ".to_string()
+            };
+            
+            line_spans.push(Span::raw("| "));
+            line_spans.push(Span::styled(tks_display, Style::default().fg(Color::Cyan).dim()));
             line_spans.push(Span::raw(" "));
         }
 
@@ -1466,8 +1527,18 @@ pub fn draw_visual_cli_panels(
         lines.push(Line::from(""));
     }
 
-    let now = chrono::Local::now();
-    let clock_text = now.format("%H:%M:%S").to_string();
+    // OPTIMIZATION: Cache clock text when clock updates disabled
+    // This prevents recalculation every render when clock is disabled
+    let clock_text = if std::env::var("SPLITRAIL_DISABLE_CLOCK").is_ok() {
+        // Clock disabled: show static time from when rendering started
+        static CLOCK_START: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        CLOCK_START
+            .get_or_init(|| chrono::Local::now().format("%H:%M:%S").to_string())
+            .clone()
+    } else {
+        // Clock enabled: show current time
+        chrono::Local::now().format("%H:%M:%S").to_string()
+    };
 
     // Notification status (Slack + next ETA + last send)
     let config = crate::config::Config::load()
@@ -1569,6 +1640,8 @@ pub fn draw_visual_cli_panels(
     let _slack_section = format!("| {} Slack", slack_icon); // Fixed 8 chars
     let next_section = format!("|{countdown_bar}| {remaining_display}"); // Fixed 25 chars with left boundary
     let last_section = format!("last {last_icon} {last_text:>7}"); // Fixed 16 chars for "XXs ago" or "—"
+    let countdown_section = next_section.clone();
+    let last_section_cached = last_section.clone();
 
     // Use cached 15-minute moving average tokens per second (refreshed every 5 seconds)
     let tks_per_sec = summary_data.tokens_per_second;
@@ -1583,15 +1656,32 @@ pub fn draw_visual_cli_panels(
         "  — tk/s".to_string()                       // "  — tk/s" (9 chars total)
     };
 
+    // Left and right sections; compute spacer dynamically to avoid jitter/overlap
     let left_text = format!("📊 Activity: {} | {}", clock_text, tks_display);
+    let right_static = " Slack";
+    let right_len = countdown_section.chars().count()
+        + 3 // " | "
+        + last_section_cached.chars().count()
+        + 5 // "     " before Slack
+        + slack_icon.chars().count()
+        + right_static.len();
+    let left_len = left_text.chars().count();
+    let total_len = left_len + right_len;
+    let available = area.width as usize;
+    let spacer_len = available.saturating_sub(total_len).min(32);
+    let clock_spacer = if spacer_len > 0 {
+        " ".repeat(spacer_len)
+    } else {
+        " ".to_string()
+    };
     
     // Build title line with fixed positioning - no dynamic width calculations
     let title_spans = vec![
         Span::raw(left_text),
-        Span::raw("                 "), // Much larger spacer to push entire right section far right
-        Span::styled(next_section, Style::default().fg(countdown_color)), // Countdown with color
+        Span::raw(clock_spacer.clone()), // Much larger spacer to push entire right section far right
+        Span::styled(countdown_section.clone(), Style::default().fg(countdown_color)), // Countdown with color
         Span::raw(" | "), // Fixed separator
-        Span::raw(last_section), // Fixed width last section
+        Span::raw(last_section_cached.clone()), // Fixed width last section
         Span::raw("     "), // Normal spacing before Slack
         Span::styled(
             slack_icon.to_string(), 
@@ -1599,6 +1689,24 @@ pub fn draw_visual_cli_panels(
         ), // Colored checkmark only
         Span::raw(" Slack"), // Normal white text for "Slack"
     ];
+
+    // Cache geometry + static pieces for clock-only redraws
+    let title_row_area = Rect {
+        x: area.x.saturating_add(1),
+        y: area.y,
+        width: area.width.saturating_sub(2).max(1),
+        height: 1,
+    };
+    tui_state.clock_title_cache = Some(ClockTitleCache {
+        area: title_row_area,
+        spacer: clock_spacer,
+        countdown_section,
+        countdown_color,
+        last_section: last_section_cached,
+        slack_icon: slack_icon.to_string(),
+        slack_color: if notifications_enabled { Color::Green } else { Color::DarkGray },
+        tks_display,
+    });
     
     let title_line = Line::from(title_spans);
 

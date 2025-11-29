@@ -10,11 +10,12 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{ExecutableCommand, execute};
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs};
+use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs, Widget};
 use ratatui::{Frame, Terminal};
 use std::io::{stdout, Write, IsTerminal};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -32,6 +33,140 @@ pub struct UiLayout {
     pub live_activity_rect: Option<Rect>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PerfSnapshot {
+    pub fps: f32,
+    pub render_ms: f32,
+    pub cpu_pct: Option<f32>,
+}
+
+#[derive(Debug)]
+pub struct PerfOverlayState {
+    pub enabled: bool,
+    pub last_snapshot: Option<PerfSnapshot>,
+    window_start: std::time::Instant,
+    render_count: u64,
+    render_total: std::time::Duration,
+    cpu_last_wall: Option<std::time::Instant>,
+    cpu_last_proc: Option<std::time::Duration>,
+}
+
+impl PerfOverlayState {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            window_start: std::time::Instant::now(),
+            last_snapshot: None,
+            render_count: 0,
+            render_total: std::time::Duration::ZERO,
+            cpu_last_wall: None,
+            cpu_last_proc: None,
+        }
+    }
+
+    pub fn record_render(&mut self, start: Option<std::time::Instant>) {
+        if self.enabled {
+            if let Some(start) = start {
+                self.render_total += start.elapsed();
+                self.render_count += 1;
+            }
+        }
+    }
+
+    pub fn maybe_snapshot(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let window = now.duration_since(self.window_start);
+        if window >= std::time::Duration::from_secs(2) {
+            let secs = window.as_secs_f32().max(0.001);
+            let fps = self.render_count as f32 / secs;
+            let render_ms = if self.render_count > 0 {
+                (self.render_total.as_secs_f32() / self.render_count as f32) * 1000.0
+            } else {
+                0.0
+            };
+            let cpu_pct = self.compute_cpu_pct(now);
+            self.last_snapshot = Some(PerfSnapshot {
+                fps,
+                render_ms,
+                cpu_pct,
+            });
+            self.window_start = now;
+            self.render_count = 0;
+            self.render_total = std::time::Duration::ZERO;
+        }
+    }
+
+    fn compute_cpu_pct(&mut self, now: std::time::Instant) -> Option<f32> {
+        #[cfg(unix)]
+        {
+            if let Some(proc_time) = read_process_cpu_time() {
+                if let (Some(prev_wall), Some(prev_proc)) =
+                    (self.cpu_last_wall, self.cpu_last_proc)
+                {
+                    let wall_delta = now.saturating_duration_since(prev_wall);
+                    let proc_delta = proc_time.checked_sub(prev_proc)?;
+                    if wall_delta.as_secs_f32() > 0.0 {
+                        let pct =
+                            (proc_delta.as_secs_f32() / wall_delta.as_secs_f32()) * 100.0;
+                        self.cpu_last_wall = Some(now);
+                        self.cpu_last_proc = Some(proc_time);
+                        return Some(pct);
+                    }
+                }
+                self.cpu_last_wall = Some(now);
+                self.cpu_last_proc = Some(proc_time);
+            }
+            None
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = now;
+            None
+        }
+    }
+}
+
+impl Default for PerfOverlayState {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
+#[cfg(unix)]
+fn read_process_cpu_time() -> Option<std::time::Duration> {
+    use std::time::Duration;
+    unsafe {
+        let mut usage = std::mem::zeroed::<libc::rusage>();
+        if libc::getrusage(libc::RUSAGE_SELF, &mut usage) == 0 {
+            let user = Duration::new(
+                usage.ru_utime.tv_sec as u64,
+                (usage.ru_utime.tv_usec * 1000) as u32,
+            );
+            let sys = Duration::new(
+                usage.ru_stime.tv_sec as u64,
+                (usage.ru_stime.tv_usec * 1000) as u32,
+            );
+            return Some(user + sys);
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone)]
+pub struct ClockTitleCache {
+    pub area: Rect,
+    pub spacer: String,
+    pub countdown_section: String,
+    pub countdown_color: Color,
+    pub last_section: String,
+    pub slack_icon: String,
+    pub slack_color: Color,
+    pub tks_display: String,
+}
+
 #[derive(Debug, Default)]
 pub struct TuiState {
     pub selected_tab: usize,
@@ -46,6 +181,8 @@ pub struct TuiState {
     pub daily_stats_view_start: usize, // For daily stats pagination (0 = most recent 30 days)
     pub status_message: Option<String>, // Temporary status messages (Slack toggle, etc.)
     pub status_message_timer: Option<std::time::Instant>, // Auto-clear timer for status messages
+    pub clock_title_cache: Option<ClockTitleCache>, // Cached geometry + static text for clock-only redraws
+    pub perf_overlay: PerfOverlayState,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +234,9 @@ pub fn run_tui(
     // Enable mouse mode by default for consistent scrolling
     tui_state.mouse_mode_enabled = true;
     terminal.backend_mut().execute(EnableMouseCapture)?;
+
+    // Start with perf overlay disabled; user can toggle via verbose mode
+    tui_state.perf_overlay = PerfOverlayState::new(false);
 
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(run_app(
@@ -179,6 +319,9 @@ async fn run_app(
     // 5. Intelligent redraw system (prevents unnecessary renders)
 
     loop {
+        // Update perf snapshot at the start of each loop (uses data from previous renders)
+        tui_state.perf_overlay.maybe_snapshot();
+
         // Check for stats updates
         if stats_receiver.has_changed()? {
             current_stats = stats_receiver.borrow_and_update().clone();
@@ -289,6 +432,11 @@ async fn run_app(
             let render_time_utc = chrono::Utc::now();
             let render_time_system = SystemTime::now();
 
+            let render_start = if tui_state.perf_overlay.enabled {
+                Some(Instant::now())
+            } else {
+                None
+            };
             terminal.draw(|frame| {
                 draw_ui(
                     frame,
@@ -302,18 +450,28 @@ async fn run_app(
                     render_time_system,
                 );
             })?;
+            tui_state.perf_overlay.record_render(render_start);
             needs_redraw = false;
         }
 
-        // OPTIMIZATION: Only redraw clock component, not entire UI
-        // Clock updates should NOT trigger full UI redraw
-        // This was causing 38% CPU usage from unnecessary redraws
+        // OPTIMIZATION: Clock updates work but don't trigger full UI redraw
+        // Clock updates should update the clock display without full UI redraw
         let clock_enabled = std::env::var("SPLITRAIL_DISABLE_CLOCK").is_err();
         if clock_enabled && last_clock_tick.elapsed() >= Duration::from_secs(1) {
-            // TODO: Implement selective clock redraw only
-            // For now, keep the expensive behavior but document it
             last_clock_tick = Instant::now();
-            // REMOVED: needs_redraw = true;  // This was the bottleneck!
+            match redraw_clock_only(terminal, tui_state) {
+                Ok(true) => {}
+                Ok(false) => {
+                    // No cache yet; fall back to a full redraw on summary tab
+                    if tui_state.selected_tab == 0 {
+                        needs_redraw = true;
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Clock-only redraw failed, falling back to full redraw: {err}");
+                    needs_redraw = true;
+                }
+            }
         }
         
         // OPTIMIZATION: Auto-clear status messages after 3 seconds
@@ -395,6 +553,12 @@ async fn run_app(
 
                     if key.code == KeyCode::Char('v') && tui_state.selected_tab == 0 {
                         tui_state.summary_verbose_mode = !tui_state.summary_verbose_mode;
+                        // Toggle perf overlay with verbose mode; reset stats when enabling
+                        if tui_state.summary_verbose_mode {
+                            tui_state.perf_overlay = PerfOverlayState::new(true);
+                        } else {
+                            tui_state.perf_overlay.enabled = false;
+                        }
                         needs_redraw = true;
                         continue;
                     }
@@ -692,6 +856,60 @@ async fn run_app(
     Ok(())
 }
 
+/// Redraw just the clock/title line without re-rendering the entire UI.
+/// Returns true if a partial redraw was performed.
+fn redraw_clock_only(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    tui_state: &TuiState,
+) -> anyhow::Result<bool> {
+    // Only available on the summary tab where the clock is displayed
+    if tui_state.selected_tab != 0 {
+        return Ok(false);
+    }
+
+    let Some(cache) = &tui_state.clock_title_cache else {
+        // Cache not initialized yet (likely before first full render)
+        return Ok(false);
+    };
+
+    let clock_text = chrono::Local::now().format("%H:%M:%S").to_string();
+
+    let title_spans = vec![
+        Span::raw(format!("📊 Activity: {clock_text} | {}", cache.tks_display)),
+        Span::raw(cache.spacer.clone()),
+        Span::styled(
+            cache.countdown_section.clone(),
+            Style::default().fg(cache.countdown_color),
+        ),
+        Span::raw(" | "),
+        Span::raw(cache.last_section.clone()),
+        Span::raw("     "),
+        Span::styled(
+            cache.slack_icon.clone(),
+            Style::default().fg(cache.slack_color),
+        ),
+        Span::raw(" Slack"),
+    ];
+
+    let mut buf = Buffer::empty(cache.area);
+    let paragraph = Paragraph::new(Line::from(title_spans))
+        .style(Style::default().bold().fg(Color::Cyan));
+
+    paragraph.render(cache.area, &mut buf);
+    let area = cache.area;
+    let cells = buf
+        .content()
+        .iter()
+        .enumerate()
+        .map(|(i, cell)| {
+            let x = area.x + (i as u16 % area.width);
+            let y = area.y + (i as u16 / area.width);
+            (x, y, cell)
+        });
+    terminal.backend_mut().draw(cells)?;
+    Ok(true)
+}
+
 fn draw_ui(
     frame: &mut Frame,
     filtered_stats: &[&AgenticCodingToolStats],
@@ -738,8 +956,38 @@ fn draw_ui(
 
     // Header
     let version = env!("CARGO_PKG_VERSION");
+    let perf_text = if tui_state.perf_overlay.enabled {
+        if let Some(snapshot) = tui_state.perf_overlay.last_snapshot {
+            // Fixed-width fields so the header doesn't jump around
+            let fps = format!("{:>4.1}", snapshot.fps.min(999.9));
+            let render_ms = format!("{:>5.1}", snapshot.render_ms.min(9999.9));
+            let cpu = snapshot
+                .cpu_pct
+                .map(|c| format!("{:>5.1}", c.min(999.9)))
+                .unwrap_or_else(|| " --.-".to_string());
+            Some(format!("perf {}fps {}ms cpu:{}%", fps, render_ms, cpu))
+        } else {
+            Some("perf ----".to_string())
+        }
+    } else {
+        None
+    };
+
+    let mut header_line = version.to_string();
+    if let Some(perf_text) = perf_text {
+        let width = chunks[0].width as usize;
+        if header_line.len() + perf_text.len() + 1 < width {
+            let pad = width.saturating_sub(header_line.len() + perf_text.len());
+            header_line.push_str(&" ".repeat(pad));
+            header_line.push_str(&perf_text);
+        } else {
+            header_line.push(' ');
+            header_line.push_str(&perf_text);
+        }
+    }
+
     let header = Paragraph::new(Text::from(vec![
-        Line::styled(version, Style::new().cyan().bold()),
+        Line::styled(header_line, Style::new().cyan().bold()),
         Line::styled("=".repeat(version.len()), Style::new().cyan().bold()),
     ]));
     frame.render_widget(header, chunks[0]);

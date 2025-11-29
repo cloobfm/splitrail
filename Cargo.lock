@@ -2157,6 +2157,7 @@ dependencies = [
  "crossterm 0.29.0",
  "dirs",
  "glob",
+ "libc",
  "memory-stats",
  "notify",
  "notify-types",
