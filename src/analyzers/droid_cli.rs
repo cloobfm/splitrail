@@ -343,12 +343,27 @@ tool_calls: tool_calls as u32,
     fn extract_content_text(&self, content: &[serde_json::Value]) -> String {
         for item in content {
             if let Some(obj) = item.as_object() {
-                if let (Some(text_type), Some(text)) = (
-                    obj.get("type").and_then(|v| v.as_str()),
-                    obj.get("text").and_then(|v| v.as_str())
-                ) {
-                    if text_type == "text" {
-                        return text.to_string();
+                let text_type = obj.get("type").and_then(|v| v.as_str());
+                
+                match text_type {
+                    Some("text") => {
+                        if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+                            return text.to_string();
+                        }
+                    }
+                    Some("tool_result") => {
+                        // For tool results, extract the content field
+                        if let Some(tool_content) = obj.get("content").and_then(|v| v.as_str()) {
+                            // Truncate very long tool results for readability
+                            if tool_content.len() > 200 {
+                                let preview: String = tool_content.chars().take(200).collect();
+                                return format!("{}... [{} more chars]", preview, tool_content.len() - 200);
+                            }
+                            return tool_content.to_string();
+                        }
+                    }
+                    _ => {
+                        // Handle other types or continue searching
                     }
                 }
             }
