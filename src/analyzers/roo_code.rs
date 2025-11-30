@@ -140,6 +140,12 @@ fn parse_roo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMess
     let mut entries = Vec::new();
     let mut message_index = 0;
 
+    // Track previous cumulative token values to compute deltas (like Codex CLI does)
+    // Note: tokensIn and cacheReads are cumulative (grow with context)
+    //       tokensOut and cacheWrites are per-request (vary independently)
+    let mut prev_tokens_in: u64 = 0;
+    let mut prev_cache_reads: u64 = 0;
+
     // Process ui_messages to extract API requests with token/cost data
     for message in ui_messages {
         match message {
@@ -150,6 +156,24 @@ fn parse_roo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMess
                     let mut text_bytes = text.into_bytes();
                     if let Ok(api_req) = simd_json::from_slice::<RooCodeApiRequest>(&mut text_bytes)
                     {
+                        // Compute delta for cumulative fields only (tokensIn, cacheReads)
+                        // tokensOut and cacheWrites are per-request, use raw values
+                        // If current < previous, context was reset - use full value
+                        let delta_in = if api_req.tokens_in >= prev_tokens_in {
+                            api_req.tokens_in - prev_tokens_in
+                        } else {
+                            api_req.tokens_in
+                        };
+                        let delta_cache_reads = if api_req.cache_reads >= prev_cache_reads {
+                            api_req.cache_reads - prev_cache_reads
+                        } else {
+                            api_req.cache_reads
+                        };
+
+                        // Update previous values for next iteration
+                        prev_tokens_in = api_req.tokens_in;
+                        prev_cache_reads = api_req.cache_reads;
+
                         // Create a message entry for this API request
                         let date = DateTime::from_timestamp_millis(ts).unwrap_or_else(Utc::now);
 
@@ -160,11 +184,11 @@ fn parse_roo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMess
                         ));
 
                         let stats = Stats {
-                            input_tokens: api_req.tokens_in,
-                            output_tokens: api_req.tokens_out,
-                            cache_creation_tokens: api_req.cache_writes,
-                            cache_read_tokens: api_req.cache_reads,
-                            cached_tokens: api_req.cache_writes + api_req.cache_reads,
+                            input_tokens: delta_in,
+                            output_tokens: api_req.tokens_out, // per-request, use raw
+                            cache_creation_tokens: api_req.cache_writes, // per-request, use raw
+                            cache_read_tokens: delta_cache_reads,
+                            cached_tokens: api_req.cache_writes + delta_cache_reads,
                             cost: api_req.cost,
                             tool_calls: if api_req.tokens_out > 0 { 1 } else { 0 },
                             ..Default::default()

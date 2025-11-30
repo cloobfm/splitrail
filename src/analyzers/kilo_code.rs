@@ -211,6 +211,12 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
     let mut pending_api_stats: Option<Stats> = None;
     let mut last_role: Option<MessageRole> = None;
 
+    // Track previous cumulative token values to compute deltas (like Codex CLI does)
+    // Note: tokensIn and cacheReads are cumulative (grow with context)
+    //       tokensOut and cacheWrites are per-request (vary independently)
+    let mut prev_tokens_in: u64 = 0;
+    let mut prev_cache_reads: u64 = 0;
+
     for (idx, message) in ui_messages.iter().enumerate() {
         match message {
             KiloCodeUiMessage::Say { ts, say, text, .. } => match say.as_str() {
@@ -219,24 +225,42 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                     if let Ok(api_req) =
                         simd_json::from_slice::<KiloCodeApiRequest>(&mut text_bytes)
                     {
+                        // Compute delta for cumulative fields only (tokensIn, cacheReads)
+                        // tokensOut and cacheWrites are per-request, use raw values
+                        // If current < previous, context was reset - use full value
+                        let delta_in = if api_req.tokens_in >= prev_tokens_in {
+                            api_req.tokens_in - prev_tokens_in
+                        } else {
+                            api_req.tokens_in
+                        };
+                        let delta_cache_reads = if api_req.cache_reads >= prev_cache_reads {
+                            api_req.cache_reads - prev_cache_reads
+                        } else {
+                            api_req.cache_reads
+                        };
+
+                        // Update previous values for next iteration
+                        prev_tokens_in = api_req.tokens_in;
+                        prev_cache_reads = api_req.cache_reads;
+
                         let cost = if let Some(ref model) = current_model {
                             calculate_total_cost(
                                 model,
-                                api_req.tokens_in,
-                                api_req.tokens_out,
-                                api_req.cache_writes,
-                                api_req.cache_reads,
+                                delta_in,
+                                api_req.tokens_out, // per-request, use raw
+                                api_req.cache_writes, // per-request, use raw
+                                delta_cache_reads,
                             )
                         } else {
                             api_req.cost // fallback to log cost if no model
                         };
 
                         pending_api_stats = Some(Stats {
-                            input_tokens: api_req.tokens_in,
-                            output_tokens: api_req.tokens_out,
-                            cache_creation_tokens: api_req.cache_writes,
-                            cache_read_tokens: api_req.cache_reads,
-                            cached_tokens: api_req.cache_writes + api_req.cache_reads,
+                            input_tokens: delta_in,
+                            output_tokens: api_req.tokens_out, // per-request, use raw
+                            cache_creation_tokens: api_req.cache_writes, // per-request, use raw
+                            cache_read_tokens: delta_cache_reads,
+                            cached_tokens: api_req.cache_writes + delta_cache_reads,
                             cost,
                             tool_calls: if api_req.tokens_out > 0 { 1 } else { 0 },
                             ..Default::default()
