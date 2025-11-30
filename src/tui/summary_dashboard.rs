@@ -5,7 +5,6 @@ use crate::utils::{
     get_health_color, get_health_status, get_warnings,
 };
 use chrono::Duration as ChronoDuration;
-use super::ClockTitleCache;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -1023,12 +1022,12 @@ pub fn create_activity_sparkline_with_prev(
     let raw_max = *state.buckets.iter().max().unwrap_or(&1).max(&1);
     let stable_max = prev_max.unwrap_or(raw_max).max(1);
 
-    // Create sparkline with braille ramps (truncate to 60 most recent)
+    // Create sparkline with braille ramps (truncate to 80 most recent)
     let chars = [' ', '⡀', '⡄', '⡆', '⡇', '⣇', '⣧', '⣷', '⣿'];
     let spans = state
         .buckets
         .iter()
-        .skip(state.buckets.len().saturating_sub(60)) // Show the most recent 60 buckets (30 minutes)
+        .skip(state.buckets.len().saturating_sub(80)) // Show the most recent 80 buckets (40 minutes)
         .map(|&count| {
             if count == 0 {
                 Span::raw(" ")
@@ -1376,40 +1375,38 @@ pub fn draw_visual_cli_panels(
             let padding_needed = 19usize.saturating_sub(3 + model_display.len());
             line_spans.push(Span::raw(" ".repeat(padding_needed)));
             
-            // Add tokens per second
+            // Add tokens per second (fixed width: 10 chars "42.3 tk/s ")
             let tks_display = if *tks_per_sec >= 100.0 {
-                format!("{:>3.0}tk/s ", tks_per_sec)
+                format!("{:>3.0} tk/s ", tks_per_sec)
             } else if *tks_per_sec >= 10.0 {
-                format!("{:>4.1}tk/s ", tks_per_sec)
+                format!("{:>4.1} tk/s ", tks_per_sec)
             } else if *tks_per_sec > 0.0 {
-                format!("{:>4.1}tk/s ", tks_per_sec)
+                format!("{:>4.1} tk/s ", tks_per_sec)
             } else {
-                "         ".to_string()
+                "          ".to_string()
             };
-            
+
             line_spans.push(Span::raw("| "));
             line_spans.push(Span::styled(tks_display, Style::default().fg(Color::Cyan).dim()));
-            line_spans.push(Span::raw(" "));
         } else {
             line_spans.push(Span::styled(
                 format!("{:12}", cli_name),
                 Style::default().fg(name_color).bold(),
             ));
-            
-            // Add tokens per second
+
+            // Add tokens per second (fixed width: 10 chars "42.3 tk/s ")
             let tks_display = if *tks_per_sec >= 100.0 {
-                format!("{:>3.0}tk/s ", tks_per_sec)
+                format!("{:>3.0} tk/s ", tks_per_sec)
             } else if *tks_per_sec >= 10.0 {
-                format!("{:>4.1}tk/s ", tks_per_sec)
+                format!("{:>4.1} tk/s ", tks_per_sec)
             } else if *tks_per_sec > 0.0 {
-                format!("{:>4.1}tk/s ", tks_per_sec)
+                format!("{:>4.1} tk/s ", tks_per_sec)
             } else {
-                "         ".to_string()
+                "          ".to_string()
             };
-            
+
             line_spans.push(Span::raw("| "));
             line_spans.push(Span::styled(tks_display, Style::default().fg(Color::Cyan).dim()));
-            line_spans.push(Span::raw(" "));
         }
 
         line_spans.extend(sparkline);
@@ -1621,7 +1618,7 @@ pub fn draw_visual_cli_panels(
         
         (bar_chars.into_iter().collect::<String>(), color, format!("{remaining:>3}s"))
     } else {
-        ("                ".to_string(), Color::DarkGray, "  —".to_string())
+        ("                ".to_string(), Color::DarkGray, "  — ".to_string())
     };
     
     let _countdown_indicator = format!("|{countdown_bar}| {remaining_display}");
@@ -1640,74 +1637,44 @@ pub fn draw_visual_cli_panels(
     let _slack_section = format!("| {} Slack", slack_icon); // Fixed 8 chars
     let next_section = format!("|{countdown_bar}| {remaining_display}"); // Fixed 25 chars with left boundary
     let last_section = format!("last {last_icon} {last_text:>7}"); // Fixed 16 chars for "XXs ago" or "—"
-    let countdown_section = next_section.clone();
-    let last_section_cached = last_section.clone();
 
     // Use cached 15-minute moving average tokens per second (refreshed every 5 seconds)
     let tks_per_sec = summary_data.tokens_per_second;
-    // Fixed-width format optimized for typical < 100 range: "42.3 tk/s", " 8.7 tk/s", " 0.7 tk/s"
+    // Fixed-width format: 10 chars total to match CLI lines "42.3 tk/s "
     let tks_display = if tks_per_sec >= 100.0 {
-        format!("{:.0} tk/s", tks_per_sec)           // "123 tk/s" (no decimal for 100+, rare)
+        format!("{:>3.0} tk/s ", tks_per_sec)        // "123 tk/s " (9 chars)
     } else if tks_per_sec >= 1.0 {
-        format!("{:>4.1} tk/s", tks_per_sec)         // "42.3 tk/s" or " 8.7 tk/s" (9 chars total)
+        format!("{:>4.1} tk/s ", tks_per_sec)        // "42.3 tk/s " (10 chars)
     } else if tks_per_sec > 0.0 {
-        format!("{:>4.1} tk/s", tks_per_sec)         // " 0.7 tk/s" (9 chars total)
+        format!("{:>4.1} tk/s ", tks_per_sec)        // " 0.7 tk/s " (10 chars)
     } else {
-        "  — tk/s".to_string()                       // "  — tk/s" (9 chars total)
+        "   — tk/s ".to_string()                     // "   — tk/s " (10 chars)
     };
 
-    // Left and right sections; compute spacer dynamically to avoid jitter/overlap
     let left_text = format!("📊 Activity: {} | {}", clock_text, tks_display);
-    let right_static = " Slack";
-    let right_len = countdown_section.chars().count()
-        + 3 // " | "
-        + last_section_cached.chars().count()
-        + 5 // "     " before Slack
-        + slack_icon.chars().count()
-        + right_static.len();
-    let left_len = left_text.chars().count();
-    let total_len = left_len + right_len;
-    let available = area.width as usize;
-    let spacer_len = available.saturating_sub(total_len).min(32);
-    let clock_spacer = if spacer_len > 0 {
-        " ".repeat(spacer_len)
+
+    // Spacer: 27 spaces normal, 46 spaces in verbose mode
+    let spacer = if tui_state.summary_verbose_mode {
+        "                                              " // 46 spaces for verbose mode
     } else {
-        " ".to_string()
+        "                           " // 27 spaces for normal mode
     };
-    
+
     // Build title line with fixed positioning - no dynamic width calculations
     let title_spans = vec![
         Span::raw(left_text),
-        Span::raw(clock_spacer.clone()), // Much larger spacer to push entire right section far right
-        Span::styled(countdown_section.clone(), Style::default().fg(countdown_color)), // Countdown with color
+        Span::raw(spacer), // Dynamic spacing between tk/s and countdown
+        Span::styled(next_section, Style::default().fg(countdown_color)), // Countdown with color
         Span::raw(" | "), // Fixed separator
-        Span::raw(last_section_cached.clone()), // Fixed width last section
+        Span::raw(last_section), // Fixed width last section
         Span::raw("     "), // Normal spacing before Slack
         Span::styled(
-            slack_icon.to_string(), 
+            slack_icon.to_string(),
             Style::default().fg(if notifications_enabled { Color::Green } else { Color::DarkGray })
         ), // Colored checkmark only
         Span::raw(" Slack"), // Normal white text for "Slack"
     ];
 
-    // Cache geometry + static pieces for clock-only redraws
-    let title_row_area = Rect {
-        x: area.x.saturating_add(1),
-        y: area.y,
-        width: area.width.saturating_sub(2).max(1),
-        height: 1,
-    };
-    tui_state.clock_title_cache = Some(ClockTitleCache {
-        area: title_row_area,
-        spacer: clock_spacer,
-        countdown_section,
-        countdown_color,
-        last_section: last_section_cached,
-        slack_icon: slack_icon.to_string(),
-        slack_color: if notifications_enabled { Color::Green } else { Color::DarkGray },
-        tks_display,
-    });
-    
     let title_line = Line::from(title_spans);
 
     let paragraph = Paragraph::new(lines).block(
