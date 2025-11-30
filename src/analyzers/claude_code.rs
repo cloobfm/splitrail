@@ -583,8 +583,13 @@ where
             }
         }
 
-        // Determine role from entry type field (not the heuristic)
-        let is_assistant = entry.r#type.as_deref() == Some("assistant");
+        // Determine role from nested message.role field
+        // Note: entry.r#type is always None because serde's tag="type" consumes that field
+        let is_assistant = entry
+            .message
+            .as_ref()
+            .and_then(|m| m.role.as_deref())
+            == Some("assistant");
 
         // Skip tool-result-only messages - they're API plumbing, not conversation turns
         // (tool results are passed back to Claude as "user" messages in the API)
