@@ -214,6 +214,11 @@ impl DroidCliAnalyzer {
                         "message" => {
                             // Parse individual messages
                             if let (Some(session), Some(settings)) = (&session_info, &settings) {
+                                // Skip messages that only contain tool_result content
+                                // These are API plumbing, not meaningful conversation turns
+                                if self.is_tool_result_only_message(&value) {
+                                    continue;
+                                }
                                 if let Ok(message) = self.create_message_from_line(&value, session, settings, file_path) {
                                     messages.push(message);
                                 }
@@ -468,6 +473,26 @@ tool_calls: tool_calls as u32,
             }
         }
         count
+    }
+
+    /// Check if a message only contains tool_result content blocks
+    /// These are API plumbing (passing tool outputs back to the model) and shouldn't be shown as conversation turns
+    fn is_tool_result_only_message(&self, value: &serde_json::Value) -> bool {
+        if let Some(message) = value.get("message") {
+            if let Some(content) = message.get("content").and_then(|c| c.as_array()) {
+                if content.is_empty() {
+                    return false;
+                }
+                return content.iter().all(|item| {
+                    item.as_object()
+                        .and_then(|obj| obj.get("type"))
+                        .and_then(|t| t.as_str())
+                        .map(|t| t == "tool_result")
+                        .unwrap_or(false)
+                });
+            }
+        }
+        false
     }
 
     fn extract_timestamp_from_path(&self, file_path: &Path) -> Result<DateTime<Utc>> {
