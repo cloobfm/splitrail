@@ -583,8 +583,14 @@ where
             }
         }
 
-        // Determine role: assistant if there's usage OR tool results (since tool results are Claude's outputs)
-        let is_assistant = usage.is_some() || tool_use_result.is_some();
+        // Determine role from entry type field (not the heuristic)
+        let is_assistant = entry.r#type.as_deref() == Some("assistant");
+
+        // Skip tool-result-only messages - they're API plumbing, not conversation turns
+        // (tool results are passed back to Claude as "user" messages in the API)
+        if !is_assistant && tool_use_result.is_some() {
+            continue;
+        }
 
         let msg = ConversationMessage {
             global_hash: hash_text(&format!("{session_id}_{uuid}")),
