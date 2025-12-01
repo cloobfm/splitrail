@@ -383,11 +383,9 @@ pub fn extract_text_content(content: &Content) -> Option<String> {
                             }
                         }
                     }
-                    ContentBlock::ToolUse { name, .. } => {
-                        // Skip Bash commands - they're too verbose and not user-facing
-                        if name != "Bash" {
-                            all_content.push(name.clone());
-                        }
+                    ContentBlock::ToolUse { .. } => {
+                        // Skip tool use blocks entirely - "Read", "Edit", etc. are not
+                        // interesting for message previews. Tool stats are tracked separately.
                     }
                     ContentBlock::ToolResult { .. } => {
                         // Skip tool results - they're usually verbose command outputs
