@@ -3,7 +3,7 @@ use crate::models::{calculate_cache_cost, calculate_input_cost, calculate_output
 use crate::types::{
     AgenticCodingToolStats, Application, ConversationMessage, FileCategory, MessageRole, Stats,
 };
-use crate::utils::{deserialize_utc_timestamp, hash_text};
+use crate::utils::{deserialize_utc_timestamp, hash_text, log_error, warn_once};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -410,10 +410,11 @@ impl Analyzer for GeminiCliAnalyzer {
             .filter_map(|source| match parse_json_session_file(&source.path) {
                 Ok(messages) => Some(messages),
                 Err(e) => {
-                    eprintln!(
-                        "Failed to parse Gemini session file {}: {e:#}",
-                        source.path.display(),
-                    );
+                    let path = source.path.display();
+                    log_error(&format!(
+                        "Failed to parse Gemini session file {path}: {e:#}"
+                    ));
+                    warn_once("Gemini CLI sessions failed to parse; see ~/.splitrail.log for details");
                     None
                 }
             })

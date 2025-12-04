@@ -1,6 +1,7 @@
 use crate::types::{AgenticCodingToolStats, MultiAnalyzerStats};
 use crate::utils::{
-    NumberFormatOptions, clear_old_warnings, format_date_for_display, format_number,
+    NumberFormatOptions, clear_old_warnings, format_date_for_display, format_number, log_error,
+    read_log_tail, warn_once,
 };
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::{bail, Result};
@@ -15,7 +16,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Tabs, Widget};
+use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Widget, Borders};
 use ratatui::{Frame, Terminal};
 use std::io::{stdout, Write, IsTerminal};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -135,6 +136,13 @@ impl Default for PerfOverlayState {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DebugOverlayState {
+    pub enabled: bool,
+    pub lines: Vec<String>,
+    pub last_refresh: Option<std::time::Instant>,
+}
+
 #[cfg(unix)]
 fn read_process_cpu_time() -> Option<std::time::Duration> {
     use std::time::Duration;
@@ -153,6 +161,23 @@ fn read_process_cpu_time() -> Option<std::time::Duration> {
         }
     }
     None
+}
+
+fn refresh_debug_overlay(tui_state: &mut TuiState) {
+    if !tui_state.debug_overlay.enabled {
+        tui_state.debug_overlay.lines.clear();
+        tui_state.debug_overlay.last_refresh = None;
+        return;
+    }
+
+    tui_state.debug_overlay.last_refresh = Some(Instant::now());
+    tui_state.debug_overlay.lines = match read_log_tail(200) {
+        Some(lines) if lines.is_empty() => {
+            vec!["Log file is empty (written to ~/.splitrail.log)".to_string()]
+        }
+        Some(lines) => lines,
+        None => vec!["No log file yet (written to ~/.splitrail.log)".to_string()],
+    };
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +208,7 @@ pub struct TuiState {
     pub status_message_timer: Option<std::time::Instant>, // Auto-clear timer for status messages
     pub clock_title_cache: Option<ClockTitleCache>, // Cached geometry + static text for clock-only redraws
     pub perf_overlay: PerfOverlayState,
+    pub debug_overlay: DebugOverlayState,
 }
 
 #[derive(Debug, Clone)]
@@ -350,18 +376,21 @@ async fn run_app(
         // Check for file watcher events (batched)
         while let Some(watcher_event) = file_watcher.try_recv() {
             if let Err(e) = stats_manager.handle_watcher_event(watcher_event).await {
-                eprintln!("Error handling watcher event: {e}");
+                log_error(format!("Error handling watcher event: {e:#}"));
+                warn_once("Watcher event failed; see ~/.splitrail.log");
             }
         }
 
         // Process batched file events if window has expired
         if let Err(e) = stats_manager.process_pending_batches().await {
-            eprintln!("Error processing batched events: {e}");
+            log_error(format!("Error processing batched events: {e:#}"));
+            warn_once("Processing batched events failed; see ~/.splitrail.log");
         }
 
         // Poll Codex CLI periodically (every 5 seconds)
         if let Err(e) = stats_manager.poll_codex_if_needed().await {
-            eprintln!("Error polling Codex CLI: {e}");
+            log_error(format!("Error polling Codex CLI: {e:#}"));
+            warn_once("Codex poll failed; see ~/.splitrail.log");
         }
 
         // Check if upload status has changed or advance dots animation
@@ -396,6 +425,18 @@ async fn run_app(
         if last_warning_cleanup.elapsed() >= Duration::from_secs(60) {
             clear_old_warnings();
             last_warning_cleanup = std::time::Instant::now();
+        }
+
+        // Refresh debug overlay (tail of ~/.splitrail.log)
+        if tui_state.debug_overlay.enabled {
+            let refresh_due = tui_state
+                .debug_overlay
+                .last_refresh
+                .map_or(true, |t| t.elapsed() >= Duration::from_secs(1));
+            if refresh_due {
+                refresh_debug_overlay(tui_state);
+                needs_redraw = true;
+            }
         }
 
         // OPTIMIZATION: Reduce sparkline refresh frequency from 5s to 10s
@@ -514,7 +555,8 @@ async fn run_app(
                     if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::SHIFT) {
                         // Trigger upload
                         if let Err(e) = stats_manager.trigger_manual_upload().await {
-                            eprintln!("Error triggering upload: {e}");
+                            log_error(format!("Error triggering upload: {e:#}"));
+                            warn_once("Manual upload failed; see ~/.splitrail.log");
                         }
                         needs_redraw = true;
                         continue;
@@ -542,6 +584,14 @@ async fn run_app(
                                 }
                             }
                         }
+                        needs_redraw = true;
+                        continue;
+                    }
+
+                    // Toggle debug log overlay
+                    if matches!(key.code, KeyCode::Char('d')) {
+                        tui_state.debug_overlay.enabled = !tui_state.debug_overlay.enabled;
+                        refresh_debug_overlay(tui_state);
                         needs_redraw = true;
                         continue;
                     }
@@ -1081,14 +1131,14 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, Next - Last - Slack, m: {} mode, q/Esc: quit",
-                mouse_mode_indicator
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, q/Esc: quit",
+                mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, Next - Last - Slack, m: toggle {} mode, q/Esc: quit",
-                mouse_mode_indicator
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, q/Esc: quit",
+                mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
         };
@@ -1186,6 +1236,55 @@ fn draw_ui(
         .style(Style::default().add_modifier(Modifier::DIM));
         frame.render_widget(help, chunks[2]);
     }
+
+    if tui_state.debug_overlay.enabled {
+        render_debug_overlay(frame, tui_state);
+    }
+}
+
+fn render_debug_overlay(frame: &mut Frame, tui_state: &TuiState) {
+    let area = frame.area();
+    if area.height < 5 {
+        return;
+    }
+
+    let height = area.height.min(12).max(5);
+    let overlay_rect = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(height),
+        width: area.width,
+        height,
+    };
+
+    frame.render_widget(Clear, overlay_rect);
+
+    let mut lines = Vec::new();
+    lines.push(Line::styled(
+        format!(
+            "Debug log ({} lines, press D to close)",
+            tui_state.debug_overlay.lines.len()
+        ),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+
+    let max_lines = overlay_rect.height.saturating_sub(2) as usize;
+    let start = tui_state
+        .debug_overlay
+        .lines
+        .len()
+        .saturating_sub(max_lines);
+    for entry in tui_state.debug_overlay.lines.iter().skip(start) {
+        lines.push(Line::from(entry.as_str()));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("~/.splitrail.log"),
+        )
+        .wrap(ratatui::widgets::Wrap { trim: true });
+    frame.render_widget(paragraph, overlay_rect);
 }
 
 fn draw_daily_stats_table(

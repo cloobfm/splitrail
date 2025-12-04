@@ -1,4 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(test)]
@@ -35,6 +38,10 @@ struct WarningEntry {
 
 static WARNED_MESSAGES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static WARNINGS: OnceLock<Mutex<Vec<WarningEntry>>> = OnceLock::new();
+static LOG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+const MAX_LOG_BYTES: u64 = 1_000_000; // ~1MB
+const RETAIN_LOG_BYTES: u64 = 512_000; // keep last ~512KB when rotating
 
 pub fn warn_once(message: impl Into<String>) {
     let message = message.into();
@@ -80,6 +87,83 @@ pub fn clear_old_warnings() {
                 let duration = now.signed_duration_since(entry.timestamp);
                 duration.num_seconds() < 60
             });
+        }
+    }
+}
+
+fn log_file_path() -> Option<PathBuf> {
+    std::env::home_dir().map(|mut home| {
+        home.push(".splitrail.log");
+        home
+    })
+}
+
+fn write_log_line(level: &str, message: &str) {
+    let guard = LOG_LOCK.get_or_init(|| Mutex::new(())).lock();
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    if let Ok(_guard) = guard
+        && let Some(path) = log_file_path()
+    {
+        let line = format!("[{timestamp}] {level}: {message}\n");
+        let _ = path.parent().map(std::fs::create_dir_all);
+        rotate_log_if_needed(&path);
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
+}
+
+pub fn log_error(message: impl AsRef<str>) {
+    write_log_line("ERROR", message.as_ref());
+}
+
+pub fn read_log_tail(max_lines: usize) -> Option<Vec<String>> {
+    if max_lines == 0 {
+        return Some(Vec::new());
+    }
+    let path = log_file_path()?;
+    let file = std::fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    let mut buffer: Vec<String> = Vec::new();
+    for line in reader.lines().flatten() {
+        buffer.push(line);
+        if buffer.len() > max_lines {
+            buffer.remove(0);
+        }
+    }
+    Some(buffer)
+}
+
+fn rotate_log_if_needed(path: &std::path::Path) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+
+    if meta.len() <= MAX_LOG_BYTES {
+        return;
+    }
+
+    if let Ok(mut file) = std::fs::OpenOptions::new().read(true).open(path) {
+        let keep_from = meta
+            .len()
+            .saturating_sub(RETAIN_LOG_BYTES)
+            .try_into()
+            .unwrap_or(0);
+        if file.seek(SeekFrom::Start(keep_from)).is_ok() {
+            let mut buffer = Vec::new();
+            let _ = file.read_to_end(&mut buffer);
+            if let Ok(mut out) = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(path)
+            {
+                let _ = out.write_all(&buffer);
+            }
         }
     }
 }
