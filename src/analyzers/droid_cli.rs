@@ -183,6 +183,7 @@ impl DroidCliAnalyzer {
     async fn parse_session_file(&self, file_path: &Path) -> Result<Vec<ConversationMessage>> {
         let content = fs::read_to_string(file_path)?;
         let mut messages = Vec::new();
+        let mut last_timestamp: Option<DateTime<Utc>> = None;
         
         // First, load the session settings to get token usage info
         let settings_path = file_path.with_extension("settings.json");
@@ -220,6 +221,10 @@ impl DroidCliAnalyzer {
                                     continue;
                                 }
                                 if let Ok(message) = self.create_message_from_line(&value, session, settings, file_path) {
+                                    last_timestamp = match last_timestamp {
+                                        Some(prev) if prev > message.date => Some(prev),
+                                        _ => Some(message.date),
+                                    };
                                     messages.push(message);
                                 }
                             }
@@ -230,6 +235,74 @@ impl DroidCliAnalyzer {
                     }
                 }
             }
+        }
+
+        // Add a synthetic session summary message using the token usage totals to ensure accurate counts
+        if let (Some(session), Some(settings)) = (&session_info, &settings) {
+            let totals = &settings.token_usage;
+            let model_name = self.normalize_model_name(&settings.model);
+            let cost = calculate_total_cost(
+                &model_name,
+                totals.input_tokens as u64,
+                totals.output_tokens as u64,
+                totals.cache_creation_tokens as u64,
+                totals.cache_read_tokens as u64,
+            );
+            let timestamp = last_timestamp
+                .or_else(|| self.extract_timestamp_from_path(file_path).ok())
+                .unwrap_or_else(Utc::now);
+            let project_hash = self.extract_project_hash(&session.cwd);
+            let cached_tokens =
+                totals.cache_creation_tokens as u64 + totals.cache_read_tokens as u64;
+
+            messages.push(ConversationMessage {
+                application: Application::DroidCli,
+                date: timestamp,
+                project_hash,
+                conversation_hash: session.id.clone(),
+                local_hash: Some("session-total".to_string()),
+                global_hash: format!("droid-cli:{}:session-total:{}", session.id, timestamp.timestamp()),
+                model: Some(model_name),
+                stats: Stats {
+                    input_tokens: totals.input_tokens as u64,
+                    output_tokens: totals.output_tokens as u64,
+                    reasoning_tokens: totals.thinking_tokens as u64,
+                    cache_creation_tokens: totals.cache_creation_tokens as u64,
+                    cache_read_tokens: totals.cache_read_tokens as u64,
+                    cached_tokens,
+                    cost,
+                    tool_calls: 0,
+                    terminal_commands: 0,
+                    file_searches: 0,
+                    file_content_searches: 0,
+                    files_read: 0,
+                    files_added: 0,
+                    files_edited: 0,
+                    files_deleted: 0,
+                    lines_read: 0,
+                    lines_added: 0,
+                    lines_edited: 0,
+                    lines_deleted: 0,
+                    bytes_read: 0,
+                    bytes_added: 0,
+                    bytes_edited: 0,
+                    bytes_deleted: 0,
+                    todos_created: 0,
+                    todos_completed: 0,
+                    todos_in_progress: 0,
+                    todo_writes: 0,
+                    todo_reads: 0,
+                    code_lines: 0,
+                    docs_lines: 0,
+                    data_lines: 0,
+                    media_lines: 0,
+                    config_lines: 0,
+                    other_lines: 0,
+                    rate_limits: None,
+                },
+                role: MessageRole::Assistant,
+                content: Some("Session totals".to_string()),
+            });
         }
 
         Ok(messages)
@@ -269,17 +342,8 @@ impl DroidCliAnalyzer {
         // Calculate costs using Droid CLI's model pricing
         let model_name = self.normalize_model_name(&settings.model);
         
-        // For individual messages, we need to distribute tokens
-        // Since we don't have per-message token counts, we'll estimate based on content
-        let (input_tokens, output_tokens) = if role == MessageRole::User {
-            // Estimate user tokens based on content length (rough approximation: 4 chars per token)
-            let estimated = (content_text.len() as u64 / 4).max(1);
-            (estimated, 0)
-        } else {
-            // Estimate assistant tokens based on content length
-            let estimated = (content_text.len() as u64 / 4).max(1);
-            (0, estimated)
-        };
+        // Per-message tokens are not provided; rely on session totals from settings to avoid double counting
+        let (input_tokens, output_tokens) = (0, 0);
         
         let total_cost = calculate_total_cost(
             &model_name,

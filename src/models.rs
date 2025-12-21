@@ -261,6 +261,15 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             cached_input_per_1m: 0.125,
         },
     },
+    "gpt-5.2-codex" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.75,
+            output_per_1m: 14.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.175,
+        },
+    },
     "coder-alpha2" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 0.0,
@@ -915,6 +924,7 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "gpt-5-nano" => "gpt-5-nano",
     "gpt-5-nano-2025-08-07" => "gpt-5-nano",
     "gpt-5-codex-mini" => "gpt-5-codex-mini",
+    "gpt-5.2-codex" => "gpt-5.2-codex",
 
     // Anthropic aliases
     "claude-opus-4" => "claude-opus-4",
