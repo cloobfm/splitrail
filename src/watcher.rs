@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
-use crate::analyzer::{AnalyzerRegistry, AnalyzerWatchDir};
+use crate::analyzer::{AnalyzerRegistry, AnalyzerWatchDir, sources_fingerprint};
 use crate::config::Config;
 use crate::tui::UploadStatus;
 use crate::types::MultiAnalyzerStats;
@@ -177,6 +177,9 @@ pub struct RealtimeStatsManager {
     reload_debounce: Duration,
     last_poll_time: Instant,
     poll_interval: Duration,
+    /// Fingerprint (path + size + mtime of every source file) of the Codex CLI data the last
+    /// time it was loaded. The periodic poll only re-parses when this changes.
+    last_codex_fingerprint: Option<u64>,
     /// Batch pending file events to process together
     pending_events: HashSet<String>,
     /// Time when first event in current batch was received
@@ -190,6 +193,8 @@ impl RealtimeStatsManager {
         // Initial stats load using registry method
         let initial_stats = registry.load_all_stats().await?;
         let (update_tx, update_rx) = watch::channel(initial_stats.clone());
+        // Snapshot Codex's on-disk state now so the first poll does not redo the load we just did.
+        let last_codex_fingerprint = Self::codex_fingerprint(&registry);
 
         Ok(Self {
             registry,
@@ -204,7 +209,8 @@ impl RealtimeStatsManager {
             last_reload_times: std::collections::HashMap::new(),
             reload_debounce: Duration::from_secs(2),
             last_poll_time: Instant::now(),
-            poll_interval: Duration::from_secs(5), // Poll Codex CLI every 5 seconds
+            poll_interval: Duration::from_secs(5), // Check Codex CLI for changes every 5 seconds
+            last_codex_fingerprint,
             pending_events: HashSet::new(),
             batch_start_time: None,
             batch_window: Duration::from_millis(500), // Wait 500ms for more events
@@ -219,7 +225,18 @@ impl RealtimeStatsManager {
         self.update_rx.clone()
     }
 
-    /// Check if enough time has passed since last poll and reload Codex CLI if needed
+    /// Path + size + mtime fingerprint of every Codex CLI source file, or None if Codex is not
+    /// registered or discovery fails.
+    fn codex_fingerprint(registry: &AnalyzerRegistry) -> Option<u64> {
+        let analyzer = registry.get_analyzer_by_display_name("Codex CLI")?;
+        let sources = analyzer.discover_data_sources().ok()?;
+        Some(sources_fingerprint(&sources))
+    }
+
+    /// Safety net for Codex CLI, whose directory FSEvents has been unreliable for: every
+    /// `poll_interval`, stat its source files and reload only if any of them changed. The stat
+    /// pass costs a few milliseconds; the reload it used to do unconditionally cost a full parse
+    /// of every Codex session on disk.
     pub async fn poll_codex_if_needed(&mut self) -> Result<()> {
         // Skip polling if disabled via env var
         if std::env::var("SPLITRAIL_DISABLE_POLLING").is_ok() {
@@ -227,12 +244,18 @@ impl RealtimeStatsManager {
         }
 
         let now = Instant::now();
-        if now.duration_since(self.last_poll_time) >= self.poll_interval {
-            self.last_poll_time = now;
-
-            // Reload Codex CLI specifically
-            let _ = self.reload_analyzer_stats("Codex CLI", false).await;
+        if now.duration_since(self.last_poll_time) < self.poll_interval {
+            return Ok(());
         }
+        self.last_poll_time = now;
+
+        let current = Self::codex_fingerprint(&self.registry);
+        if current.is_some() && current == self.last_codex_fingerprint {
+            return Ok(()); // Nothing on disk changed; skip the re-parse.
+        }
+
+        self.last_codex_fingerprint = current;
+        let _ = self.reload_analyzer_stats("Codex CLI", false).await;
         Ok(())
     }
 

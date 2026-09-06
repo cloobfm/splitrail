@@ -19,6 +19,38 @@ pub struct DataSource {
     pub path: PathBuf,
 }
 
+/// Cheap change detector for a set of data sources: a hash of every file's path, size, and
+/// modification time. Two calls return the same value if and only if no file was added,
+/// removed, appended to, or rewritten in between. Costs one `stat` per file and no reads, so
+/// it is safe to call on a timer where a full re-parse would not be.
+pub fn sources_fingerprint(sources: &[DataSource]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut entries: Vec<(&std::path::Path, u64, Option<std::time::SystemTime>)> = sources
+        .iter()
+        .map(|source| {
+            let meta = std::fs::metadata(&source.path).ok();
+            (
+                source.path.as_path(),
+                meta.as_ref().map_or(0, |m| m.len()),
+                meta.and_then(|m| m.modified().ok()),
+            )
+        })
+        .collect();
+    // Order-independent: discovery order can vary between globs.
+    entries.sort();
+
+    let mut hasher = DefaultHasher::new();
+    entries.len().hash(&mut hasher);
+    for (path, len, modified) in entries {
+        path.hash(&mut hasher);
+        len.hash(&mut hasher);
+        modified.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Main trait that all analyzers must implement
 #[async_trait]
 pub trait Analyzer: Send + Sync {
@@ -191,5 +223,70 @@ impl AnalyzerRegistry {
         }
 
         dir_to_analyzer
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+
+    fn sources(dir: &std::path::Path) -> Vec<DataSource> {
+        let mut paths: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        paths.sort();
+        paths.into_iter().map(|path| DataSource { path }).collect()
+    }
+
+    #[test]
+    fn fingerprint_is_stable_when_nothing_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.jsonl"), "one\n").unwrap();
+        let first = sources_fingerprint(&sources(dir.path()));
+        let second = sources_fingerprint(&sources(dir.path()));
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_file_is_appended() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.jsonl");
+        fs::write(&file, "one\n").unwrap();
+        let before = sources_fingerprint(&sources(dir.path()));
+        let mut f = fs::OpenOptions::new().append(true).open(&file).unwrap();
+        writeln!(f, "two").unwrap();
+        let after = sources_fingerprint(&sources(dir.path()));
+        assert_ne!(before, after, "size change must be detected");
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_file_is_added_or_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.jsonl"), "one\n").unwrap();
+        let one = sources_fingerprint(&sources(dir.path()));
+        fs::write(dir.path().join("b.jsonl"), "two\n").unwrap();
+        let two = sources_fingerprint(&sources(dir.path()));
+        assert_ne!(one, two);
+        fs::remove_file(dir.path().join("b.jsonl")).unwrap();
+        assert_eq!(sources_fingerprint(&sources(dir.path())), one);
+    }
+
+    #[test]
+    fn fingerprint_is_order_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.jsonl"), "one\n").unwrap();
+        fs::write(dir.path().join("b.jsonl"), "two\n").unwrap();
+        let mut forward = sources(dir.path());
+        let fp_forward = sources_fingerprint(&forward);
+        forward.reverse();
+        assert_eq!(sources_fingerprint(&forward), fp_forward);
+    }
+
+    #[test]
+    fn fingerprint_of_no_sources_is_stable() {
+        assert_eq!(sources_fingerprint(&[]), sources_fingerprint(&[]));
     }
 }
