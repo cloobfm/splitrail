@@ -35,7 +35,9 @@ fn test_parse_jsonl_file_basic() {
     let mut buf_reader = BufReader::new(cursor);
     let messages = parse_jsonl_file(Path::new("test.jsonl"), &mut buf_reader);
 
-    assert_eq!(messages.len(), 4);
+    // Four lines in the fixture, but the trailing tool_result-only user turn is API plumbing
+    // and is dropped by the parser (see commit ca8b2a0), so three messages come back.
+    assert_eq!(messages.len(), 3);
 
     // Check first message (user message, no usage or tool results -> User)
     assert_eq!(messages[0].role, MessageRole::User);
@@ -61,10 +63,8 @@ fn test_parse_jsonl_file_basic() {
     assert_eq!(messages[2].stats.input_tokens, 10);
     assert_eq!(messages[2].stats.output_tokens, 15);
 
-    // Check fourth message (user tool result with toolUseResult -> Assistant)
-    assert_eq!(messages[3].role, MessageRole::Assistant);
-    assert_eq!(messages[3].stats.input_tokens, 0);
-    assert_eq!(messages[3].stats.output_tokens, 0);
+    // The tool_result turn must not leak through under any role.
+    assert!(messages.iter().all(|m| m.global_hash != "tool-result-uuid"));
 }
 
 #[test]
@@ -73,19 +73,17 @@ fn test_parse_jsonl_file_tool_operations() {
     let mut buf_reader = BufReader::new(cursor);
     let messages = parse_jsonl_file(Path::new("tools.jsonl"), &mut buf_reader);
 
-    assert_eq!(messages.len(), 2);
+    // The TodoWrite tool_result user turn is dropped by the parser (commit ca8b2a0), which
+    // also means todos_completed / todos_in_progress are no longer derived from results.
+    // Only the assistant's tool_use message survives.
+    assert_eq!(messages.len(), 1);
 
     // Check multi-tool message
     let multi_tool_msg = &messages[0];
+    assert_eq!(multi_tool_msg.role, MessageRole::Assistant);
     assert_eq!(multi_tool_msg.stats.tool_calls, 2);
     assert_eq!(multi_tool_msg.stats.files_edited, 1);
     assert_eq!(multi_tool_msg.stats.terminal_commands, 1);
-
-    // Check todo result message (has toolUseResult -> Assistant)
-    let todo_msg = &messages[1];
-    assert_eq!(todo_msg.role, MessageRole::Assistant);
-    assert_eq!(todo_msg.stats.todos_completed, 1);
-    assert_eq!(todo_msg.stats.todos_in_progress, 1);
 }
 
 #[test]
@@ -361,9 +359,10 @@ fn test_extract_tool_stats_unknown_tools() {
 
 #[test]
 fn test_role_determination_logic() {
-    // Test data for role determination: usage makes assistant, tool results make assistant
+    // Role comes from message.role (commit 364c1a7). Tool-result-only user turns are dropped
+    // (commit ca8b2a0). Usage on a message does not change its role.
     static ROLE_TEST_DATA: LazyLock<String> = LazyLock::new(|| {
-        r#"{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/test","sessionId":"role-test","version":"1.0.51","message":{"id":"msg_usage_only","type":"message","role":"user","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Assistant response"}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5,"service_tier":"standard"}},"requestId":"req_usage_test","type":"assistant","uuid":"usage-uuid","timestamp":"2025-08-02T17:00:00.000Z"}
+        r#"{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/test","sessionId":"role-test","version":"1.0.51","message":{"id":"msg_assistant","type":"message","role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Assistant response"}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5,"service_tier":"standard"}},"requestId":"req_usage_test","type":"assistant","uuid":"assistant-uuid","timestamp":"2025-08-02T17:00:00.000Z"}
 {"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/test","sessionId":"role-test","version":"1.0.51","type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_123","type":"tool_result","content":"Tool result"}]},"uuid":"tool-result-uuid","timestamp":"2025-08-02T17:01:00.000Z","toolUseResult":{"type":"text","content":"Result content"}}
 {"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/test","sessionId":"role-test","version":"1.0.51","type":"user","message":{"role":"user","content":"Plain user message"},"uuid":"plain-user-uuid","timestamp":"2025-08-02T17:02:00.000Z"}"#.to_string()
     });
@@ -372,22 +371,17 @@ fn test_role_determination_logic() {
     let mut buf_reader = BufReader::new(cursor);
     let messages = parse_jsonl_file(Path::new("role_test.jsonl"), &mut buf_reader);
 
-    assert_eq!(messages.len(), 3);
+    // Assistant + plain user. The tool_result turn is dropped.
+    assert_eq!(messages.len(), 2);
 
-    // First message: has usage -> should be Assistant despite message.role being "user"
     assert_eq!(messages[0].role, MessageRole::Assistant);
     assert_eq!(messages[0].stats.input_tokens, 10);
     assert_eq!(messages[0].stats.output_tokens, 5);
 
-    // Second message: has toolUseResult -> should be Assistant
-    assert_eq!(messages[1].role, MessageRole::Assistant);
+    assert_eq!(messages[1].role, MessageRole::User);
     assert_eq!(messages[1].stats.input_tokens, 0);
     assert_eq!(messages[1].stats.output_tokens, 0);
-
-    // Third message: plain user message, no usage or tool results -> should be User
-    assert_eq!(messages[2].role, MessageRole::User);
-    assert_eq!(messages[2].stats.input_tokens, 0);
-    assert_eq!(messages[2].stats.output_tokens, 0);
+    assert_eq!(messages[1].content.as_deref(), Some("Plain user message"));
 }
 
 #[test]

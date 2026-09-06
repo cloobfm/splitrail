@@ -47,8 +47,10 @@ mod tests {
         let messages = vec![message];
         
         let result = aggregate_by_date(&messages);
-        assert_eq!(result.len(), 1);
+        // aggregate_by_date fills every day from the earliest message through today with
+        // empty stats so the TUI has a continuous series, so only check the populated day.
         assert!(result.contains_key("2024-01-01"));
+        assert!(result.contains_key(&today_key()), "gaps are filled through today");
         
         let day_stats = &result["2024-01-01"];
         assert_eq!(day_stats.user_messages, 1);
@@ -65,32 +67,34 @@ mod tests {
         ];
         
         let result = aggregate_by_date(&messages);
-        assert_eq!(result.len(), 2);
+        assert!(result.contains_key("2024-01-01"));
+        assert!(result.contains_key("2024-01-02"));
         
         let day1 = &result["2024-01-01"];
         assert_eq!(day1.user_messages, 1);
         assert_eq!(day1.ai_messages, 1);
         assert_eq!(day1.conversations, 1);
         
+        // All three messages share one conversation hash, and a conversation is attributed to
+        // the day it started, so day 2 has messages but no new conversation.
         let day2 = &result["2024-01-02"];
         assert_eq!(day2.user_messages, 1);
         assert_eq!(day2.ai_messages, 0);
-        assert_eq!(day2.conversations, 1);
+        assert_eq!(day2.conversations, 0);
     }
 
     #[test]
-    #[ignore] // Temporarily disabled - aggregation logic may have issues
     fn test_aggregate_by_date_stats_accumulation() {
+        // Token/cost stats are only summed for AI messages (those with a model).
         let messages = vec![
-            create_test_message_with_stats("2024-01-01", 1000, 500, 1.0),
-            create_test_message_with_stats("2024-01-01", 2000, 1000, 2.0),
+            create_test_message_with_stats_and_role("2024-01-01", 1000, 500, 1.0, MessageRole::Assistant),
+            create_test_message_with_stats_and_role("2024-01-01", 2000, 1000, 2.0, MessageRole::Assistant),
         ];
         
         let result = aggregate_by_date(&messages);
         let day_stats = &result["2024-01-01"];
         
-        // The test creates messages with 1000+500=1500 input and 500+1000=1500 output tokens
-        // So the aggregated values should be 3000 input, 1500 output, 3.0 cost, 2 tool calls
+        // 1000+2000 input, 500+1000 output, 1.0+2.0 cost, 1+1 tool calls
         assert_eq!(day_stats.stats.input_tokens, 3000, "Input tokens should be sum of all messages");
         assert_eq!(day_stats.stats.output_tokens, 1500, "Output tokens should be sum of all messages");
         assert_eq!(day_stats.stats.cost, 3.0, "Cost should be sum of all message costs");
@@ -230,7 +234,13 @@ mod tests {
             conversation_hash: "test_conversation".to_string(),
             local_hash: Some("test_local_hash".to_string()),
             global_hash: "test_global_hash".to_string(),
-            model: Some("claude-3-sonnet".to_string()),
+            // Real user messages carry no model; aggregate_by_date uses `model` to split
+            // user vs AI messages, so keep the helper consistent with real data.
+            model: if role == MessageRole::Assistant {
+                Some("claude-3-sonnet".to_string())
+            } else {
+                None
+            },
             stats: Stats {
                 input_tokens,
                 output_tokens,
@@ -243,11 +253,23 @@ mod tests {
         }
     }
 
+    /// Noon *local* time on the given day, expressed in UTC. aggregate_by_date buckets by
+    /// local date, so midnight UTC would land on the previous day in any western timezone.
     fn parse_date(date_str: &str) -> DateTime<Utc> {
-        date_str.parse::<chrono::NaiveDate>()
+        use chrono::{Local, TimeZone};
+        let naive = date_str
+            .parse::<chrono::NaiveDate>()
             .unwrap()
-            .and_hms_opt(0, 0, 0)
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        Local
+            .from_local_datetime(&naive)
+            .single()
             .unwrap()
-            .and_utc()
+            .with_timezone(&Utc)
+    }
+
+    fn today_key() -> String {
+        chrono::Local::now().format("%Y-%m-%d").to_string()
     }
 }

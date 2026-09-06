@@ -1,11 +1,44 @@
-use anyhow::Result;
 use splitrail_dashboard::analyzer::{Analyzer, AnalyzerRegistry};
 use splitrail_dashboard::analyzers::*;
-use splitrail_dashboard::types::{ConversationMessage, MultiAnalyzerStats};
+use splitrail_dashboard::types::ConversationMessage;
 use std::collections::HashSet;
-use tempfile::TempDir;
 use std::fs::File;
 use std::io::Write;
+use std::sync::Mutex;
+use tempfile::TempDir;
+
+/// Tests that read or override `$HOME` must hold this lock. Cargo runs tests in parallel
+/// threads within one process, and the environment is process-wide.
+static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+/// Overrides `$HOME` for the lifetime of the guard and restores the previous value on drop,
+/// including on panic, so a failing test cannot poison the ones that run after it.
+struct HomeOverride {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl HomeOverride {
+    fn new(path: &std::path::Path) -> Self {
+        let previous = std::env::var_os("HOME");
+        // Mutating the environment is `unsafe` in the 2024 edition because other threads may
+        // be reading it concurrently; HOME_LOCK serializes the tests that care.
+        unsafe {
+            std::env::set_var("HOME", path);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for HomeOverride {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(prev) => std::env::set_var("HOME", prev),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+}
 
 #[tokio::test]
 async fn test_analyzer_registry_creation() {
@@ -24,6 +57,7 @@ async fn test_analyzer_registry_creation() {
 
 #[tokio::test]
 async fn test_analyzer_stats_loading() {
+    let _home = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let registry = create_test_registry();
     
     // This test will only work if the actual data sources exist
@@ -34,7 +68,7 @@ async fn test_analyzer_stats_loading() {
     match result {
         Ok(stats) => {
             // Verify structure is correct
-            assert_eq!(stats.analyzer_stats.len(), available_analyzers.len());
+            assert_eq!(stats.analyzer_stats.len(), registry.available_analyzers().len());
             
             for analyzer_stats in &stats.analyzer_stats {
                 // Verify required fields are present
@@ -51,6 +85,7 @@ async fn test_analyzer_stats_loading() {
 
 #[tokio::test]
 async fn test_claude_code_analyzer_with_test_data() {
+    let _home = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let temp_dir = TempDir::new().unwrap();
     let analyzer = ClaudeCodeAnalyzer::new();
     
@@ -62,8 +97,8 @@ async fn test_claude_code_analyzer_with_test_data() {
     let jsonl_file = claude_dir.join("conversations.jsonl");
     create_test_claude_file(&jsonl_file).await;
     
-    // Temporarily override home directory
-    std::env::set_var("HOME", temp_dir.path());
+    // Point the analyzer at the temp dir; restored when `_override` drops.
+    let _override = HomeOverride::new(temp_dir.path());
     
     // Test data discovery
     let sources = analyzer.discover_data_sources();
@@ -97,8 +132,6 @@ async fn test_claude_code_analyzer_with_test_data() {
 
 #[tokio::test]
 async fn test_message_deduplication() {
-    let temp_dir = TempDir::new().unwrap();
-    
     // Create test data with duplicates
     let messages = create_test_messages_with_duplicates();
     
@@ -192,23 +225,47 @@ fn create_test_registry() -> AnalyzerRegistry {
 
 async fn create_test_claude_file(file_path: &std::path::Path) {
     let mut file = File::create(file_path).unwrap();
-    
+
+    // Mirror the real Claude Code JSONL shape: `type`, `uuid`, and `timestamp` are top-level,
+    // user turns have plain-string content, assistant turns carry a model and usage.
     for i in 0..10 {
-        let message = serde_json::json!({
-            "type": "message",
-            "message": {
-                "id": format!("msg_{}", i),
-                "content": format!("Test message {}", i),
-                "timestamp": "2024-01-01T00:00:00Z",
-                "role": if i % 2 == 0 { "user" } else { "assistant" },
-                "model": "claude-3-sonnet-20240229",
-                "usage": {
-                    "input_tokens": 1000 + i * 100,
-                    "output_tokens": 500 + i * 50
+        let is_user = i % 2 == 0;
+        let uuid = format!("uuid-{i}");
+        let timestamp = format!("2024-01-01T00:{i:02}:00Z");
+        let message = if is_user {
+            serde_json::json!({
+                "type": "user",
+                "uuid": uuid,
+                "timestamp": timestamp,
+                "sessionId": "integration-session",
+                "cwd": "/tmp/integration",
+                "message": {
+                    "role": "user",
+                    "content": format!("Test message {i}"),
                 }
-            }
-        });
-        writeln!(file, "{}", message).unwrap();
+            })
+        } else {
+            serde_json::json!({
+                "type": "assistant",
+                "uuid": uuid,
+                "timestamp": timestamp,
+                "sessionId": "integration-session",
+                "cwd": "/tmp/integration",
+                "requestId": format!("req_{i}"),
+                "message": {
+                    "id": format!("msg_{i}"),
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-sonnet-20240229",
+                    "content": [{"type": "text", "text": format!("Test message {i}")}],
+                    "usage": {
+                        "input_tokens": 1000 + i * 100,
+                        "output_tokens": 500 + i * 50
+                    }
+                }
+            })
+        };
+        writeln!(file, "{message}").unwrap();
     }
 }
 

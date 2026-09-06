@@ -628,8 +628,10 @@ mod tests {
         let analyzer = DroidCliAnalyzer;
         let messages = analyzer.parse_session_file(&session_file).await.unwrap();
 
-        // Should parse 2 messages (user and assistant)
-        assert_eq!(messages.len(), 2);
+        // Two conversation messages plus one synthetic "session-total" message that carries the
+        // authoritative token counts from settings.json (commit 2dc0ed6). Per-message tokens are
+        // zero so the session is not double counted.
+        assert_eq!(messages.len(), 3);
         
         // Check user message
         let user_msg = &messages[0];
@@ -637,7 +639,7 @@ mod tests {
         assert_eq!(user_msg.application, Application::DroidCli);
         assert_eq!(user_msg.role, MessageRole::User);
         assert_eq!(user_msg.content, Some("Hello world".to_string()));
-        assert!(user_msg.stats.input_tokens > 0);
+        assert_eq!(user_msg.stats.input_tokens, 0);
         assert_eq!(user_msg.stats.output_tokens, 0);
         
         // Check assistant message
@@ -646,8 +648,23 @@ mod tests {
         assert_eq!(assistant_msg.role, MessageRole::Assistant);
         assert!(assistant_msg.content.as_ref().unwrap().contains("I'll help you"));
         assert_eq!(assistant_msg.stats.input_tokens, 0);
-        assert!(assistant_msg.stats.output_tokens > 0);
+        assert_eq!(assistant_msg.stats.output_tokens, 0);
         assert_eq!(assistant_msg.stats.tool_calls, 1);
         assert_eq!(assistant_msg.stats.files_read, 1);
+
+        // Check the synthetic session-total message
+        let totals = &messages[2];
+        assert_eq!(totals.local_hash.as_deref(), Some("session-total"));
+        assert_eq!(totals.conversation_hash, "test-id");
+        assert_eq!(totals.role, MessageRole::Assistant);
+        assert_eq!(totals.model.as_deref(), Some("claude-opus-4-5-20251101"));
+        assert_eq!(totals.stats.input_tokens, 1000);
+        assert_eq!(totals.stats.output_tokens, 500);
+        assert_eq!(totals.stats.cache_creation_tokens, 2000);
+        assert_eq!(totals.stats.cache_read_tokens, 1000);
+        assert_eq!(totals.stats.cached_tokens, 3000);
+        assert!(totals.stats.cost > 0.0, "session totals should be priced");
+        // Session totals carry tokens only; tool activity stays on the real messages.
+        assert_eq!(totals.stats.tool_calls, 0);
     }
 }
