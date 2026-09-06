@@ -19,7 +19,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Widget, Borders};
 use ratatui::{Frame, Terminal};
 use std::io::{stdout, Write, IsTerminal};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
@@ -251,7 +251,17 @@ pub fn run_tui(
         bail!("Interactive TUI requires a terminal (stdout is not a TTY). Run from a terminal or use subcommands like `splitrail config`/`splitrail upload`.");
     }
 
+    // Restore the terminal on a panic too, before the default hook prints the message.
+    // Otherwise the panic output lands on the alternate screen and the user's shell is
+    // left with raw mode and mouse tracking still enabled.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        TerminalGuard::restore();
+        default_panic_hook(info);
+    }));
+
     enable_raw_mode()?;
+    let _guard = TerminalGuard;
     stdout.execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -264,7 +274,12 @@ pub fn run_tui(
     // Start with perf overlay disabled; user can toggle via verbose mode
     tui_state.perf_overlay = PerfOverlayState::new(false);
 
-    let result = tokio::task::block_in_place(|| {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    spawn_signal_listener(shutdown.clone());
+
+    // `_guard` is dropped after this returns, on success, `?` error, or unwind, and puts the
+    // terminal back in every case.
+    tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(run_app(
             &mut terminal,
             stats_receiver,
@@ -273,15 +288,65 @@ pub fn run_tui(
             upload_status,
             file_watcher,
             &mut stats_manager,
+            shutdown,
         ))
-    });
+    })
+}
 
-    disable_raw_mode()?;
-    terminal
-        .backend_mut()
-        .execute(DisableMouseCapture)?
-        .execute(LeaveAlternateScreen)?;
-    result
+/// Puts the terminal back the way we found it. Held for the lifetime of the TUI so that every
+/// exit path (normal quit, `?` error, panic, signal) restores raw mode, mouse capture, the
+/// alternate screen, and the cursor. The escape sequences are idempotent, so running this more
+/// than once is harmless.
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn restore() {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            stdout(),
+            DisableMouseCapture,
+            LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        Self::restore();
+    }
+}
+
+/// Turn SIGTERM / SIGHUP / SIGINT into a clean quit. The event loop checks `shutdown` on every
+/// iteration; if it is stuck in a long blocking reload and has not exited within a few seconds,
+/// restore the terminal directly and exit so a `kill` never leaves the shell broken.
+fn spawn_signal_listener(shutdown: Arc<AtomicBool>) {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    tokio::spawn(async move {
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let mut hup = match signal(SignalKind::hangup()) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let mut int = match signal(SignalKind::interrupt()) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = hup.recv() => {}
+            _ = int.recv() => {}
+        }
+        shutdown.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        // Still running: the loop is blocked. Restore and bail out.
+        TerminalGuard::restore();
+        std::process::exit(130);
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -293,6 +358,7 @@ async fn run_app(
     upload_status: Arc<Mutex<UploadStatus>>,
     file_watcher: FileWatcher,
     stats_manager: &mut RealtimeStatsManager,
+    shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut table_states: Vec<TableState> = Vec::new();
     let mut current_stats = stats_receiver.borrow().clone();
@@ -345,6 +411,11 @@ async fn run_app(
     // 5. Intelligent redraw system (prevents unnecessary renders)
 
     loop {
+        // A signal (SIGTERM/SIGHUP/SIGINT) asked us to stop.
+        if shutdown.load(Ordering::SeqCst) {
+            break;
+        }
+
         // Update perf snapshot at the start of each loop (uses data from previous renders)
         tui_state.perf_overlay.maybe_snapshot();
 
@@ -562,8 +633,12 @@ async fn run_app(
                         continue;
                     }
 
-                    // Handle quitting.
-                    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                    // Handle quitting. Raw mode delivers Ctrl-C as a key event rather than
+                    // SIGINT, so treat it as quit too; otherwise users force-kill the process
+                    // and the terminal is left with mouse tracking enabled.
+                    let ctrl_c = matches!(key.code, KeyCode::Char('c'))
+                        && key.modifiers.contains(KeyModifiers::CONTROL);
+                    if ctrl_c || matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
                         break;
                     }
 
