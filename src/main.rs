@@ -11,6 +11,7 @@ use analyzers::{
 mod analyzer;
 mod analyzers;
 mod config;
+mod incremental;
 mod models;
 mod notifications;
 mod reqwest_simd_json;

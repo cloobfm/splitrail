@@ -4,6 +4,7 @@
 pub mod analyzer;
 pub mod analyzers;
 pub mod config;
+pub mod incremental;
 pub mod models;
 pub mod types;
 pub mod utils;

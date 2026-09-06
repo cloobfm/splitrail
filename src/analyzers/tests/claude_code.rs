@@ -1,5 +1,5 @@
 use crate::analyzers::claude_code::{
-    calculate_cost_from_tokens, deduplicate_messages_by_local_hash, extract_project_id,
+    ClaudeCodeAnalyzer, calculate_cost_from_tokens, deduplicate_messages_by_local_hash, extract_project_id,
     parse_jsonl_file,
 };
 use crate::types::{Application, ConversationMessage, MessageRole, Stats};
@@ -415,4 +415,48 @@ fn test_unknown_entry_types_do_not_warn() {
         .filter(|w| w.contains("unknown-types-test"))
         .collect();
     assert!(noisy.is_empty(), "unknown entry types should not warn, got: {noisy:?}");
+}
+
+#[tokio::test]
+async fn test_analyzer_reloads_incrementally() {
+    use crate::analyzer::DataSource;
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().unwrap();
+    let project_dir = dir.path().join("-Users-test-proj");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let file = project_dir.join("session-1.jsonl");
+    // Fixture lines end without a newline; a live file always has one.
+    std::fs::write(&file, format!("{}\n", JSONL_DATA.as_str())).unwrap();
+    let sources = vec![DataSource { path: file.clone() }];
+
+    let analyzer = ClaudeCodeAnalyzer::new();
+
+    let (first, report) = analyzer.parse_conversations_with_report(&sources);
+    assert_eq!(first.len(), 3);
+    assert_eq!(report.reparsed, 1);
+    // Whatever label the file's first entry established must apply to later appends too.
+    let project_hash = first[0].project_hash.clone();
+    assert!(first.iter().all(|m| m.project_hash == project_hash));
+
+    // Nothing changed: no bytes parsed, same result.
+    let (second, report) = analyzer.parse_conversations_with_report(&sources);
+    assert_eq!(second.len(), 3);
+    assert_eq!(report.unchanged, 1);
+    assert_eq!(report.bytes_parsed, 0);
+
+    // Append one assistant turn; only it should be parsed, and it must inherit the project label
+    // even though the entry that defined the label is in the already-parsed prefix.
+    let appended = r#"{"parentUuid":"x","isSidechain":false,"userType":"external","cwd":"D:\\splitrail","sessionId":"502be1cb-cf86-ecce-fe62-89ddec1e7563","version":"1.0.51","type":"assistant","message":{"id":"msg_new","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"later"}],"usage":{"input_tokens":3,"output_tokens":4}},"requestId":"req_new","uuid":"new-uuid","timestamp":"2025-08-02T15:00:00.000Z"}"#;
+    {
+        let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+        writeln!(f, "{appended}").unwrap();
+    }
+    let (third, report) = analyzer.parse_conversations_with_report(&sources);
+    assert_eq!(third.len(), 4);
+    assert_eq!(report.appended, 1);
+    assert_eq!(report.bytes_parsed, appended.len() as u64 + 1);
+    let new_msg = third.iter().find(|m| m.model.as_deref() == Some("claude-opus-5")).unwrap();
+    assert_eq!(new_msg.project_hash, project_hash);
+    assert_eq!(new_msg.stats.input_tokens, 3);
 }

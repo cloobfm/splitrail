@@ -3,21 +3,44 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use crate::analyzer::{Analyzer, DataSource};
+use crate::incremental::{ChunkResult, IncrementalJsonlCache, RefreshReport};
 use crate::models::calculate_total_cost;
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
 use crate::utils::hash_text;
 use std::collections::{HashMap, HashSet};
 
-pub struct ClaudeCodeAnalyzer;
+pub struct ClaudeCodeAnalyzer {
+    /// Per-file parse cache so a reload only parses bytes appended since the last one.
+    cache: IncrementalJsonlCache<JsonlParseState>,
+}
+
+impl Default for ClaudeCodeAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ClaudeCodeAnalyzer {
     pub fn new() -> Self {
-        Self
+        Self {
+            cache: IncrementalJsonlCache::new(),
+        }
+    }
+
+    /// Parse (incrementally) every source and report how much work that took.
+    pub fn parse_conversations_with_report(
+        &self,
+        sources: &[DataSource],
+    ) -> (Vec<ConversationMessage>, RefreshReport) {
+        let (all_entries, report) = self.cache.refresh(sources, |path, reader, state| {
+            // Live files may end mid-line; leave that tail for the next refresh.
+            parse_jsonl_chunk(path, reader, state, false)
+        });
+        (deduplicate_messages_by_local_hash(all_entries), report)
     }
 }
 
@@ -58,25 +81,9 @@ impl Analyzer for ClaudeCodeAnalyzer {
         &self,
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
-        use rayon::iter::{IntoParallelIterator, ParallelIterator};
-
-        // Parse all the files in parallel
-        let all_entries: Vec<ConversationMessage> = sources
-            .into_par_iter()
-            .flat_map(|source| {
-                let file = match File::open(&source.path) {
-                    Ok(file) => file,
-                    Err(e) => {
-                        eprintln!("Failed to open file: {e}");
-                        return Vec::new();
-                    }
-                };
-                let mut reader = BufReader::new(file);
-                parse_jsonl_file(&source.path, &mut reader)
-            })
-            .collect();
-
-        Ok(deduplicate_messages_by_local_hash(all_entries))
+        // Files are parsed in parallel inside the cache; unchanged files are not opened.
+        let (messages, _report) = self.parse_conversations_with_report(&sources);
+        Ok(messages)
     }
 
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
@@ -459,6 +466,20 @@ fn clean_message_text(text: &str) -> String {
     result.trim().to_string()
 }
 
+/// Per-file parser state that must survive across incremental chunks of the same file.
+#[derive(Debug, Default, Clone)]
+pub struct JsonlParseState {
+    /// Project label learned from the first entry's `cwd`; applied to every later message in
+    /// the file, so it has to carry over when we resume parsing appended lines.
+    pub project_label: Option<String>,
+    /// Lines seen so far, so warnings report the true line number after a resume.
+    pub lines_seen: usize,
+}
+
+/// Parse a whole file from the start. Accepts an unterminated final line, which is what you
+/// want for a file that is finished (and for in-memory fixtures). The binary goes through the
+/// incremental cache instead; this stays for tests and benches.
+#[allow(dead_code)]
 pub fn parse_jsonl_file<T>(
     file_path: &Path,
     buffer_reader: &mut BufReader<T>,
@@ -466,23 +487,53 @@ pub fn parse_jsonl_file<T>(
 where
     T: Read,
 {
+    parse_jsonl_chunk(file_path, buffer_reader, &mut JsonlParseState::default(), true).0
+}
+
+/// Parse complete lines from `reader`, which may be positioned partway into the file, carrying
+/// `state` across calls. Returns the messages and the exact number of bytes consumed so the
+/// caller can resume there. With `accept_unterminated_tail == false`, a final line that has no
+/// trailing newline is left unread: a writer may still be appending to it.
+pub fn parse_jsonl_chunk<R>(
+    file_path: &Path,
+    reader: &mut R,
+    state: &mut JsonlParseState,
+    accept_unterminated_tail: bool,
+) -> ChunkResult
+where
+    R: BufRead,
+{
     // We do this instead of using the `sessionId` property on the message objects because
     // forked conversations keep the `sessionId` from the parent.
     let session_id = file_path.file_stem().unwrap().to_str().unwrap();
 
     let project_id_from_path = extract_project_id(file_path);
-    let mut project_label: Option<String> = None;
     let mut entries = Vec::new();
     let file_path_str = file_path.to_string_lossy();
+    let mut consumed: u64 = 0;
+    let mut buf: Vec<u8> = Vec::new();
 
-    for (i, line_result) in buffer_reader.lines().enumerate() {
-        let line = match line_result {
-            Ok(l) if !l.trim().is_empty() => l,
-            _ => continue,
+    loop {
+        buf.clear();
+        let n = match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
         };
+        if buf.last() != Some(&b'\n') && !accept_unterminated_tail {
+            break; // Partial trailing line: a writer is mid-append. Pick it up next time.
+        }
+        consumed += n as u64;
+        state.lines_seen += 1;
+
+        while matches!(buf.last(), Some(b'\n') | Some(b'\r')) {
+            buf.pop();
+        }
+        if buf.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
 
         // Parse the line, filtering various invalid scenarios.
-        let parsed_line = simd_json::from_slice::<ClaudeCodeEntry>(&mut line.clone().into_bytes());
+        let parsed_line = simd_json::from_slice::<ClaudeCodeEntry>(&mut buf);
         let (
             message_id,
             model,
@@ -513,10 +564,10 @@ where
                                                 // i.e. Claude Code-generated system messages.  These have their token usage all
                                                 // 0 anyway.
                                             })) if !matches!(model.as_deref(), Some("<synthetic>")) => {
-                    if project_label.is_none() {
+                    if state.project_label.is_none() {
                         if let Some(cwd) = &entry.cwd {
                             if let Some(label) = Path::new(cwd).file_name().and_then(|n| n.to_str()) {
-                                project_label = Some(label.to_string());
+                                state.project_label = Some(label.to_string());
                             }
                         }
                     }
@@ -536,7 +587,7 @@ where
                     crate::utils::warn_once(format!(
                         "Skipping invalid entry in {} line {}: {}",
                         file_path.display(),
-                        i + 1,
+                        state.lines_seen,
                         e
                     ));
                     continue;
@@ -613,7 +664,8 @@ where
             application: Application::ClaudeCode,
             model: model.clone(),
             date: timestamp,
-            project_hash: project_label
+            project_hash: state
+                .project_label
                 .clone()
                 .unwrap_or_else(|| project_id_from_path.clone()),
             conversation_hash: hash_text(&file_path_str),
@@ -628,7 +680,7 @@ where
         entries.push(msg);
     }
 
-    entries
+    (entries, consumed)
 }
 
 // Type alias for token fingerprint tracking to avoid type complexity

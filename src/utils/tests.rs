@@ -195,10 +195,6 @@ mod tests {
         create_test_message_with_stats_and_role(date_str, 1000, 500, 1.0, role)
     }
 
-    fn create_test_message_with_stats(date_str: &str, input_tokens: u64, output_tokens: u64, cost: f64) -> ConversationMessage {
-        create_test_message_with_stats_and_role(date_str, input_tokens, output_tokens, cost, MessageRole::User)
-    }
-
     fn create_test_message_with_model(date_str: &str, model: &str) -> ConversationMessage {
         ConversationMessage {
             application: Application::ClaudeCode,
