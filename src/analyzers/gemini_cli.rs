@@ -1,3 +1,11 @@
+//! Gemini CLI analyzer. **Retired 2026-09.**
+//!
+//! Google stopped serving Gemini CLI requests for free, Google AI Pro, and Google AI Ultra
+//! accounts on 2026-06-18 and folded the product into Antigravity CLI. Only enterprise Code
+//! Assist licenses and raw API-key users can still run it. This analyzer is no longer registered
+//! in `create_analyzer_registry`; the code is kept so historical data can be re-enabled by anyone
+//! who still has a working setup. See `docs/GEMINI_CLI_DEPRECATION.md`.
+
 use crate::analyzer::{Analyzer, DataSource};
 use crate::models::{calculate_cache_cost, calculate_input_cost, calculate_output_cost};
 use crate::types::{

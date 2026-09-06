@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.16] - 2026-09-06
+
+### Removed
+- Gemini CLI analyzer is no longer registered. Google ended Gemini CLI service for free, AI Pro, and AI Ultra accounts on 2026-06-18 in favor of Antigravity CLI, so no new data can arrive for individual users. The Gemini CLI tab, its reload work, and the `Gemini CLI sessions failed to parse` startup warning are gone. The analyzer source, the `GeminiCli` application variant, and Gemini model pricing stay in the tree; re-enable by uncommenting one line in `create_analyzer_registry`. See `docs/GEMINI_CLI_DEPRECATION.md`.
+
 ## [2.0.0-dash-0.15] - 2026-09-05
 
 ### Changed

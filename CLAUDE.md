@@ -32,7 +32,7 @@ Splitrail is a comprehensive agentic AI coding tool usage analyzer written in Ru
 2. **Analyzer Framework** (`src/analyzer.rs`): Trait-based analyzer architecture for multiple AI tools
 3. **Claude Code Analyzer** (`src/analyzers/claude_code.rs`): Analysis engine for Claude Code data
 4. **Codex CLI Analyzer** (`src/analyzers/codex_cli.rs`): Analysis engine for Codex CLI data
-5. **Gemini CLI Analyzer** (`src/analyzers/gemini_cli.rs`): Analysis engine for Gemini CLI data
+5. **Gemini CLI Analyzer** (`src/analyzers/gemini_cli.rs`): Retired 2026-09, no longer registered (see `docs/GEMINI_CLI_DEPRECATION.md`)
 6. **GitHub Copilot Analyzer** (`src/analyzers/copilot.rs`): Analysis engine for GitHub Copilot Chat data
 7. **Cline Analyzer** (`src/analyzers/cline.rs`): Analysis engine for Cline data
 8. **Roo Code Analyzer** (`src/analyzers/roo_code.rs`): Analysis engine for Roo Code data
@@ -64,7 +64,7 @@ Splitrail is a comprehensive agentic AI coding tool usage analyzer written in Ru
 1. **Multi-Tool Data Discovery**:
    - Claude Code: `~/.claude/projects` directories (JSONL files)
    - Codex CLI: `~/.codex/sessions/**/*.jsonl` files
-   - Gemini CLI: `~/.gemini/tmp/*/chats/*.json` directories (JSON session files)
+   - Gemini CLI (retired): `~/.gemini/tmp/*/chats/*.json` directories (JSON session files)
    - GitHub Copilot: `~/.vscode/extensions/github.copilot-chat-*/sessions/*.json` files (VSCode, Cursor, Insiders variants)
    - WARP: `~/Library/Application Support/Warp/warp_network.log` (terminal telemetry) + GraphQL API at `app.warp.dev/graphql/v2` (conversation data)
    - Cline, Roo Code, Kilo Code, Qwen Code: Various VSCode extension data directories
@@ -171,7 +171,7 @@ auto_upload = false
 ### Multi-Tool Support
 - **Claude Code**: Full support for JSONL conversation files, TodoWrite/TodoRead tracking
 - **Codex CLI**: Command-line coding agent with shell command execution, reasoning model support, and token tracking
-- **Gemini CLI**: JSON session parsing with thoughts tracking and multi-dimensional tokens
+- **Gemini CLI**: retired 2026-09 (Google ended individual-account service on 2026-06-18); analyzer kept in tree but not registered
 - **GitHub Copilot**: Chat session analysis from VSCode/Cursor/Insiders extensions with tool invocation tracking
 - **WARP**: Terminal telemetry and GraphQL API conversation data with credits tracking, multi-model usage, comprehensive tool stats, and code modification metrics (lines added/removed)
 - **Cline, Roo Code, Kilo Code, Qwen Code**: Additional VSCode extension analyzers for comprehensive coverage

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use analyzer::AnalyzerRegistry;
 use analyzers::{
-    ClaudeCodeAnalyzer, ClineAnalyzer, CodexCliAnalyzer, DroidCliAnalyzer, GeminiCliAnalyzer, KiloCodeAnalyzer,
+    ClaudeCodeAnalyzer, ClineAnalyzer, CodexCliAnalyzer, DroidCliAnalyzer, KiloCodeAnalyzer,
     KiroCliAnalyzer, OpenCodeAnalyzer, QwenCodeAnalyzer, WarpDevAnalyzer,
 };
 
@@ -186,7 +186,8 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     registry.register(ClineAnalyzer::new());
     // registry.register(RooCodeAnalyzer::new()); // Temporarily disabled
     registry.register(KiloCodeAnalyzer::new());
-    registry.register(GeminiCliAnalyzer::new());
+    // registry.register(GeminiCliAnalyzer::new()); // Retired 2026-09: Google shut Gemini CLI down for
+    // individual accounts on 2026-06-18 in favor of Antigravity CLI. See docs/GEMINI_CLI_DEPRECATION.md.
     registry.register(QwenCodeAnalyzer::new());
     registry.register(CodexCliAnalyzer::new());
     registry.register(DroidCliAnalyzer::new());

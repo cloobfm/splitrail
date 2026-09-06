@@ -218,7 +218,6 @@ fn create_test_registry() -> AnalyzerRegistry {
     registry.register(KiloCodeAnalyzer::new());
     registry.register(CodexCliAnalyzer::new());
     registry.register(WarpDevAnalyzer::new());
-    registry.register(GeminiCliAnalyzer::new());
     registry.register(ClineAnalyzer::new());
     registry
 }
