@@ -146,6 +146,11 @@ pub enum ContentBlock {
     Image {
         source: ImageSource,
     },
+    /// Any block type this parser does not model (`tool_reference` inside ToolSearch results,
+    /// `fallback`, `server_tool_use`, ...). Without this, one unfamiliar block rejects the
+    /// entire JSONL line, including its token usage.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +243,12 @@ enum ClaudeCodeEntry {
     Message(ClaudeCodeMessageEntry),
     #[serde(rename = "queue-operation")]
     QueueOperation(ClaudeCodeQueueOperationEntry),
+    /// Any other record type Claude Code writes (attachment, cost-state, last-prompt, mode,
+    /// permission-mode, custom-title, worktree-state, ...). None of these carry token usage,
+    /// and new ones appear with most Claude Code releases, so they are skipped silently
+    /// instead of being reported as invalid entries.
+    #[serde(other)]
+    Other,
 }
 
 pub mod tool_schema {
@@ -394,6 +405,7 @@ pub fn extract_text_content(content: &Content) -> Option<String> {
                     ContentBlock::Image { .. } => {
                         all_content.push("Image".to_string());
                     }
+                    ContentBlock::Other => {}
                 }
             }
 

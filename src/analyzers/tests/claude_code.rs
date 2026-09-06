@@ -389,3 +389,36 @@ fn test_role_determination_logic() {
     assert_eq!(messages[2].stats.input_tokens, 0);
     assert_eq!(messages[2].stats.output_tokens, 0);
 }
+
+#[test]
+fn test_unknown_entry_types_do_not_warn() {
+    // Claude Code writes many housekeeping record types (attachment, cost-state, last-prompt, ...)
+    // that carry no token usage. They must be skipped silently, not reported as invalid entries.
+    let jsonl = concat!(
+        r#"{"type":"last-prompt","leafUuid":"abc","sessionId":"s1"}"#, "\n",
+        r#"{"type":"attachment","attachment":{"type":"file"},"cwd":"/tmp","sessionId":"s1","timestamp":"2026-09-05T00:00:00.000Z","uuid":"u1","parentUuid":null,"isSidechain":false,"userType":"external","version":"2.0.0","entrypoint":"cli","gitBranch":"main"}"#, "\n",
+        r#"{"type":"cost-state","sessionId":"s1","totalCostUSD":1.5,"modelUsage":{}}"#, "\n",
+        r#"{"type":"some-future-record","sessionId":"s1"}"#, "\n",
+        // ToolSearch results: tool_result whose content is a list of `tool_reference` blocks.
+        r#"{"parentUuid":"u2","isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"s1","version":"2.0.0","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"tool_reference","tool_name":"WebSearch"}]}]},"uuid":"u3","timestamp":"2026-09-05T00:00:02.000Z","toolUseResult":{"matches":["WebSearch"],"query":"select:WebSearch"}}"#, "\n",
+        // Assistant message with an unmodeled `fallback` block: its usage must still be counted.
+        r#"{"parentUuid":"u3","isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"s1","version":"2.0.0","type":"assistant","message":{"id":"msg_2","role":"assistant","model":"claude-opus-5","content":[{"type":"fallback","model":"claude-opus-4-8"},{"type":"text","text":"ok"}],"usage":{"input_tokens":7,"output_tokens":3}},"uuid":"u4","timestamp":"2026-09-05T00:00:03.000Z","requestId":"req_2"}"#, "\n",
+        r#"{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"s1","version":"2.0.0","type":"assistant","message":{"id":"msg_1","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":5}},"uuid":"u2","timestamp":"2026-09-05T00:00:01.000Z","requestId":"req_1"}"#, "\n",
+    );
+    let path = Path::new("/unknown-types-test/s1.jsonl");
+    let mut reader = BufReader::new(Cursor::new(jsonl));
+    let messages = parse_jsonl_file(path, &mut reader);
+
+    // Tool-result-only user turns are intentionally dropped by the parser, so only the two
+    // assistant messages come back. The tool_reference line is covered by the warning check.
+    assert_eq!(messages.len(), 2, "both assistant messages should parse");
+    assert!(
+        messages.iter().any(|m| m.stats.input_tokens == 7),
+        "usage survives an unmodeled block"
+    );
+    let noisy: Vec<String> = crate::utils::get_warnings()
+        .into_iter()
+        .filter(|w| w.contains("unknown-types-test"))
+        .collect();
+    assert!(noisy.is_empty(), "unknown entry types should not warn, got: {noisy:?}");
+}
