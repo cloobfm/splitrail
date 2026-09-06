@@ -278,6 +278,114 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         caching: CachingSupport::None,
     },
 
+    // OpenAI 2026 models (GPT-5.1 through GPT-6)
+    "gpt-6-astra" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 10.0,
+            output_per_1m: 50.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 1.0,
+        },
+    },
+    "gpt-5.6-sol" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 4.0,
+            output_per_1m: 20.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.4,
+        },
+    },
+    "gpt-5.6-terra" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 2.0,
+            output_per_1m: 12.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.2,
+        },
+    },
+    "gpt-5.6-luna" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.2,
+            output_per_1m: 1.2,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.02,
+        },
+    },
+    "gpt-5.5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 5.0,
+            output_per_1m: 30.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.5,
+        },
+    },
+    "gpt-5.5-pro" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 30.0,
+            output_per_1m: 180.0,
+        },
+        caching: CachingSupport::None,
+    },
+    "gpt-5.4" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 2.5,
+            output_per_1m: 15.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.25,
+        },
+    },
+    "gpt-5.4-mini" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.75,
+            output_per_1m: 4.5,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.075,
+        },
+    },
+    "gpt-5.4-nano" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.2,
+            output_per_1m: 1.25,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.02,
+        },
+    },
+    "gpt-5.3-codex" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.75,
+            output_per_1m: 14.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.175,
+        },
+    },
+    "gpt-5.2" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.75,
+            output_per_1m: 14.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.175,
+        },
+    },
+    "gpt-5.1" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.25,
+            output_per_1m: 10.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.125,
+        },
+    },
+
     // Anthropic Models
     "claude-opus-4-1" => ModelInfo {
         pricing: PricingStructure::Flat {
@@ -397,6 +505,108 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         caching: CachingSupport::Anthropic {
             cache_write_per_1m: 6.25,
             cache_read_per_1m: 0.5,
+        },
+    },
+
+    // Anthropic 2026 models (Claude 4.6 through Fable 5.1). Cache write = 5m rate (1.25x).
+    "claude-fable-5-1" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 10.0,
+            output_per_1m: 50.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 12.5,
+            cache_read_per_1m: 0.25,
+        },
+    },
+    "claude-mythos-5-1" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 10.0,
+            output_per_1m: 50.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 12.5,
+            cache_read_per_1m: 0.25,
+        },
+    },
+    "claude-fable-5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 10.0,
+            output_per_1m: 50.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 12.5,
+            cache_read_per_1m: 1.0,
+        },
+    },
+    "claude-mythos-5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 10.0,
+            output_per_1m: 50.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 12.5,
+            cache_read_per_1m: 1.0,
+        },
+    },
+    "claude-opus-5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 5.0,
+            output_per_1m: 25.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 6.25,
+            cache_read_per_1m: 0.5,
+        },
+    },
+    "claude-opus-4-8" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 5.0,
+            output_per_1m: 25.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 6.25,
+            cache_read_per_1m: 0.5,
+        },
+    },
+    "claude-opus-4-7" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 5.0,
+            output_per_1m: 25.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 6.25,
+            cache_read_per_1m: 0.5,
+        },
+    },
+    "claude-opus-4-6" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 5.0,
+            output_per_1m: 25.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 6.25,
+            cache_read_per_1m: 0.5,
+        },
+    },
+    "claude-sonnet-5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 2.0,
+            output_per_1m: 10.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 2.5,
+            cache_read_per_1m: 0.2,
+        },
+    },
+    "claude-sonnet-4-6" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 3.0,
+            output_per_1m: 15.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 3.75,
+            cache_read_per_1m: 0.3,
         },
     },
 
@@ -634,6 +844,116 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
     },
 
+    // Google Gemini 3.x models
+    "gemini-3-flash-preview" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.5,
+            output_per_1m: 3.0,
+        },
+        caching: CachingSupport::Google {
+            tiers: &[CachingTier {
+                max_tokens: None,
+                cached_input_per_1m: 0.05,
+            }],
+        },
+    },
+    "gemini-3.1-pro-preview" => ModelInfo {
+        pricing: PricingStructure::Tiered {
+            tiers: &[
+                PricingTier {
+                    max_tokens: Some(200_000),
+                    input_per_1m: 2.0,
+                    output_per_1m: 12.0,
+                },
+                PricingTier {
+                    max_tokens: None,
+                    input_per_1m: 4.0,
+                    output_per_1m: 18.0,
+                },
+            ],
+        },
+        caching: CachingSupport::Google {
+            tiers: &[
+                CachingTier {
+                    max_tokens: Some(200_000),
+                    cached_input_per_1m: 0.2,
+                },
+                CachingTier {
+                    max_tokens: None,
+                    cached_input_per_1m: 0.4,
+                },
+            ],
+        },
+    },
+    "gemini-3.1-flash-lite" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.25,
+            output_per_1m: 1.5,
+        },
+        caching: CachingSupport::Google {
+            tiers: &[CachingTier {
+                max_tokens: None,
+                cached_input_per_1m: 0.025,
+            }],
+        },
+    },
+    "gemini-3.5-flash" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.5,
+            output_per_1m: 9.0,
+        },
+        caching: CachingSupport::Google {
+            tiers: &[CachingTier {
+                max_tokens: None,
+                cached_input_per_1m: 0.15,
+            }],
+        },
+    },
+    "gemini-3.5-flash-lite" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.3,
+            output_per_1m: 2.5,
+        },
+        caching: CachingSupport::None,
+    },
+    // 3.6/3.7/3.8 Flash: introductory $0.75/$3.75 through 2026-12-31, then $1.50/$7.50
+    "gemini-3.6-flash" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.75,
+            output_per_1m: 3.75,
+        },
+        caching: CachingSupport::Google {
+            tiers: &[CachingTier {
+                max_tokens: None,
+                cached_input_per_1m: 0.075,
+            }],
+        },
+    },
+    "gemini-3.7-flash" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.75,
+            output_per_1m: 3.75,
+        },
+        caching: CachingSupport::Google {
+            tiers: &[CachingTier {
+                max_tokens: None,
+                cached_input_per_1m: 0.075,
+            }],
+        },
+    },
+    "gemini-3.8-flash" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.75,
+            output_per_1m: 3.75,
+        },
+        caching: CachingSupport::Google {
+            tiers: &[CachingTier {
+                max_tokens: None,
+                cached_input_per_1m: 0.075,
+            }],
+        },
+    },
+
     // xAI Models
     "x-ai/grok-code-fast-1" => ModelInfo {
         pricing: PricingStructure::Flat {
@@ -654,11 +974,339 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
     },
 
+    // xAI Grok 4.x (tiered at 200K)
+    "grok-4.6" => ModelInfo {
+        pricing: PricingStructure::Tiered {
+            tiers: &[
+                PricingTier {
+                    max_tokens: Some(200_000),
+                    input_per_1m: 2.0,
+                    output_per_1m: 6.0,
+                },
+                PricingTier {
+                    max_tokens: None,
+                    input_per_1m: 4.0,
+                    output_per_1m: 12.0,
+                },
+            ],
+        },
+        caching: CachingSupport::Google {
+            tiers: &[
+                CachingTier {
+                    max_tokens: Some(200_000),
+                    cached_input_per_1m: 0.5,
+                },
+                CachingTier {
+                    max_tokens: None,
+                    cached_input_per_1m: 1.0,
+                },
+            ],
+        },
+    },
+    "grok-4.5" => ModelInfo {
+        pricing: PricingStructure::Tiered {
+            tiers: &[
+                PricingTier {
+                    max_tokens: Some(200_000),
+                    input_per_1m: 2.0,
+                    output_per_1m: 6.0,
+                },
+                PricingTier {
+                    max_tokens: None,
+                    input_per_1m: 4.0,
+                    output_per_1m: 12.0,
+                },
+            ],
+        },
+        caching: CachingSupport::Google {
+            tiers: &[
+                CachingTier {
+                    max_tokens: Some(200_000),
+                    cached_input_per_1m: 0.3,
+                },
+                CachingTier {
+                    max_tokens: None,
+                    cached_input_per_1m: 0.6,
+                },
+            ],
+        },
+    },
+    "grok-4.3" => ModelInfo {
+        pricing: PricingStructure::Tiered {
+            tiers: &[
+                PricingTier {
+                    max_tokens: Some(200_000),
+                    input_per_1m: 1.25,
+                    output_per_1m: 2.5,
+                },
+                PricingTier {
+                    max_tokens: None,
+                    input_per_1m: 2.5,
+                    output_per_1m: 5.0,
+                },
+            ],
+        },
+        caching: CachingSupport::Google {
+            tiers: &[
+                CachingTier {
+                    max_tokens: Some(200_000),
+                    cached_input_per_1m: 0.2,
+                },
+                CachingTier {
+                    max_tokens: None,
+                    cached_input_per_1m: 0.4,
+                },
+            ],
+        },
+    },
+    "grok-4.20" => ModelInfo {
+        pricing: PricingStructure::Tiered {
+            tiers: &[
+                PricingTier {
+                    max_tokens: Some(200_000),
+                    input_per_1m: 1.25,
+                    output_per_1m: 2.5,
+                },
+                PricingTier {
+                    max_tokens: None,
+                    input_per_1m: 2.5,
+                    output_per_1m: 5.0,
+                },
+            ],
+        },
+        caching: CachingSupport::Google {
+            tiers: &[
+                CachingTier {
+                    max_tokens: Some(200_000),
+                    cached_input_per_1m: 0.2,
+                },
+                CachingTier {
+                    max_tokens: None,
+                    cached_input_per_1m: 0.4,
+                },
+            ],
+        },
+    },
+    "grok-build-0.1" => ModelInfo {
+        pricing: PricingStructure::Tiered {
+            tiers: &[
+                PricingTier {
+                    max_tokens: Some(200_000),
+                    input_per_1m: 1.0,
+                    output_per_1m: 2.0,
+                },
+                PricingTier {
+                    max_tokens: None,
+                    input_per_1m: 2.0,
+                    output_per_1m: 4.0,
+                },
+            ],
+        },
+        caching: CachingSupport::Google {
+            tiers: &[
+                CachingTier {
+                    max_tokens: Some(200_000),
+                    cached_input_per_1m: 0.2,
+                },
+                CachingTier {
+                    max_tokens: None,
+                    cached_input_per_1m: 0.4,
+                },
+            ],
+        },
+    },
+
     // Minimax Models
     "minimax/minimax-m2:free" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 0.00,
             output_per_1m: 0.00,
+        },
+        caching: CachingSupport::None,
+    },
+
+    // MiniMax M-series (standard tier $0.30/$1.20 up to 512K, then $0.60/$2.40)
+    "minimax-m3" => ModelInfo {
+        pricing: PricingStructure::Tiered {
+            tiers: &[
+                PricingTier {
+                    max_tokens: Some(512_000),
+                    input_per_1m: 0.3,
+                    output_per_1m: 1.2,
+                },
+                PricingTier {
+                    max_tokens: None,
+                    input_per_1m: 0.6,
+                    output_per_1m: 2.4,
+                },
+            ],
+        },
+        caching: CachingSupport::None,
+    },
+    "minimax-m2.5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.3,
+            output_per_1m: 1.2,
+        },
+        caching: CachingSupport::None,
+    },
+
+    // DeepSeek V4 (api-docs.deepseek.com; V4-Pro at current 75%-off promotional rate)
+    "deepseek-v4-flash" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.14,
+            output_per_1m: 0.28,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.0028,
+        },
+    },
+    "deepseek-v4-pro" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.435,
+            output_per_1m: 0.87,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.003625,
+        },
+    },
+
+    // Moonshot Kimi (platform.kimi.ai/docs/pricing)
+    "kimi-k3" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 3.0,
+            output_per_1m: 15.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.3,
+        },
+    },
+    "kimi-k2.7-code" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.95,
+            output_per_1m: 4.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.19,
+        },
+    },
+    "kimi-k2.7-code-highspeed" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.9,
+            output_per_1m: 8.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.38,
+        },
+    },
+    "kimi-k2.6" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.95,
+            output_per_1m: 4.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.19,
+        },
+    },
+    "kimi-k2.5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.6,
+            output_per_1m: 3.0,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.12,
+        },
+    },
+
+    // Z.ai GLM (docs.z.ai/guides/overview/pricing)
+    "glm-5.3" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.4,
+            output_per_1m: 4.4,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.26,
+        },
+    },
+    "glm-5.2" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.4,
+            output_per_1m: 4.4,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.26,
+        },
+    },
+    "glm-5.1" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.4,
+            output_per_1m: 4.4,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.26,
+        },
+    },
+    "glm-5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 1.0,
+            output_per_1m: 3.2,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.2,
+        },
+    },
+    "glm-5.3-flash" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.15,
+            output_per_1m: 0.5,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.03,
+        },
+    },
+    "glm-4.7" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.6,
+            output_per_1m: 2.2,
+        },
+        caching: CachingSupport::OpenAI {
+            cached_input_per_1m: 0.11,
+        },
+    },
+    "glm-4.7-flash" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.0,
+            output_per_1m: 0.0,
+        },
+        caching: CachingSupport::None,
+    },
+
+    // Qwen 3.5 / 3.8 (Alibaba Model Studio; cache pricing not published in USD)
+    "qwen3.8-max" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 2.0,
+            output_per_1m: 6.0,
+        },
+        caching: CachingSupport::None,
+    },
+    "qwen3.5-397b-a17b" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.6,
+            output_per_1m: 3.6,
+        },
+        caching: CachingSupport::None,
+    },
+    "qwen3.5-plus" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.4,
+            output_per_1m: 2.4,
+        },
+        caching: CachingSupport::None,
+    },
+    "qwen3.5-flash" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.1,
+            output_per_1m: 0.4,
         },
         caching: CachingSupport::None,
     },
@@ -926,6 +1574,26 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "gpt-5-codex-mini" => "gpt-5-codex-mini",
     "gpt-5.2-codex" => "gpt-5.2-codex",
 
+    "gpt-6-astra" => "gpt-6-astra",
+    "gpt-6" => "gpt-6-astra",
+    "gpt-5.6-sol" => "gpt-5.6-sol",
+    "gpt-5.6" => "gpt-5.6-sol",
+    "gpt-5.6-terra" => "gpt-5.6-terra",
+    "gpt-5.6-luna" => "gpt-5.6-luna",
+    "gpt-5.5" => "gpt-5.5",
+    "gpt-5.5-pro" => "gpt-5.5-pro",
+    "gpt-5.4" => "gpt-5.4",
+    "gpt-5.4-mini" => "gpt-5.4-mini",
+    "gpt-5.4-nano" => "gpt-5.4-nano",
+    "gpt-5.3-codex" => "gpt-5.3-codex",
+    "gpt-5.3-codex-spark" => "gpt-5.3-codex",
+    "codex-auto-review" => "gpt-5.3-codex",
+    "gpt-5.2" => "gpt-5.2",
+    "gpt-5.1" => "gpt-5.1",
+    "gpt-5.1-codex" => "gpt-5.1-codex",
+    "gpt-5.1-codex-mini" => "gpt-5.1-codex-mini",
+    "gpt-5.1-codex-max" => "gpt-5.1-codex-max",
+
     // Anthropic aliases
     "claude-opus-4" => "claude-opus-4",
     "claude-opus-4-20250514" => "claude-opus-4",
@@ -955,6 +1623,32 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "claude-3-opus-20240229" => "claude-3-opus",
     "claude-3-haiku" => "claude-3-haiku",
     "claude-3-haiku-20240307" => "claude-3-haiku",
+
+    "claude-fable-5-1" => "claude-fable-5-1",
+    "claude-fable-5.1" => "claude-fable-5-1",
+    "fable" => "claude-fable-5-1",
+    "claude-mythos-5-1" => "claude-mythos-5-1",
+    "claude-mythos-5.1" => "claude-mythos-5-1",
+    "mythos" => "claude-mythos-5-1",
+    "claude-fable-5" => "claude-fable-5",
+    "claude-mythos-5" => "claude-mythos-5",
+    "claude-opus-5" => "claude-opus-5",
+    "claude-opus-5-0" => "claude-opus-5",
+    "opus" => "claude-opus-5",
+    "claude-opus-4-8" => "claude-opus-4-8",
+    "claude-opus-4.8" => "claude-opus-4-8",
+    "claude-opus-4-7" => "claude-opus-4-7",
+    "claude-opus-4.7" => "claude-opus-4-7",
+    "claude-opus-4-6" => "claude-opus-4-6",
+    "claude-opus-4.6" => "claude-opus-4-6",
+    "claude-opus-4-5" => "claude-opus-4-5-20251101",
+    "claude-opus-4.5" => "claude-opus-4-5-20251101",
+    "claude-sonnet-5" => "claude-sonnet-5",
+    "claude-sonnet-5-0" => "claude-sonnet-5",
+    "sonnet" => "claude-sonnet-5",
+    "claude-sonnet-4-6" => "claude-sonnet-4-6",
+    "claude-sonnet-4.6" => "claude-sonnet-4-6",
+    "haiku" => "claude-haiku-4-5",
 
     // Google aliases
     "gemini-3-pro-preview-11-2025" => "gemini-3-pro-preview-11-2025",
@@ -990,6 +1684,33 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "gemini-1.5-pro-exp-0827" => "gemini-1.5-pro",
     "gemini-1.5-pro-exp-0801" => "gemini-1.5-pro",
 
+    "gemini-3-flash-preview" => "gemini-3-flash-preview",
+    "gemini-3-flash" => "gemini-3-flash-preview",
+    "gemini-3.1-pro-preview" => "gemini-3.1-pro-preview",
+    "gemini-3.1-pro" => "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite" => "gemini-3.1-flash-lite",
+    "gemini-3.5-flash" => "gemini-3.5-flash",
+    "gemini-3.5-flash-lite" => "gemini-3.5-flash-lite",
+    "gemini-3.6-flash" => "gemini-3.6-flash",
+    "gemini-3.7-flash" => "gemini-3.7-flash",
+    "gemini-3.8-flash" => "gemini-3.8-flash",
+
+    // xAI aliases
+    "grok-4.6" => "grok-4.6",
+    "x-ai/grok-4.6" => "grok-4.6",
+    "grok-4.5" => "grok-4.5",
+    "x-ai/grok-4.5" => "grok-4.5",
+    "grok-4.3" => "grok-4.3",
+    "x-ai/grok-4.3" => "grok-4.3",
+    "grok-4.20" => "grok-4.20",
+    "x-ai/grok-4.20" => "grok-4.20",
+    "grok-4.20-0309-reasoning" => "grok-4.20",
+    "grok-4.20-0309-non-reasoning" => "grok-4.20",
+    "grok-4.20-multi-agent-0309" => "grok-4.20",
+    "grok-build-0.1" => "grok-build-0.1",
+    "x-ai/grok-build-0.1" => "grok-build-0.1",
+    "grok-build" => "grok-build-0.1",
+
     // Qwen aliases
     "qwen-3-235b-a22b-instruct" => "qwen-3-235b-a22b-instruct-2507",
     "qwen-3-235b" => "qwen-3-235b-a22b-instruct-2507",
@@ -997,6 +1718,68 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "zai-glm-4.6" => "zai-glm-4.6",
     "deepseek-coder-v2" => "deepseek-coder-v2:latest",
     "deepseek-coder" => "deepseek-coder-v2:latest",
+
+    "qwen3.8-max" => "qwen3.8-max",
+    "qwen/qwen3.8-max" => "qwen3.8-max",
+    "qwen3.5-397b-a17b" => "qwen3.5-397b-a17b",
+    "qwen/qwen3.5-397b-a17b" => "qwen3.5-397b-a17b",
+    "qwen3.5-397b" => "qwen3.5-397b-a17b",
+    "qwen3.5-plus" => "qwen3.5-plus",
+    "qwen/qwen3.5-plus" => "qwen3.5-plus",
+    "qwen3.5-plus-20260420" => "qwen3.5-plus",
+    "qwen/qwen3.5-plus-20260420" => "qwen3.5-plus",
+    "qwen3.5-flash" => "qwen3.5-flash",
+    "qwen/qwen3.5-flash" => "qwen3.5-flash",
+
+    // Z.ai GLM aliases
+    "z-ai/glm-4.6" => "zai-glm-4.6",
+    "glm-5.3" => "glm-5.3",
+    "z-ai/glm-5.3" => "glm-5.3",
+    "zai-glm-5.3" => "glm-5.3",
+    "glm-5.2" => "glm-5.2",
+    "z-ai/glm-5.2" => "glm-5.2",
+    "zai-glm-5.2" => "glm-5.2",
+    "glm-5.1" => "glm-5.1",
+    "z-ai/glm-5.1" => "glm-5.1",
+    "zai-glm-5.1" => "glm-5.1",
+    "glm-5" => "glm-5",
+    "z-ai/glm-5" => "glm-5",
+    "zai-glm-5" => "glm-5",
+    "glm-5.3-flash" => "glm-5.3-flash",
+    "z-ai/glm-5.3-flash" => "glm-5.3-flash",
+    "glm-4.7" => "glm-4.7",
+    "z-ai/glm-4.7" => "glm-4.7",
+    "zai-glm-4.7" => "glm-4.7",
+    "glm-4.7-flash" => "glm-4.7-flash",
+    "z-ai/glm-4.7-flash" => "glm-4.7-flash",
+
+    // DeepSeek aliases
+    "deepseek-v4-flash" => "deepseek-v4-flash",
+    "deepseek/deepseek-v4-flash" => "deepseek-v4-flash",
+    "deepseek-chat" => "deepseek-v4-flash",
+    "deepseek-reasoner" => "deepseek-v4-flash",
+    "deepseek-v4-pro" => "deepseek-v4-pro",
+    "deepseek/deepseek-v4-pro" => "deepseek-v4-pro",
+
+    // Moonshot Kimi aliases
+    "kimi-k3" => "kimi-k3",
+    "moonshotai/kimi-k3" => "kimi-k3",
+    "moonshot/kimi-k3" => "kimi-k3",
+    "kimi-k2.7-code" => "kimi-k2.7-code",
+    "moonshotai/kimi-k2.7-code" => "kimi-k2.7-code",
+    "kimi-k2.7-code-highspeed" => "kimi-k2.7-code-highspeed",
+    "kimi-k2.6" => "kimi-k2.6",
+    "moonshotai/kimi-k2.6" => "kimi-k2.6",
+    "kimi-k2.5" => "kimi-k2.5",
+    "moonshotai/kimi-k2.5" => "kimi-k2.5",
+
+    // MiniMax aliases
+    "minimax-m3" => "minimax-m3",
+    "minimax/minimax-m3" => "minimax-m3",
+    "MiniMax-M3" => "minimax-m3",
+    "minimax-m2.5" => "minimax-m2.5",
+    "minimax/minimax-m2.5" => "minimax-m2.5",
+    "MiniMax-M2.5" => "minimax-m2.5",
 
     // OpenCode aliases
     "zen" => "opencode-zen",
@@ -1181,4 +1964,77 @@ fn calculate_tiered_cache_cost(tokens: u64, tiers: &[CachingTier]) -> f64 {
     }
 
     total_cost
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frontier_2026_models_resolve() {
+        for name in [
+            // Anthropic
+            "claude-fable-5-1",
+            "claude-fable-5",
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-opus-4-6",
+            "claude-sonnet-5",
+            "claude-sonnet-4-6",
+            "claude-opus-4-5",
+            "opus",
+            "sonnet",
+            "haiku",
+            "fable",
+            // OpenAI
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.3-codex",
+            "gpt-5.2",
+            "gpt-5.1",
+            "codex-auto-review",
+            // Google
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.5-flash",
+            "gemini-3.8-flash",
+            // xAI
+            "grok-4.6",
+            "x-ai/grok-4.6",
+            "grok-4.20-0309-reasoning",
+            "grok-build-0.1",
+            // Others
+            "deepseek-v4-flash",
+            "deepseek-chat",
+            "kimi-k3",
+            "glm-5.2",
+            "z-ai/glm-5.2",
+            "minimax/minimax-m3",
+            "qwen3.5-plus",
+            "qwen/qwen3.5-plus-20260420",
+        ] {
+            assert!(
+                get_model_info(name).is_some(),
+                "{name} should resolve to a priced model"
+            );
+        }
+    }
+
+    #[test]
+    fn fable_5_1_cache_read_is_quarter_dollar() {
+        // 1M cache-read tokens on Fable 5.1 = $0.25; on Fable 5 = $1.00
+        assert!((calculate_cache_cost("claude-fable-5-1", 0, 1_000_000) - 0.25).abs() < 1e-9);
+        assert!((calculate_cache_cost("claude-fable-5", 0, 1_000_000) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn grok_4_6_uses_higher_tier_past_200k() {
+        // Existing tier math is progressive: first 200K at $2/M, remainder at $4/M.
+        assert!((calculate_input_cost("grok-4.6", 100_000) - 0.2).abs() < 1e-9);
+        assert!((calculate_input_cost("grok-4.6", 300_000) - 0.8).abs() < 1e-9);
+    }
 }
