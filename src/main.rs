@@ -290,8 +290,8 @@ async fn run_upload() -> Result<()> {
     let registry = create_analyzer_registry();
     let stats = registry.load_all_stats().await?;
     let mut messages = vec![];
-    for analyzer_stats in stats.analyzer_stats {
-        messages.extend(analyzer_stats.messages);
+    for analyzer_stats in &stats.analyzer_stats {
+        messages.extend(analyzer_stats.messages.iter().cloned());
     }
 
     // Load config file to get formatting options

@@ -1,12 +1,12 @@
 [package]
 name = "splitrail-dashboard"
-version = "2.0.0-dash-0.14"
+version = "2.0.0-dash-0.15"
 edition = "2024"
 license = "MIT"
 authors = ["Piebald LLC <support@piebald.ai>"]
 
 [dependencies]
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = "1.0"
 anyhow = "1.0"
 glob = "0.3"

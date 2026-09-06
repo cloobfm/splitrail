@@ -381,6 +381,7 @@ async fn run_app(
     let mut filtered_stats: Vec<&AgenticCodingToolStats> = current_stats
         .analyzer_stats
         .iter()
+        .map(std::sync::Arc::as_ref)
         .filter(|stats| has_data(stats))
         .collect();
 
@@ -431,6 +432,7 @@ async fn run_app(
             filtered_stats = current_stats
                 .analyzer_stats
                 .iter()
+                .map(std::sync::Arc::as_ref)
                 .filter(|stats| has_data(stats))
                 .collect();
             // Recalculate summary data when stats change
@@ -2031,6 +2033,7 @@ fn update_table_states(
     let filtered_analyzers: Vec<&AgenticCodingToolStats> = current_stats
         .analyzer_stats
         .iter()
+        .map(std::sync::Arc::as_ref)
         .filter(|stats| has_data(stats))
         .collect();
 

@@ -165,7 +165,10 @@ pub struct AgenticCodingToolStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiAnalyzerStats {
-    pub analyzer_stats: Vec<AgenticCodingToolStats>,
+    /// Shared, not cloned: a reload replaces one analyzer's entry and every consumer (watch
+    /// channel, TUI, notifier, uploader) holds the same allocation. Cloning this struct is a
+    /// handful of refcount bumps rather than a copy of ~100K messages.
+    pub analyzer_stats: Vec<std::sync::Arc<AgenticCodingToolStats>>,
 }
 
 #[derive(Debug, Deserialize)]

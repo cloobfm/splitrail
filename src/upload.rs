@@ -147,8 +147,8 @@ pub async fn perform_background_upload(
         }
 
         let mut messages = vec![];
-        for analyzer_stats in stats.analyzer_stats {
-            messages.extend(analyzer_stats.messages);
+        for analyzer_stats in &stats.analyzer_stats {
+            messages.extend(analyzer_stats.messages.iter().cloned());
         }
 
         let messages = utils::get_messages_later_than(config.upload.last_date_uploaded, messages)

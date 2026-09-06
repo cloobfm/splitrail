@@ -105,7 +105,8 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
             .collect();
 
         let mut report = RefreshReport::default();
-        let mut messages = Vec::new();
+        let total: usize = results.iter().map(|(m, _)| m.len()).sum();
+        let mut messages = Vec::with_capacity(total);
         for (msgs, outcome) in results {
             match outcome {
                 Outcome::Unchanged => report.unchanged += 1,

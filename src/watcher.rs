@@ -420,7 +420,8 @@ impl RealtimeStatsManager {
             return Ok(());
         };
 
-        let new_stats = analyzer.get_stats().await?;
+        let new_stats = Arc::new(analyzer.get_stats().await?);
+        // Arc clones: the other analyzers' stats are shared, not copied.
         let mut updated_analyzer_stats = self.current_stats.analyzer_stats.clone();
 
         if let Some(pos) = updated_analyzer_stats
@@ -467,7 +468,7 @@ impl RealtimeStatsManager {
         // Collect all messages from current stats
         let mut messages = vec![];
         for analyzer_stats in &self.current_stats.analyzer_stats {
-            messages.extend(analyzer_stats.messages.clone());
+            messages.extend(analyzer_stats.messages.iter().cloned());
         }
 
         // Filter messages to upload only those not yet uploaded

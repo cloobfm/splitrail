@@ -177,7 +177,7 @@ impl AnalyzerRegistry {
 
         for analyzer in available_analyzers {
             match analyzer.get_stats().await {
-                Ok(stats) => all_stats.push(stats),
+                Ok(stats) => all_stats.push(std::sync::Arc::new(stats)),
                 Err(e) => {
                     eprintln!(
                         "⚠️  Error analyzing {} data: {}",

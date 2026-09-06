@@ -740,23 +740,16 @@ pub fn draw_summary_view(
             )];
             for &idx in visible_indices {
                 let analyzer_stats = &filtered_stats[idx];
-                let today = chrono::Local::now()
-                    .date_naive()
-                    .format("%Y-%m-%d")
-                    .to_string();
+                let today_date = chrono::Local::now().date_naive();
+                let today = today_date.format("%Y-%m-%d").to_string();
 
-                // Calculate health for this specific CLI
+                // Calculate health for this specific CLI. Compare dates directly: formatting
+                // every message's date to a string here was the hottest frame in the render
+                // profile (chrono strftime for ~100K messages per redraw).
                 let cli_messages: Vec<_> = analyzer_stats
                     .messages
                     .iter()
-                    .filter(|msg| {
-                        msg.date
-                            .with_timezone(&chrono::Local)
-                            .date_naive()
-                            .format("%Y-%m-%d")
-                            .to_string()
-                            == today
-                    })
+                    .filter(|msg| msg.date.with_timezone(&chrono::Local).date_naive() == today_date)
                     .cloned()
                     .collect();
 
