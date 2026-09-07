@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.17] - 2026-09-07
+
+### Fixed
+- The incremental cache no longer deep-copies its messages on every refresh. `IncrementalJsonlCache::refresh` returned a freshly cloned `Vec<ConversationMessage>` on *every* path, including `Outcome::Unchanged`, so a reload that touched no files still re-allocated the entire corpus. It now hands back per-file `Arc<Vec<ConversationMessage>>` chunks, and an unchanged file costs a refcount bump instead of a copy. This is the clone that 0.15's `Arc` work did not reach: that change removed the copies *downstream* of the cache, while this one sat upstream of them.
+- Deduplication consumes the shared chunks directly (`deduplicate_message_chunks`) rather than first flattening them into one large owned vector, removing another full copy of the corpus per reload.
+- A refresh no longer emits empty chunks for missing or still-empty files.
+
+### Performance
+- Real corpus (128 files, ~70.8K messages, release build), RSS across six refreshes with no file changes: 490.7 MB held / 520.4 MB retained before, 305.5 MB held / 335.2 MB retained after. The prior ~2 MB-per-refresh creep is gone — RSS is now identical from the fourth refresh onward.
+
+### Added
+- `unchanged_file_hands_back_the_same_allocation_instead_of_a_copy` asserts that an unchanged file's messages keep their heap addresses across refreshes, so this regression cannot return silently.
+
 ## [2.0.0-dash-0.16] - 2026-09-06
 
 ### Removed

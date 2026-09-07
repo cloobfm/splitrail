@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use crate::analyzer::{Analyzer, DataSource};
-use crate::incremental::{ChunkResult, IncrementalJsonlCache, RefreshReport};
+use crate::incremental::{ChunkResult, IncrementalJsonlCache, MessageChunk, RefreshReport};
 use crate::models::calculate_total_cost;
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
 use crate::utils::hash_text;
@@ -40,7 +40,7 @@ impl ClaudeCodeAnalyzer {
             // Live files may end mid-line; leave that tail for the next refresh.
             parse_jsonl_chunk(path, reader, state, false)
         });
-        (deduplicate_messages_by_local_hash(all_entries), report)
+        (deduplicate_message_chunks(&all_entries), report)
     }
 }
 
@@ -687,8 +687,14 @@ where
 type TokenFingerprint = (u64, u64, u64, u64, u64);
 type TokenFingerprintMap = HashMap<String, HashSet<TokenFingerprint>>;
 
-pub fn deduplicate_messages_by_local_hash(
-    messages: Vec<ConversationMessage>,
+/// Deduplicate across the cache's shared per-file chunks without first flattening them into one
+/// big owned vector — that concat was a full extra copy of the corpus on every reload (BZL-13).
+pub fn deduplicate_message_chunks(chunks: &[MessageChunk]) -> Vec<ConversationMessage> {
+    dedup_messages(chunks.iter().flat_map(|chunk| chunk.iter()))
+}
+
+pub(crate) fn dedup_messages<'a>(
+    messages: impl Iterator<Item = &'a ConversationMessage>,
 ) -> Vec<ConversationMessage> {
     let mut seen_hashes = HashMap::<String, usize>::new(); // hash -> index in result
     // Track distinct token tuples seen per local_hash to avoid double-counting
@@ -816,11 +822,11 @@ pub fn deduplicate_messages_by_local_hash(
                     .or_default()
                     .insert(fp);
 
-                deduplicated_entries.push(message);
+                deduplicated_entries.push(message.clone());
             }
         } else {
             // No local hash, always keep
-            deduplicated_entries.push(message);
+            deduplicated_entries.push(message.clone());
         }
     }
 
@@ -891,7 +897,7 @@ mod tests {
             },
         ];
 
-        let deduplicated = deduplicate_messages_by_local_hash(messages);
+        let deduplicated = dedup_messages(messages.iter());
 
         // Should have exactly 1 message (all 3 merged)
         assert_eq!(deduplicated.len(), 1);
@@ -948,7 +954,7 @@ mod tests {
             },
         ];
 
-        let deduplicated = deduplicate_messages_by_local_hash(messages);
+        let deduplicated = dedup_messages(messages.iter());
 
         // Should have exactly 1 message (duplicate skipped)
         assert_eq!(deduplicated.len(), 1);
@@ -1008,7 +1014,7 @@ mod tests {
             },
         };
 
-        let dedup = deduplicate_messages_by_local_hash(vec![msg1, msg2]);
+        let dedup = dedup_messages([msg1, msg2].iter());
         assert_eq!(dedup.len(), 1);
         // Tokens unchanged
         assert_eq!(dedup[0].stats.input_tokens, 100);
@@ -1075,7 +1081,7 @@ mod tests {
         };
 
         let messages = vec![a1, a2, b1, b2, a3];
-        let deduplicated = deduplicate_messages_by_local_hash(messages);
+        let deduplicated = dedup_messages(messages.iter());
 
         assert_eq!(deduplicated.len(), 1);
         // Should include A once and B once

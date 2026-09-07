@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use rayon::prelude::*;
@@ -34,6 +34,9 @@ use crate::types::ConversationMessage;
 /// cache can resume exactly there next time.
 pub type ChunkResult = (Vec<ConversationMessage>, u64);
 
+/// One file's parsed messages, shared with the cache rather than copied out of it.
+pub type MessageChunk = Arc<Vec<ConversationMessage>>;
+
 struct CachedFile<S> {
     len: u64,
     modified: Option<SystemTime>,
@@ -41,7 +44,9 @@ struct CachedFile<S> {
     parsed_bytes: u64,
     /// Parser state carried across appends (e.g. a project label learned from the first line).
     state: S,
-    messages: Vec<ConversationMessage>,
+    /// Shared, not cloned: a refresh hands this same allocation to the caller. Deep-copying it
+    /// per refresh re-allocated the whole corpus every reload (BZL-13).
+    messages: Arc<Vec<ConversationMessage>>,
 }
 
 /// Counts of what a refresh had to do. Useful for logging and for tests that want to prove the
@@ -80,14 +85,13 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
         Self::default()
     }
 
-    /// Bring the cache up to date with `sources` and return every message across all of them,
-    /// in source order. `parse` is called only for new, grown, or rewritten files, with a reader
-    /// positioned where parsing should resume and the state from the previous chunk.
-    pub fn refresh<F>(
-        &self,
-        sources: &[DataSource],
-        parse: F,
-    ) -> (Vec<ConversationMessage>, RefreshReport)
+    /// Bring the cache up to date with `sources` and return every file's messages as a shared
+    /// chunk, in source order. `parse` is called only for new, grown, or rewritten files, with a
+    /// reader positioned where parsing should resume and the state from the previous chunk.
+    ///
+    /// Chunks are `Arc`s over the cache's own vectors, so an unchanged file costs a refcount bump
+    /// rather than a copy of its messages.
+    pub fn refresh<F>(&self, sources: &[DataSource], parse: F) -> (Vec<MessageChunk>, RefreshReport)
     where
         F: Fn(&Path, &mut BufReader<File>, &mut S) -> ChunkResult + Sync,
     {
@@ -99,14 +103,13 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
             .filter(|p| seen.insert(*p))
             .collect();
 
-        let results: Vec<(Vec<ConversationMessage>, Outcome)> = paths
+        let results: Vec<(MessageChunk, Outcome)> = paths
             .par_iter()
             .map(|path| self.refresh_one(path, &parse))
             .collect();
 
         let mut report = RefreshReport::default();
-        let total: usize = results.iter().map(|(m, _)| m.len()).sum();
-        let mut messages = Vec::with_capacity(total);
+        let mut chunks = Vec::with_capacity(results.len());
         for (msgs, outcome) in results {
             match outcome {
                 Outcome::Unchanged => report.unchanged += 1,
@@ -120,7 +123,11 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
                 }
                 Outcome::Missing => report.removed += 1,
             }
-            messages.extend(msgs);
+            // An empty chunk carries nothing downstream; skipping it keeps a missing or
+            // still-empty file from padding the result.
+            if !msgs.is_empty() {
+                chunks.push(msgs);
+            }
         }
 
         // Forget files that are no longer discovered.
@@ -130,14 +137,14 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
         files.retain(|p, _| live.contains(p.as_path()));
         report.removed += before - files.len();
 
-        (messages, report)
+        (chunks, report)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<PathBuf, CachedFile<S>>> {
         self.files.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn refresh_one<F>(&self, path: &Path, parse: &F) -> (Vec<ConversationMessage>, Outcome)
+    fn refresh_one<F>(&self, path: &Path, parse: &F) -> (MessageChunk, Outcome)
     where
         F: Fn(&Path, &mut BufReader<File>, &mut S) -> ChunkResult,
     {
@@ -147,7 +154,7 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
             Ok(m) => m,
             Err(_) => {
                 self.lock().remove(path);
-                return (Vec::new(), Outcome::Missing);
+                return (MessageChunk::default(), Outcome::Missing);
             }
         };
         let len = meta.len();
@@ -158,13 +165,13 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
 
         match existing {
             Some(entry) if entry.len == len && entry.modified == modified => {
-                let messages = entry.messages.clone();
+                let messages = Arc::clone(&entry.messages);
                 self.lock().insert(path.to_path_buf(), entry);
                 (messages, Outcome::Unchanged)
             }
             Some(mut entry) if len >= entry.parsed_bytes => {
                 let Ok(mut file) = File::open(path) else {
-                    return (Vec::new(), Outcome::Missing);
+                    return (MessageChunk::default(), Outcome::Missing);
                 };
                 if file.seek(SeekFrom::Start(entry.parsed_bytes)).is_err() {
                     return self.reparse(path, len, modified, parse);
@@ -174,8 +181,10 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
                 entry.parsed_bytes += consumed;
                 entry.len = len;
                 entry.modified = modified;
-                entry.messages.extend(new_messages);
-                let messages = entry.messages.clone();
+                // Copies only when a previous chunk is still alive downstream, and only for
+                // files that actually grew.
+                Arc::make_mut(&mut entry.messages).extend(new_messages);
+                let messages = Arc::clone(&entry.messages);
                 self.lock().insert(path.to_path_buf(), entry);
                 (messages, Outcome::Appended(consumed))
             }
@@ -189,16 +198,17 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
         len: u64,
         modified: Option<SystemTime>,
         parse: &F,
-    ) -> (Vec<ConversationMessage>, Outcome)
+    ) -> (MessageChunk, Outcome)
     where
         F: Fn(&Path, &mut BufReader<File>, &mut S) -> ChunkResult,
     {
         let Ok(file) = File::open(path) else {
-            return (Vec::new(), Outcome::Missing);
+            return (MessageChunk::default(), Outcome::Missing);
         };
         let mut reader = BufReader::new(file);
         let mut state = S::default();
         let (messages, consumed) = parse(path, &mut reader, &mut state);
+        let messages = Arc::new(messages);
         self.lock().insert(
             path.to_path_buf(),
             CachedFile {
@@ -206,7 +216,7 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
                 modified,
                 parsed_bytes: consumed,
                 state,
-                messages: messages.clone(),
+                messages: Arc::clone(&messages),
             },
         );
         (messages, Outcome::Reparsed(consumed))
@@ -257,8 +267,21 @@ mod tests {
         }
     }
 
-    fn contents(msgs: &[ConversationMessage]) -> Vec<String> {
-        msgs.iter().map(|m| m.content.clone().unwrap()).collect()
+    /// Flatten the per-file chunks a refresh returns into their message contents, in order.
+    fn contents(chunks: &[MessageChunk]) -> Vec<String> {
+        chunks
+            .iter()
+            .flat_map(|c| c.iter())
+            .map(|m| m.content.clone().unwrap())
+            .collect()
+    }
+
+    fn hash_ptrs(chunks: &[MessageChunk]) -> Vec<*const u8> {
+        chunks
+            .iter()
+            .flat_map(|c| c.iter())
+            .map(|m| m.global_hash.as_ptr())
+            .collect()
     }
 
     fn append(path: &Path, text: &str) {
@@ -271,6 +294,31 @@ mod tests {
         vec![DataSource {
             path: path.to_path_buf(),
         }]
+    }
+
+    /// The cache exists to avoid re-doing work for unchanged files. Handing back a deep copy of
+    /// every cached message on every refresh defeats that: the message data is re-allocated each
+    /// time, which is what drove RSS to ~7x the real payload (BZL-13). An unchanged file must
+    /// hand back the same allocation it already holds.
+    #[test]
+    fn unchanged_file_hands_back_the_same_allocation_instead_of_a_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("s.jsonl");
+        fs::write(&file, "a\nb\nc\n").unwrap();
+        let calls = AtomicUsize::new(0);
+        let cache = IncrementalJsonlCache::<usize>::new();
+
+        let (first, _) = cache.refresh(&src(&file), line_parser(&calls));
+        let first_ptrs = hash_ptrs(&first);
+
+        let (second, report) = cache.refresh(&src(&file), line_parser(&calls));
+        let second_ptrs = hash_ptrs(&second);
+
+        assert_eq!(report.unchanged, 1, "precondition: the file did not change");
+        assert_eq!(
+            first_ptrs, second_ptrs,
+            "an unchanged file must not re-allocate its messages on refresh"
+        );
     }
 
     #[test]
@@ -290,7 +338,11 @@ mod tests {
         assert_eq!(contents(&msgs), ["1:a", "2:b", "3:c"]);
         assert_eq!(report.unchanged, 1);
         assert_eq!(report.bytes_parsed, 0);
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "unchanged file must not be re-read");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "unchanged file must not be re-read"
+        );
     }
 
     #[test]
@@ -321,14 +373,21 @@ mod tests {
 
         append(&file, "part");
         let (msgs, report) = cache.refresh(&src(&file), line_parser(&calls));
-        assert_eq!(contents(&msgs), ["1:a"], "half-written line must not appear");
+        assert_eq!(
+            contents(&msgs),
+            ["1:a"],
+            "half-written line must not appear"
+        );
         assert_eq!(report.appended, 1);
         assert_eq!(report.bytes_parsed, 0);
 
         append(&file, "ial\n");
         let (msgs, report) = cache.refresh(&src(&file), line_parser(&calls));
         assert_eq!(contents(&msgs), ["1:a", "2:partial"]);
-        assert_eq!(report.bytes_parsed, 8, "the whole line is parsed exactly once");
+        assert_eq!(
+            report.bytes_parsed, 8,
+            "the whole line is parsed exactly once"
+        );
     }
 
     #[test]

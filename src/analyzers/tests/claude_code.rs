@@ -1,5 +1,5 @@
 use crate::analyzers::claude_code::{
-    ClaudeCodeAnalyzer, calculate_cost_from_tokens, deduplicate_messages_by_local_hash, extract_project_id,
+    ClaudeCodeAnalyzer, calculate_cost_from_tokens, dedup_messages, extract_project_id,
     parse_jsonl_file,
 };
 use crate::types::{Application, ConversationMessage, MessageRole, Stats};
@@ -106,7 +106,7 @@ fn test_extract_and_hash_project_id() {
 }
 
 #[test]
-fn test_deduplicate_messages_by_local_hash() {
+fn test_dedup_messages() {
     let cursor = Cursor::new(DUPLICATE_MESSAGES_DATA.clone());
     let mut buf_reader = BufReader::new(cursor);
     let messages = parse_jsonl_file(Path::new("duplicates.jsonl"), &mut buf_reader);
@@ -114,7 +114,7 @@ fn test_deduplicate_messages_by_local_hash() {
     // Should have 2 messages before deduplication
     assert_eq!(messages.len(), 2);
 
-    let deduplicated = deduplicate_messages_by_local_hash(messages);
+    let deduplicated = dedup_messages(messages.iter());
 
     // Deduplication now aggregates messages with the same local_hash
     assert_eq!(deduplicated.len(), 1);
@@ -162,7 +162,7 @@ fn test_deduplicate_messages_by_local_hash() {
     test_messages.push(base_msg);
     test_messages.push(duplicate_msg.clone());
 
-    let deduplicated_test = deduplicate_messages_by_local_hash(test_messages);
+    let deduplicated_test = dedup_messages(test_messages.iter());
     // Aggregation logic merges messages with the same local_hash
     assert_eq!(deduplicated_test.len(), 1);
     // Should keep the first message's metadata but aggregate the tokens
