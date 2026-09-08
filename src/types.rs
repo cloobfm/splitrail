@@ -55,18 +55,23 @@ pub struct ConversationMessage {
     pub content: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DailyStats {
     #[allow(dead_code)]
     pub date: String,
     pub user_messages: u32,
     pub ai_messages: u32,
     pub conversations: u32,
+    /// Time spent actively working on this day: the sum of gaps under 15 minutes between
+    /// consecutive messages. Derived here so the day drill-down does not need the day's raw
+    /// messages, which is what forced the whole corpus to stay resident (BZL-14).
+    #[serde(default)]
+    pub active_seconds: u64,
     pub models: BTreeMap<String, u32>,
     pub stats: Stats,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitInfo {
     pub used_percent: f64,
@@ -74,7 +79,7 @@ pub struct RateLimitInfo {
     pub resets_at: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
     // Token and cost stats

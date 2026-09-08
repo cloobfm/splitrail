@@ -420,7 +420,9 @@ impl RealtimeStatsManager {
             return Ok(());
         };
 
-        let new_stats = Arc::new(analyzer.get_stats().await?);
+        let mut new_stats = analyzer.get_stats().await?;
+        crate::utils::retain_live_window(&mut new_stats, crate::utils::current_live_window_cutoff());
+        let new_stats = Arc::new(new_stats);
         // Arc clones: the other analyzers' stats are shared, not copied.
         let mut updated_analyzer_stats = self.current_stats.analyzer_stats.clone();
 

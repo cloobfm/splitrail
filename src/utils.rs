@@ -353,9 +353,65 @@ pub fn aggregate_by_date_incremental(
     }
 }
 
+/// How much raw message history stays resident. Every live view reads at most the last hour
+/// (token rate, sparkline, waiting-conversation detection); a day gives generous headroom.
+/// Older messages live on only as `DailyStats`, which is the durable form of history.
+pub const LIVE_WINDOW_HOURS: i64 = 24;
+
+/// The oldest message worth keeping in memory.
+///
+/// Normally `now - LIVE_WINDOW_HOURS`. When uploading is configured and its watermark is further
+/// back, the cutoff moves back to the watermark so trimming can never drop something the uploader
+/// still owes the server.
+pub fn live_window_cutoff(
+    now: DateTime<Utc>,
+    upload_watermark_millis: Option<i64>,
+) -> DateTime<Utc> {
+    let window_start = now - chrono::Duration::hours(LIVE_WINDOW_HOURS);
+    match upload_watermark_millis.and_then(DateTime::from_timestamp_millis) {
+        Some(watermark) if watermark < window_start => watermark,
+        _ => window_start,
+    }
+}
+
+/// The cutoff for this machine right now: the live window, pulled back to the upload watermark
+/// when uploading is configured and lagging. Reads config directly so callers cannot forget it.
+pub fn current_live_window_cutoff() -> DateTime<Utc> {
+    let watermark = crate::config::Config::load()
+        .ok()
+        .flatten()
+        .filter(|c| c.is_configured())
+        .map(|c| c.upload.last_date_uploaded);
+    live_window_cutoff(Utc::now(), watermark)
+}
+
+/// Drop messages older than `cutoff`. `daily_stats` is left alone: it already carries their
+/// contribution, so history stays visible in aggregate form.
+pub fn retain_live_window(stats: &mut crate::types::AgenticCodingToolStats, cutoff: DateTime<Utc>) {
+    stats.messages.retain(|msg| msg.date >= cutoff);
+    stats.messages.shrink_to_fit();
+}
+
+/// Gaps longer than this are treated as "away", not as time spent working.
+const ACTIVE_GAP_LIMIT_SECS: i64 = 900;
+
+/// Sum the gaps under [`ACTIVE_GAP_LIMIT_SECS`] between consecutive timestamps. `timestamps` is
+/// sorted in place: callers collect them per day in arbitrary order.
+fn active_seconds_for_day(timestamps: &mut [i64]) -> u64 {
+    timestamps.sort_unstable();
+    timestamps
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|gap| *gap > 0 && *gap < ACTIVE_GAP_LIMIT_SECS)
+        .sum::<i64>() as u64
+}
+
 pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, DailyStats> {
     let mut daily_stats: BTreeMap<String, DailyStats> = BTreeMap::new();
     let mut conversation_start_dates: BTreeMap<String, String> = BTreeMap::new();
+    // Collected per day, then reduced to `active_seconds` once every entry has been seen, since
+    // entries arrive per-file and are not globally ordered.
+    let mut day_timestamps: BTreeMap<String, Vec<i64>> = BTreeMap::new();
 
     for entry in entries {
         let timestamp = &entry.date.with_timezone(&Local);
@@ -373,6 +429,11 @@ pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, Da
                 }
             })
             .or_insert(date.clone());
+
+        day_timestamps
+            .entry(date.clone())
+            .or_default()
+            .push(entry.date.timestamp());
 
         let daily_stats_entry = daily_stats
             .entry(date.clone())
@@ -444,6 +505,13 @@ pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, Da
     for start_date in conversation_start_dates.values() {
         if let Some(daily_stats_entry) = daily_stats.get_mut(start_date) {
             daily_stats_entry.conversations += 1;
+        }
+    }
+
+    // Reduce each day's timestamps to its active time, now that every entry has been seen.
+    for (date, timestamps) in day_timestamps.iter_mut() {
+        if let Some(daily_stats_entry) = daily_stats.get_mut(date) {
+            daily_stats_entry.active_seconds = active_seconds_for_day(timestamps);
         }
     }
 

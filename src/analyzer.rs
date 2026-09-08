@@ -175,9 +175,16 @@ impl AnalyzerRegistry {
         let available_analyzers = self.available_analyzers();
         let mut all_stats = Vec::new();
 
+        let cutoff = crate::utils::current_live_window_cutoff();
+
         for analyzer in available_analyzers {
             match analyzer.get_stats().await {
-                Ok(stats) => all_stats.push(std::sync::Arc::new(stats)),
+                Ok(mut stats) => {
+                    // History is already summarised in `daily_stats`; only the live window of raw
+                    // messages needs to stay resident (BZL-14).
+                    crate::utils::retain_live_window(&mut stats, cutoff);
+                    all_stats.push(std::sync::Arc::new(stats))
+                }
                 Err(e) => {
                     eprintln!(
                         "⚠️  Error analyzing {} data: {}",

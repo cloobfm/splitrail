@@ -360,6 +360,7 @@ impl Analyzer for OpenCodeAnalyzer {
                         user_messages: 0,
                         ai_messages: 0,
                         conversations: 0,
+                        active_seconds: 0,
                         models: std::collections::BTreeMap::new(),
                         stats: crate::types::Stats::default(),
                     });

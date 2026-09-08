@@ -34,6 +34,99 @@ mod tests {
         assert_eq!(hash.len(), 64);
     }
 
+    /// The day drill-down computes "active time" by summing gaps under 15 minutes between
+    /// consecutive messages on that day. That is the only value it needs that is not already in
+    /// DailyStats, and it is why the full message history is retained in RAM (BZL-14). Compute it
+    /// during aggregation instead, so history can be dropped.
+    #[test]
+    fn aggregate_records_active_seconds_from_sub_15_minute_gaps() {
+        fn at(hms: &str) -> ConversationMessage {
+            let ts = format!("2024-01-01T{hms}Z");
+            ConversationMessage {
+                application: Application::ClaudeCode,
+                date: ts.parse::<DateTime<Utc>>().unwrap(),
+                project_hash: "p".into(),
+                conversation_hash: "c".into(),
+                local_hash: None,
+                global_hash: hms.to_string(),
+                model: None,
+                stats: Stats::default(),
+                role: MessageRole::User,
+                content: None,
+            }
+        }
+
+        // 12:00 -> 12:05 counts (300 s). 12:05 -> 12:40 is a 35 min gap, so it does not.
+        // 12:40 -> 12:50 counts (600 s). Deliberately out of order to prove sorting happens.
+        let messages = vec![at("12:40:00"), at("12:00:00"), at("12:50:00"), at("12:05:00")];
+
+        let result = aggregate_by_date(&messages);
+        let day = result
+            .values()
+            .find(|d| d.active_seconds > 0)
+            .expect("the populated day should record active time");
+
+        assert_eq!(day.active_seconds, 900, "300 s + 600 s, excluding the 35 min gap");
+    }
+
+    /// Only the last day or so of raw messages feeds the live views; everything older is already
+    /// summarised in `daily_stats`. Trimming to that window is what takes RSS from ~500 MB to tens
+    /// of MB (BZL-14) — and it must not disturb the aggregates.
+    #[test]
+    fn live_window_drops_old_messages_but_keeps_their_aggregates() {
+        use crate::utils::{live_window_cutoff, retain_live_window};
+
+        let now: DateTime<Utc> = "2024-06-01T12:00:00Z".parse().unwrap();
+        let msg = |ts: &str| ConversationMessage {
+            application: Application::ClaudeCode,
+            date: ts.parse::<DateTime<Utc>>().unwrap(),
+            project_hash: "p".into(),
+            conversation_hash: "c".into(),
+            local_hash: None,
+            global_hash: ts.to_string(),
+            model: None,
+            stats: Stats::default(),
+            role: MessageRole::User,
+            content: None,
+        };
+
+        let messages = vec![
+            msg("2024-01-15T09:00:00Z"), // ancient
+            msg("2024-05-30T09:00:00Z"), // outside the 24h window
+            msg("2024-06-01T09:00:00Z"), // inside
+        ];
+        let daily_stats = aggregate_by_date(&messages);
+        let mut stats = crate::types::AgenticCodingToolStats {
+            daily_stats: daily_stats.clone(),
+            num_conversations: 1,
+            messages,
+            analyzer_name: "test".into(),
+        };
+
+        // No upload configured, so nothing pending has to be preserved.
+        retain_live_window(&mut stats, live_window_cutoff(now, None));
+
+        assert_eq!(stats.messages.len(), 1, "only the message inside the window survives");
+        assert_eq!(stats.daily_stats, daily_stats, "aggregates are untouched");
+        assert!(
+            stats.daily_stats.contains_key("2024-01-15"),
+            "history stays available in aggregate form"
+        );
+    }
+
+    /// Trimming must never discard a message the uploader still owes the server.
+    #[test]
+    fn live_window_keeps_messages_the_uploader_has_not_sent() {
+        use crate::utils::live_window_cutoff;
+
+        let now: DateTime<Utc> = "2024-06-01T12:00:00Z".parse().unwrap();
+        let watermark: DateTime<Utc> = "2024-03-01T00:00:00Z".parse().unwrap();
+
+        let cutoff = live_window_cutoff(now, Some(watermark.timestamp_millis()));
+
+        assert_eq!(cutoff, watermark, "a lagging watermark pulls the cutoff back");
+    }
+
     #[test]
     fn test_aggregate_by_date_empty() {
         let messages = vec![];

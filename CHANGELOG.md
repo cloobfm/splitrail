@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.18] - 2026-09-07
+
+Groundwork for BZL-14. This bounds what the *stats* structure retains; it does **not** by itself
+reduce RSS, because the incremental cache still holds every parsed message. That is BZL-14 phase 2.
+
+### Added
+- `DailyStats::active_seconds` — time spent actively working on a day, the sum of gaps under 15
+  minutes between consecutive messages, computed during aggregation. This was the only value the
+  day drill-down derived from raw historical messages; message count and session count were
+  already available as `user_messages + ai_messages` and `conversations`. Serialized with
+  `#[serde(default)]`, so older persisted stats deserialize as 0. It is also a new field in the
+  upload payload.
+- `utils::retain_live_window` and `utils::live_window_cutoff`, applied in
+  `AnalyzerRegistry::load_all_stats` and the watcher's incremental reload.
+
+### Changed
+- The day drill-down reads message count, session count, and active time from `daily_stats`
+  instead of scanning the selected day's messages, so it no longer needs raw history resident.
+- Only the last `LIVE_WINDOW_HOURS` (24 h) of raw messages are retained per analyzer. Measured on
+  the real corpus: 127,577 retained messages becomes 6,933, with all 1,837 daily rows intact.
+- `DailyStats`, `Stats`, and `RateLimitInfo` derive `PartialEq`.
+
+### Fixed
+- Trimming can never discard a message the uploader still owes the server: when uploading is
+  configured and its watermark is further back than the live window, the cutoff moves back to the
+  watermark.
+
 ## [2.0.0-dash-0.17] - 2026-09-07
 
 ### Fixed

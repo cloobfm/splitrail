@@ -481,36 +481,18 @@ pub fn draw_summary_view(
             "No data".to_string()
         };
 
-        // Get messages for the selected day and sort by timestamp
-        let mut selected_day_messages: Vec<_> = analyzer_stats
-            .messages
-            .iter()
-            .filter(|msg| msg.date.with_timezone(&chrono::Local).date_naive() == selected_day_date)
-            .collect();
-        selected_day_messages.sort_by_key(|msg| msg.date);
+        // Read the day from the aggregate rather than scanning its messages: history is not
+        // retained in memory, only summarised (BZL-14).
+        let selected_day_key = selected_day_date.format("%Y-%m-%d").to_string();
+        let selected_day = analyzer_stats.daily_stats.get(&selected_day_key);
 
-        // Count messages
-        let message_count = selected_day_messages.len() as u64;
+        let message_count = selected_day
+            .map(|d| u64::from(d.user_messages) + u64::from(d.ai_messages))
+            .unwrap_or(0);
+        let session_count = selected_day.map(|d| u64::from(d.conversations)).unwrap_or(0);
 
-        // Count unique conversation sessions (by conversation_hash)
-        let unique_sessions: std::collections::HashSet<_> = selected_day_messages
-            .iter()
-            .map(|msg| &msg.conversation_hash)
-            .collect();
-        let session_count = unique_sessions.len() as u64;
-
-        // Calculate actual active time (sum of gaps < 15 minutes between consecutive messages)
-        let active_time = if selected_day_messages.len() > 1 {
-            let mut total_active_seconds = 0i64;
-            for window in selected_day_messages.windows(2) {
-                let gap = window[1].date.signed_duration_since(window[0].date);
-                let gap_seconds = gap.num_seconds();
-                // Only count gaps less than 15 minutes as "active time"
-                if gap_seconds > 0 && gap_seconds < 900 {
-                    total_active_seconds += gap_seconds;
-                }
-            }
-
+        let active_time = {
+            let total_active_seconds = selected_day.map(|d| d.active_seconds).unwrap_or(0);
             let hours = total_active_seconds / 3600;
             let minutes = (total_active_seconds % 3600) / 60;
 
@@ -521,10 +503,8 @@ pub fn draw_summary_view(
             } else if total_active_seconds > 0 {
                 format!("{}s", total_active_seconds)
             } else {
-                "< 1m".to_string()
+                "0m".to_string()
             }
-        } else {
-            "0m".to_string()
         };
 
         // Determine CLI state based on last message and recent activity

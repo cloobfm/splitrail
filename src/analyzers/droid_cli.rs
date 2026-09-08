@@ -139,6 +139,7 @@ impl Analyzer for DroidCliAnalyzer {
                 user_messages: 0,
                 ai_messages: 0,
                 conversations: 0,
+                active_seconds: 0,
                 models: BTreeMap::new(),
                 stats: Stats::default(),
             });
