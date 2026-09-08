@@ -604,21 +604,12 @@ pub fn draw_summary_view(
             for &idx in visible_indices {
                 let analyzer_stats = &filtered_stats[idx];
 
-                // Count days in the last 30 days that have data
+                // Days in the last 30 on which this tool was actually used. Counting rows by date
+                // alone reported 30 for any tool ever used, because aggregate_by_date pads every
+                // day through today with empty stats.
                 let now = chrono::Local::now().date_naive();
-                let thirty_days_ago = now - chrono::Duration::days(29); // Use 29 for exactly 30 days inclusive
-
-                let days_with_data = analyzer_stats
-                    .daily_stats
-                    .iter()
-                    .filter(|(date_str, _)| {
-                        if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                            date >= thirty_days_ago && date <= now
-                        } else {
-                            false
-                        }
-                    })
-                    .count();
+                let days_with_data =
+                    days_with_activity_in_last_30(&analyzer_stats.daily_stats, now);
 
                 cells.push(Cell::new(
                     Line::from(format!("{}", days_with_data)).right_aligned(),
@@ -2069,4 +2060,76 @@ fn draw_output_tokens_chart(
             .borders(Borders::ALL));
 
     frame.render_widget(paragraph, area);
+}
+
+
+/// Days in the trailing 30-day window (inclusive of `today`) on which this tool was actually used.
+///
+/// `aggregate_by_date` pads every day from a tool's first message through today with empty
+/// `DailyStats` so charts have a continuous series. Counting rows by date alone therefore reports
+/// 30 for any tool ever used, however long ago — the day has to carry activity to count.
+pub fn days_with_activity_in_last_30(
+    daily_stats: &std::collections::BTreeMap<String, crate::types::DailyStats>,
+    today: chrono::NaiveDate,
+) -> usize {
+    let window_start = today - chrono::Duration::days(29);
+    daily_stats
+        .iter()
+        .filter(|(date_str, day)| {
+            let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") else {
+                return false;
+            };
+            date >= window_start && date <= today && (day.user_messages > 0 || day.ai_messages > 0)
+        })
+        .count()
+}
+
+#[cfg(test)]
+mod streak_tests {
+    use super::days_with_activity_in_last_30;
+    use crate::types::DailyStats;
+    use std::collections::BTreeMap;
+
+    fn day(date: &str, messages: u32) -> (String, DailyStats) {
+        (
+            date.to_string(),
+            DailyStats {
+                date: date.to_string(),
+                user_messages: messages,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn padded_days_with_no_activity_do_not_count() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
+        // A tool used once long ago, then gap-filled through today.
+        let mut stats: BTreeMap<String, DailyStats> = BTreeMap::new();
+        stats.extend([day("2025-01-05", 12)]);
+        let mut d = chrono::NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
+        while d <= today {
+            stats.extend([day(&d.format("%Y-%m-%d").to_string(), 0)]);
+            d += chrono::Duration::days(1);
+        }
+
+        assert_eq!(
+            days_with_activity_in_last_30(&stats, today),
+            0,
+            "a tool unused for months has no recent activity, however many padded rows exist"
+        );
+    }
+
+    #[test]
+    fn only_days_inside_the_window_with_activity_count() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
+        let stats: BTreeMap<String, DailyStats> = BTreeMap::from([
+            day("2026-09-08", 3), // today
+            day("2026-09-07", 1), // in window
+            day("2026-09-06", 0), // in window, no activity
+            day("2026-08-01", 9), // outside the window
+        ]);
+
+        assert_eq!(days_with_activity_in_last_30(&stats, today), 2);
+    }
 }

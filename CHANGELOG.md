@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.19] - 2026-09-07
+
+### Fixed
+- The 🔥 Streak row showed 30 for every tool ever used, however long ago. `aggregate_by_date` pads
+  every day from a tool's first message through today with empty `DailyStats` so charts have a
+  continuous series, and the streak counted rows whose *date* fell in the window without checking
+  whether the day carried any activity. Verified against real data: Codex CLI, Qwen Code, and Kilo
+  Code each had 0 active days in the last 30 while all three displayed 30.
+
+### Added
+- `days_with_activity_in_last_30`, extracted from the render path so the rule is testable, with
+  tests covering the padded-days case and window boundaries.
+
 ## [2.0.0-dash-0.18] - 2026-09-07
 
 Groundwork for BZL-14. This bounds what the *stats* structure retains; it does **not** by itself
