@@ -227,10 +227,15 @@ async fn create_test_claude_file(file_path: &std::path::Path) {
 
     // Mirror the real Claude Code JSONL shape: `type`, `uuid`, and `timestamp` are top-level,
     // user turns have plain-string content, assistant turns carry a model and usage.
+    //
+    // Timestamps are relative to now: only messages inside the live window are returned as raw
+    // messages, older ones survive as daily aggregates only (BZL-14).
+    let base = chrono::Utc::now() - chrono::Duration::minutes(30);
     for i in 0..10 {
         let is_user = i % 2 == 0;
         let uuid = format!("uuid-{i}");
-        let timestamp = format!("2024-01-01T00:{i:02}:00Z");
+        let timestamp = (base + chrono::Duration::seconds(i as i64 * 60))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let message = if is_user {
             serde_json::json!({
                 "type": "user",

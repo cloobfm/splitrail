@@ -44,9 +44,6 @@ struct CachedFile<S> {
     parsed_bytes: u64,
     /// Parser state carried across appends (e.g. a project label learned from the first line).
     state: S,
-    /// Shared, not cloned: a refresh hands this same allocation to the caller. Deep-copying it
-    /// per refresh re-allocated the whole corpus every reload (BZL-13).
-    messages: Arc<Vec<ConversationMessage>>,
 }
 
 /// Counts of what a refresh had to do. Useful for logging and for tests that want to prove the
@@ -59,11 +56,18 @@ pub struct RefreshReport {
     pub removed: usize,
     /// Bytes actually handed to the parser this refresh.
     pub bytes_parsed: u64,
+    /// A file we had already consumed was rewritten, shrank, or vanished. Callers fold results
+    /// across refreshes, and those events invalidate what was already folded, so the caller must
+    /// discard its accumulator and start from a clean cache. A *first* parse never sets this.
+    pub needs_rebuild: bool,
 }
 
 enum Outcome {
     Unchanged,
     Appended(u64),
+    /// A file we had never seen: nothing folded from it can be stale.
+    FirstParse(u64),
+    /// A file we had already consumed, re-read from the top because it shrank or was rewritten.
     Reparsed(u64),
     Missing,
 }
@@ -89,8 +93,9 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
     /// chunk, in source order. `parse` is called only for new, grown, or rewritten files, with a
     /// reader positioned where parsing should resume and the state from the previous chunk.
     ///
-    /// Chunks are `Arc`s over the cache's own vectors, so an unchanged file costs a refcount bump
-    /// rather than a copy of its messages.
+    /// Only the messages parsed *this* refresh come back: nothing for an unchanged file, just the
+    /// appended lines for a grown one. The cache remembers cursors, not contents, so callers must
+    /// fold what they are handed and check [`RefreshReport::needs_rebuild`].
     pub fn refresh<F>(&self, sources: &[DataSource], parse: F) -> (Vec<MessageChunk>, RefreshReport)
     where
         F: Fn(&Path, &mut BufReader<File>, &mut S) -> ChunkResult + Sync,
@@ -109,6 +114,7 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
             .collect();
 
         let mut report = RefreshReport::default();
+        let mut invalidated = false;
         let mut chunks = Vec::with_capacity(results.len());
         for (msgs, outcome) in results {
             match outcome {
@@ -117,11 +123,19 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
                     report.appended += 1;
                     report.bytes_parsed += n;
                 }
-                Outcome::Reparsed(n) => {
+                Outcome::FirstParse(n) => {
                     report.reparsed += 1;
                     report.bytes_parsed += n;
                 }
-                Outcome::Missing => report.removed += 1,
+                Outcome::Reparsed(n) => {
+                    report.reparsed += 1;
+                    report.bytes_parsed += n;
+                    invalidated = true;
+                }
+                Outcome::Missing => {
+                    report.removed += 1;
+                    invalidated = true;
+                }
             }
             // An empty chunk carries nothing downstream; skipping it keeps a missing or
             // still-empty file from padding the result.
@@ -136,6 +150,9 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
         let before = files.len();
         files.retain(|p, _| live.contains(p.as_path()));
         report.removed += before - files.len();
+        // Set last: the retain above can also drop files, and a dropped file invalidates folded
+        // state just as a rewrite does.
+        report.needs_rebuild = invalidated || before != files.len();
 
         (chunks, report)
     }
@@ -165,31 +182,35 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
 
         match existing {
             Some(entry) if entry.len == len && entry.modified == modified => {
-                let messages = Arc::clone(&entry.messages);
                 self.lock().insert(path.to_path_buf(), entry);
-                (messages, Outcome::Unchanged)
+                (MessageChunk::default(), Outcome::Unchanged)
             }
             Some(mut entry) if len >= entry.parsed_bytes => {
                 let Ok(mut file) = File::open(path) else {
                     return (MessageChunk::default(), Outcome::Missing);
                 };
                 if file.seek(SeekFrom::Start(entry.parsed_bytes)).is_err() {
-                    return self.reparse(path, len, modified, parse);
+                    return self.reparse(path, len, modified, parse, true);
                 }
                 let mut reader = BufReader::new(file);
                 let (new_messages, consumed) = parse(path, &mut reader, &mut entry.state);
                 entry.parsed_bytes += consumed;
                 entry.len = len;
                 entry.modified = modified;
-                // Copies only when a previous chunk is still alive downstream, and only for
-                // files that actually grew.
-                Arc::make_mut(&mut entry.messages).extend(new_messages);
-                let messages = Arc::clone(&entry.messages);
                 self.lock().insert(path.to_path_buf(), entry);
-                (messages, Outcome::Appended(consumed))
+                (Arc::new(new_messages), Outcome::Appended(consumed))
             }
-            _ => self.reparse(path, len, modified, parse),
+            existing => {
+                let was_known = existing.is_some();
+                self.reparse(path, len, modified, parse, was_known)
+            }
         }
+    }
+
+    /// Forget every cursor so the next refresh re-reads everything. Used when a caller's folded
+    /// state has been invalidated (see [`RefreshReport::needs_rebuild`]).
+    pub fn clear(&self) {
+        self.lock().clear();
     }
 
     fn reparse<F>(
@@ -198,6 +219,7 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
         len: u64,
         modified: Option<SystemTime>,
         parse: &F,
+        was_known: bool,
     ) -> (MessageChunk, Outcome)
     where
         F: Fn(&Path, &mut BufReader<File>, &mut S) -> ChunkResult,
@@ -208,7 +230,6 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
         let mut reader = BufReader::new(file);
         let mut state = S::default();
         let (messages, consumed) = parse(path, &mut reader, &mut state);
-        let messages = Arc::new(messages);
         self.lock().insert(
             path.to_path_buf(),
             CachedFile {
@@ -216,10 +237,14 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
                 modified,
                 parsed_bytes: consumed,
                 state,
-                messages: Arc::clone(&messages),
             },
         );
-        (messages, Outcome::Reparsed(consumed))
+        let outcome = if was_known {
+            Outcome::Reparsed(consumed)
+        } else {
+            Outcome::FirstParse(consumed)
+        };
+        (Arc::new(messages), outcome)
     }
 }
 
@@ -276,14 +301,6 @@ mod tests {
             .collect()
     }
 
-    fn hash_ptrs(chunks: &[MessageChunk]) -> Vec<*const u8> {
-        chunks
-            .iter()
-            .flat_map(|c| c.iter())
-            .map(|m| m.global_hash.as_ptr())
-            .collect()
-    }
-
     fn append(path: &Path, text: &str) {
         let mut f = fs::OpenOptions::new().append(true).open(path).unwrap();
         f.write_all(text.as_bytes()).unwrap();
@@ -296,12 +313,11 @@ mod tests {
         }]
     }
 
-    /// The cache exists to avoid re-doing work for unchanged files. Handing back a deep copy of
-    /// every cached message on every refresh defeats that: the message data is re-allocated each
-    /// time, which is what drove RSS to ~7x the real payload (BZL-13). An unchanged file must
-    /// hand back the same allocation it already holds.
+    /// The cache's job is to avoid re-*reading* unchanged files. Retaining every message it has
+    /// ever parsed so it can hand them back each refresh is a different thing, and it is what kept
+    /// the whole corpus resident (BZL-14). It must remember cursors, not contents.
     #[test]
-    fn unchanged_file_hands_back_the_same_allocation_instead_of_a_copy() {
+    fn unchanged_files_yield_nothing_because_the_cache_holds_no_messages() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("s.jsonl");
         fs::write(&file, "a\nb\nc\n").unwrap();
@@ -309,16 +325,17 @@ mod tests {
         let cache = IncrementalJsonlCache::<usize>::new();
 
         let (first, _) = cache.refresh(&src(&file), line_parser(&calls));
-        let first_ptrs = hash_ptrs(&first);
+        assert_eq!(contents(&first), ["1:a", "2:b", "3:c"]);
 
-        let (second, report) = cache.refresh(&src(&file), line_parser(&calls));
-        let second_ptrs = hash_ptrs(&second);
-
-        assert_eq!(report.unchanged, 1, "precondition: the file did not change");
-        assert_eq!(
-            first_ptrs, second_ptrs,
-            "an unchanged file must not re-allocate its messages on refresh"
+        let (second, _) = cache.refresh(&src(&file), line_parser(&calls));
+        assert!(
+            contents(&second).is_empty(),
+            "the cache has nothing stored to hand back"
         );
+
+        append(&file, "d\n");
+        let (third, _) = cache.refresh(&src(&file), line_parser(&calls));
+        assert_eq!(contents(&third), ["4:d"], "only the appended line is new");
     }
 
     #[test]
@@ -335,9 +352,13 @@ mod tests {
         assert_eq!(report.bytes_parsed, 6);
 
         let (msgs, report) = cache.refresh(&src(&file), line_parser(&calls));
-        assert_eq!(contents(&msgs), ["1:a", "2:b", "3:c"]);
+        assert!(
+            contents(&msgs).is_empty(),
+            "an unchanged file was not read, so it yields nothing new"
+        );
         assert_eq!(report.unchanged, 1);
         assert_eq!(report.bytes_parsed, 0);
+        assert!(!report.needs_rebuild, "a first parse invalidates nothing");
         assert_eq!(
             calls.load(Ordering::SeqCst),
             1,
@@ -356,8 +377,9 @@ mod tests {
 
         append(&file, "c\nd\n");
         let (msgs, report) = cache.refresh(&src(&file), line_parser(&calls));
-        // Line numbers 3 and 4 prove the parser state continued rather than restarting at 1.
-        assert_eq!(contents(&msgs), ["1:a", "2:b", "3:c", "4:d"]);
+        // Line numbers 3 and 4 prove the parser state continued rather than restarting at 1,
+        // and only the appended lines come back.
+        assert_eq!(contents(&msgs), ["3:c", "4:d"]);
         assert_eq!(report.appended, 1);
         assert_eq!(report.bytes_parsed, 4, "only the appended bytes are parsed");
     }
@@ -373,9 +395,8 @@ mod tests {
 
         append(&file, "part");
         let (msgs, report) = cache.refresh(&src(&file), line_parser(&calls));
-        assert_eq!(
-            contents(&msgs),
-            ["1:a"],
+        assert!(
+            contents(&msgs).is_empty(),
             "half-written line must not appear"
         );
         assert_eq!(report.appended, 1);
@@ -383,7 +404,7 @@ mod tests {
 
         append(&file, "ial\n");
         let (msgs, report) = cache.refresh(&src(&file), line_parser(&calls));
-        assert_eq!(contents(&msgs), ["1:a", "2:partial"]);
+        assert_eq!(contents(&msgs), ["2:partial"], "only the now-complete line");
         assert_eq!(
             report.bytes_parsed, 8,
             "the whole line is parsed exactly once"
@@ -421,10 +442,12 @@ mod tests {
         let (msgs, _) = cache.refresh(&sources, line_parser(&calls));
         assert_eq!(msgs.len(), 2);
 
-        // b is no longer discovered
+        // b is no longer discovered. a is unchanged so yields nothing, but dropping b invalidates
+        // anything a caller folded from it.
         let (msgs, report) = cache.refresh(&src(&a), line_parser(&calls));
-        assert_eq!(contents(&msgs), ["1:a"]);
+        assert!(contents(&msgs).is_empty());
         assert_eq!(report.removed, 1);
+        assert!(report.needs_rebuild, "a vanished file invalidates folded state");
 
         // a is deleted from disk while still listed
         fs::remove_file(&a).unwrap();

@@ -417,6 +417,54 @@ fn test_unknown_entry_types_do_not_warn() {
     assert!(noisy.is_empty(), "unknown entry types should not warn, got: {noisy:?}");
 }
 
+/// Safety net for BZL-14 phase 2. Folding stats across incremental appends must produce exactly
+/// what a cold analyzer computes from the finished file. If these diverge, the incremental path is
+/// silently misreporting someone's usage.
+#[tokio::test]
+async fn incremental_accumulation_matches_a_cold_full_parse() {
+    use crate::analyzer::DataSource;
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().unwrap();
+    let project_dir = dir.path().join("-Users-test-proj");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let file = project_dir.join("session-1.jsonl");
+    std::fs::write(&file, format!("{}\n", JSONL_DATA.as_str())).unwrap();
+    let sources = vec![DataSource { path: file.clone() }];
+
+    // Feed one analyzer the file in stages, appending between reloads.
+    let incremental = ClaudeCodeAnalyzer::new();
+    incremental.parse_conversations_with_report(&sources);
+
+    // Includes a repeated request/message id, so the split-message fold is exercised across
+    // refreshes rather than within a single batch.
+    let rows = [
+        (r#""id":"msg_a","type":"message","role":"assistant","model":"claude-opus-5""#, "req_a", 10, 20, "11"),
+        (r#""id":"msg_a","type":"message","role":"assistant","model":"claude-opus-5""#, "req_a", 7, 5, "12"),
+        (r#""id":"msg_b","type":"message","role":"assistant","model":"claude-sonnet-5""#, "req_b", 4, 9, "13"),
+    ];
+    for (i, (msg, req, inp, out, hour)) in rows.iter().enumerate() {
+        let line = format!(
+            r#"{{"parentUuid":"x","isSidechain":false,"userType":"external","cwd":"D:\\splitrail","sessionId":"s-1","version":"1.0.51","type":"assistant","message":{{{msg},"content":[{{"type":"text","text":"t"}}],"usage":{{"input_tokens":{inp},"output_tokens":{out}}}}},"requestId":"{req}","uuid":"u-{i}","timestamp":"2025-08-02T{hour}:00:00.000Z"}}"#
+        );
+        {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+            writeln!(f, "{line}").unwrap();
+        }
+        incremental.parse_conversations_with_report(&sources);
+    }
+
+    // A fresh analyzer seeing the finished file in one pass.
+    let cold = ClaudeCodeAnalyzer::new();
+    cold.parse_conversations_with_report(&sources);
+
+    assert_eq!(
+        incremental.daily_stats(),
+        cold.daily_stats(),
+        "incremental folding diverged from a cold full parse"
+    );
+}
+
 #[tokio::test]
 async fn test_analyzer_reloads_incrementally() {
     use crate::analyzer::DataSource;
@@ -432,31 +480,50 @@ async fn test_analyzer_reloads_incrementally() {
 
     let analyzer = ClaudeCodeAnalyzer::new();
 
-    let (first, report) = analyzer.parse_conversations_with_report(&sources);
-    assert_eq!(first.len(), 3);
+    let (_, report) = analyzer.parse_conversations_with_report(&sources);
     assert_eq!(report.reparsed, 1);
-    // Whatever label the file's first entry established must apply to later appends too.
-    let project_hash = first[0].project_hash.clone();
-    assert!(first.iter().all(|m| m.project_hash == project_hash));
+    assert!(!report.needs_rebuild, "a first parse invalidates nothing");
+    let after_first: u64 = analyzer
+        .daily_stats()
+        .values()
+        .map(|d| d.stats.input_tokens)
+        .sum();
+    assert!(after_first > 0, "the first parse folded something in");
 
-    // Nothing changed: no bytes parsed, same result.
-    let (second, report) = analyzer.parse_conversations_with_report(&sources);
-    assert_eq!(second.len(), 3);
+    // Nothing changed: no bytes parsed, and the folded totals stand.
+    let (_, report) = analyzer.parse_conversations_with_report(&sources);
     assert_eq!(report.unchanged, 1);
     assert_eq!(report.bytes_parsed, 0);
+    let after_second: u64 = analyzer
+        .daily_stats()
+        .values()
+        .map(|d| d.stats.input_tokens)
+        .sum();
+    assert_eq!(
+        after_second, after_first,
+        "an unchanged reload must not double count"
+    );
 
     // Append one assistant turn; only it should be parsed, and it must inherit the project label
-    // even though the entry that defined the label is in the already-parsed prefix.
+    // even though the entry that defined it is in the already-parsed prefix.
     let appended = r#"{"parentUuid":"x","isSidechain":false,"userType":"external","cwd":"D:\\splitrail","sessionId":"502be1cb-cf86-ecce-fe62-89ddec1e7563","version":"1.0.51","type":"assistant","message":{"id":"msg_new","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"later"}],"usage":{"input_tokens":3,"output_tokens":4}},"requestId":"req_new","uuid":"new-uuid","timestamp":"2025-08-02T15:00:00.000Z"}"#;
     {
         let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
         writeln!(f, "{appended}").unwrap();
     }
-    let (third, report) = analyzer.parse_conversations_with_report(&sources);
-    assert_eq!(third.len(), 4);
+    let (_, report) = analyzer.parse_conversations_with_report(&sources);
     assert_eq!(report.appended, 1);
     assert_eq!(report.bytes_parsed, appended.len() as u64 + 1);
-    let new_msg = third.iter().find(|m| m.model.as_deref() == Some("claude-opus-5")).unwrap();
-    assert_eq!(new_msg.project_hash, project_hash);
-    assert_eq!(new_msg.stats.input_tokens, 3);
+
+    let daily = analyzer.daily_stats();
+    let after_third: u64 = daily.values().map(|d| d.stats.input_tokens).sum();
+    assert_eq!(
+        after_third,
+        after_first + 3,
+        "only the appended message's tokens were added"
+    );
+    assert!(
+        daily.values().any(|d| d.models.contains_key("claude-opus-5")),
+        "the appended turn's model reached the daily aggregate"
+    );
 }

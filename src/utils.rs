@@ -13,7 +13,7 @@ use num_format::{Locale, ToFormattedString};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::types::{ConversationMessage, DailyStats};
+use crate::types::{ConversationMessage, DailyStats, Stats};
 
 /// Quota limits for different time periods and types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -406,135 +406,149 @@ fn active_seconds_for_day(timestamps: &mut [i64]) -> u64 {
         .sum::<i64>() as u64
 }
 
-pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, DailyStats> {
-    let mut daily_stats: BTreeMap<String, DailyStats> = BTreeMap::new();
-    let mut conversation_start_dates: BTreeMap<String, String> = BTreeMap::new();
-    // Collected per day, then reduced to `active_seconds` once every entry has been seen, since
-    // entries arrive per-file and are not globally ordered.
-    let mut day_timestamps: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+/// Fold one message's contribution into its day. Shared by the batch aggregator and the
+/// incremental accumulator so the two cannot drift apart.
+pub fn fold_entry_into_day(day: &mut DailyStats, entry: &ConversationMessage) {
+    match &entry.model {
+        Some(model) => {
+            // AI message
+            day.ai_messages += 1;
+            *day
+                .models
+                .entry(model.to_string())
+                .or_insert(0) += 1;
 
-    for entry in entries {
-        let timestamp = &entry.date.with_timezone(&Local);
-        let conversation_hash = &entry.conversation_hash;
-        let date = timestamp.format("%Y-%m-%d").to_string();
+            // Aggregate all stats
+            day.stats.cost += entry.stats.cost;
+            day.stats.input_tokens += entry.stats.input_tokens;
+            day.stats.output_tokens += entry.stats.output_tokens;
+            day.stats.reasoning_tokens += entry.stats.reasoning_tokens;
+            day.stats.cache_creation_tokens += entry.stats.cache_creation_tokens;
+            day.stats.cache_read_tokens += entry.stats.cache_read_tokens;
+            day.stats.cached_tokens += entry.stats.cached_tokens;
+            day.stats.tool_calls += entry.stats.tool_calls;
+            day.stats.terminal_commands += entry.stats.terminal_commands;
+            day.stats.file_searches += entry.stats.file_searches;
+            day.stats.file_content_searches += entry.stats.file_content_searches;
+            day.stats.files_read += entry.stats.files_read;
+            day.stats.files_added += entry.stats.files_added;
+            day.stats.files_edited += entry.stats.files_edited;
+            day.stats.files_deleted += entry.stats.files_deleted;
+            day.stats.lines_read += entry.stats.lines_read;
+            day.stats.lines_added += entry.stats.lines_added;
+            day.stats.lines_edited += entry.stats.lines_edited;
+            day.stats.lines_deleted += entry.stats.lines_deleted;
+            day.stats.bytes_read += entry.stats.bytes_read;
+            day.stats.bytes_added += entry.stats.bytes_added;
+            day.stats.bytes_edited += entry.stats.bytes_edited;
+            day.stats.bytes_deleted += entry.stats.bytes_deleted;
+            day.stats.todos_created += entry.stats.todos_created;
+            day.stats.todos_completed += entry.stats.todos_completed;
+            day.stats.todos_in_progress += entry.stats.todos_in_progress;
+            day.stats.todo_writes += entry.stats.todo_writes;
+            day.stats.todo_reads += entry.stats.todo_reads;
+            day.stats.code_lines += entry.stats.code_lines;
+            day.stats.docs_lines += entry.stats.docs_lines;
+            day.stats.data_lines += entry.stats.data_lines;
+            day.stats.media_lines += entry.stats.media_lines;
+            day.stats.config_lines += entry.stats.config_lines;
+            day.stats.other_lines += entry.stats.other_lines;
+        }
+        None => {
+            // User message
+            day.user_messages += 1;
 
-        // Only update if this is earlier than what we've seen, or if we haven't seen this
-        // conversation before.  This is to handle the case where a conversation spans
-        // multiple days, we'd want to ascribe it to the day on which it was started.
-        conversation_start_dates
-            .entry(conversation_hash.clone())
-            .and_modify(|existing_date| {
-                if date < *existing_date {
-                    *existing_date = date.clone();
-                }
-            })
-            .or_insert(date.clone());
-
-        day_timestamps
-            .entry(date.clone())
-            .or_default()
-            .push(entry.date.timestamp());
-
-        let daily_stats_entry = daily_stats
-            .entry(date.clone())
-            .or_insert_with(|| DailyStats {
-                date: date.clone(),
-                ..Default::default()
-            });
-
-        match &entry.model {
-            Some(model) => {
-                // AI message
-                daily_stats_entry.ai_messages += 1;
-                *daily_stats_entry
-                    .models
-                    .entry(model.to_string())
-                    .or_insert(0) += 1;
-
-                // Aggregate all stats
-                daily_stats_entry.stats.cost += entry.stats.cost;
-                daily_stats_entry.stats.input_tokens += entry.stats.input_tokens;
-                daily_stats_entry.stats.output_tokens += entry.stats.output_tokens;
-                daily_stats_entry.stats.reasoning_tokens += entry.stats.reasoning_tokens;
-                daily_stats_entry.stats.cache_creation_tokens += entry.stats.cache_creation_tokens;
-                daily_stats_entry.stats.cache_read_tokens += entry.stats.cache_read_tokens;
-                daily_stats_entry.stats.cached_tokens += entry.stats.cached_tokens;
-                daily_stats_entry.stats.tool_calls += entry.stats.tool_calls;
-                daily_stats_entry.stats.terminal_commands += entry.stats.terminal_commands;
-                daily_stats_entry.stats.file_searches += entry.stats.file_searches;
-                daily_stats_entry.stats.file_content_searches += entry.stats.file_content_searches;
-                daily_stats_entry.stats.files_read += entry.stats.files_read;
-                daily_stats_entry.stats.files_added += entry.stats.files_added;
-                daily_stats_entry.stats.files_edited += entry.stats.files_edited;
-                daily_stats_entry.stats.files_deleted += entry.stats.files_deleted;
-                daily_stats_entry.stats.lines_read += entry.stats.lines_read;
-                daily_stats_entry.stats.lines_added += entry.stats.lines_added;
-                daily_stats_entry.stats.lines_edited += entry.stats.lines_edited;
-                daily_stats_entry.stats.lines_deleted += entry.stats.lines_deleted;
-                daily_stats_entry.stats.bytes_read += entry.stats.bytes_read;
-                daily_stats_entry.stats.bytes_added += entry.stats.bytes_added;
-                daily_stats_entry.stats.bytes_edited += entry.stats.bytes_edited;
-                daily_stats_entry.stats.bytes_deleted += entry.stats.bytes_deleted;
-                daily_stats_entry.stats.todos_created += entry.stats.todos_created;
-                daily_stats_entry.stats.todos_completed += entry.stats.todos_completed;
-                daily_stats_entry.stats.todos_in_progress += entry.stats.todos_in_progress;
-                daily_stats_entry.stats.todo_writes += entry.stats.todo_writes;
-                daily_stats_entry.stats.todo_reads += entry.stats.todo_reads;
-                daily_stats_entry.stats.code_lines += entry.stats.code_lines;
-                daily_stats_entry.stats.docs_lines += entry.stats.docs_lines;
-                daily_stats_entry.stats.data_lines += entry.stats.data_lines;
-                daily_stats_entry.stats.media_lines += entry.stats.media_lines;
-                daily_stats_entry.stats.config_lines += entry.stats.config_lines;
-                daily_stats_entry.stats.other_lines += entry.stats.other_lines;
-            }
-            None => {
-                // User message
-                daily_stats_entry.user_messages += 1;
-
-                // Aggregate user stats too (mostly todo-related)
-                daily_stats_entry.stats.todos_created += entry.stats.todos_created;
-                daily_stats_entry.stats.todos_completed += entry.stats.todos_completed;
-                daily_stats_entry.stats.todos_in_progress += entry.stats.todos_in_progress;
-                daily_stats_entry.stats.todo_writes += entry.stats.todo_writes;
-                daily_stats_entry.stats.todo_reads += entry.stats.todo_reads;
-            }
-        };
+            // Aggregate user stats too (mostly todo-related)
+            day.stats.todos_created += entry.stats.todos_created;
+            day.stats.todos_completed += entry.stats.todos_completed;
+            day.stats.todos_in_progress += entry.stats.todos_in_progress;
+            day.stats.todo_writes += entry.stats.todo_writes;
+            day.stats.todo_reads += entry.stats.todo_reads;
+        }
     }
+}
 
+/// Add a *correction* to a day: token and activity deltas from folding another row into a
+/// message already counted there. Unlike [`fold_entry_into_day`] this does not touch the message
+/// or model counts, because no new message arrived — an existing one grew.
+pub fn add_stats_delta_into_day(day: &mut DailyStats, delta: &Stats, cost_delta: f64) {
+    day.stats.cost += cost_delta;
+    day.stats.input_tokens += delta.input_tokens;
+    day.stats.output_tokens += delta.output_tokens;
+    day.stats.reasoning_tokens += delta.reasoning_tokens;
+    day.stats.cache_creation_tokens += delta.cache_creation_tokens;
+    day.stats.cache_read_tokens += delta.cache_read_tokens;
+    day.stats.cached_tokens += delta.cached_tokens;
+    day.stats.tool_calls += delta.tool_calls;
+    day.stats.terminal_commands += delta.terminal_commands;
+    day.stats.file_searches += delta.file_searches;
+    day.stats.file_content_searches += delta.file_content_searches;
+    day.stats.files_read += delta.files_read;
+    day.stats.files_added += delta.files_added;
+    day.stats.files_edited += delta.files_edited;
+    day.stats.files_deleted += delta.files_deleted;
+    day.stats.lines_read += delta.lines_read;
+    day.stats.lines_added += delta.lines_added;
+    day.stats.lines_edited += delta.lines_edited;
+    day.stats.lines_deleted += delta.lines_deleted;
+    day.stats.bytes_read += delta.bytes_read;
+    day.stats.bytes_added += delta.bytes_added;
+    day.stats.bytes_edited += delta.bytes_edited;
+    day.stats.bytes_deleted += delta.bytes_deleted;
+    day.stats.todos_created += delta.todos_created;
+    day.stats.todos_completed += delta.todos_completed;
+    day.stats.todos_in_progress += delta.todos_in_progress;
+    day.stats.todo_writes += delta.todo_writes;
+    day.stats.todo_reads += delta.todo_reads;
+    day.stats.code_lines += delta.code_lines;
+    day.stats.docs_lines += delta.docs_lines;
+    day.stats.data_lines += delta.data_lines;
+    day.stats.media_lines += delta.media_lines;
+    day.stats.config_lines += delta.config_lines;
+    day.stats.other_lines += delta.other_lines;
+}
+
+/// Turn raw per-day sums into finished `DailyStats`: conversation counts, active time, and the
+/// gap filling that gives charts a continuous series. Shared, for the same reason.
+pub fn finalize_daily(
+    mut days: BTreeMap<String, DailyStats>,
+    conversation_start: &BTreeMap<String, String>,
+    timestamps_by_day: &mut BTreeMap<String, Vec<i64>>,
+) -> BTreeMap<String, DailyStats> {
     // Track conversations started on each date and update daily stats
-    for start_date in conversation_start_dates.values() {
-        if let Some(daily_stats_entry) = daily_stats.get_mut(start_date) {
-            daily_stats_entry.conversations += 1;
+    for start_date in conversation_start.values() {
+        if let Some(days_entry) = days.get_mut(start_date) {
+            days_entry.conversations += 1;
         }
     }
 
     // Reduce each day's timestamps to its active time, now that every entry has been seen.
-    for (date, timestamps) in day_timestamps.iter_mut() {
-        if let Some(daily_stats_entry) = daily_stats.get_mut(date) {
-            daily_stats_entry.active_seconds = active_seconds_for_day(timestamps);
+    for (date, timestamps) in timestamps_by_day.iter_mut() {
+        if let Some(days_entry) = days.get_mut(date) {
+            days_entry.active_seconds = active_seconds_for_day(timestamps);
         }
     }
 
     // If there are any gaps (days Claude Code wasn't run) fill them in with
     // empty stats.  (TODO: This should be a utility.)
-    if !daily_stats.is_empty() {
+    if !days.is_empty() {
         let mut filled_stats = BTreeMap::new();
 
-        let earliest_date = daily_stats.keys().min().unwrap();
+        let earliest_date = days.keys().min().unwrap();
         let today_str = chrono::Local::now()
             .date_naive()
             .format("%Y-%m-%d")
             .to_string();
-        let latest_date = daily_stats.keys().max().unwrap().max(&today_str); // Either today or the highest date in data.
+        let latest_date = days.keys().max().unwrap().max(&today_str); // Either today or the highest date in data.
 
         let start_date = match chrono::NaiveDate::parse_from_str(earliest_date, "%Y-%m-%d") {
             Ok(date) => date,
-            Err(_) => return daily_stats, // Ignore.
+            Err(_) => return days, // Ignore.
         };
 
         let end_date = match chrono::NaiveDate::parse_from_str(latest_date, "%Y-%m-%d") {
             Ok(date) => date,
-            Err(_) => return daily_stats, // Ignore.
+            Err(_) => return days, // Ignore.
         };
 
         // Fill in the gaps.
@@ -542,7 +556,7 @@ pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, Da
         while current_date <= end_date {
             let date_str = current_date.format("%Y-%m-%d").to_string();
 
-            if let Some(existing_stats) = daily_stats.get(&date_str) {
+            if let Some(existing_stats) = days.get(&date_str) {
                 filled_stats.insert(date_str, existing_stats.clone());
             } else {
                 filled_stats.insert(
@@ -560,7 +574,43 @@ pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, Da
         return filled_stats;
     }
 
-    daily_stats
+    days
+}
+
+pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, DailyStats> {
+    let mut days: BTreeMap<String, DailyStats> = BTreeMap::new();
+    let mut conversation_start: BTreeMap<String, String> = BTreeMap::new();
+    let mut timestamps_by_day: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+
+    for entry in entries {
+        let date = entry
+            .date
+            .with_timezone(&Local)
+            .format("%Y-%m-%d")
+            .to_string();
+
+        conversation_start
+            .entry(entry.conversation_hash.clone())
+            .and_modify(|existing| {
+                if date < *existing {
+                    *existing = date.clone();
+                }
+            })
+            .or_insert_with(|| date.clone());
+
+        timestamps_by_day
+            .entry(date.clone())
+            .or_default()
+            .push(entry.date.timestamp());
+
+        let day = days.entry(date.clone()).or_insert_with(|| DailyStats {
+            date: date.clone(),
+            ..Default::default()
+        });
+        fold_entry_into_day(day, entry);
+    }
+
+    finalize_daily(days, &conversation_start, &mut timestamps_by_day)
 }
 
 /// Filters messages to only include those created after a specific date

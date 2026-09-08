@@ -9,13 +9,215 @@ use std::path::Path;
 use crate::analyzer::{Analyzer, DataSource};
 use crate::incremental::{ChunkResult, IncrementalJsonlCache, MessageChunk, RefreshReport};
 use crate::models::calculate_total_cost;
-use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
+use crate::types::{
+    AgenticCodingToolStats, Application, ConversationMessage, DailyStats, MessageRole, Stats,
+};
 use crate::utils::hash_text;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub struct ClaudeCodeAnalyzer {
-    /// Per-file parse cache so a reload only parses bytes appended since the last one.
+    /// Per-file parse cache so a reload only parses bytes appended since the last one. It holds
+    /// cursors, not contents.
     cache: IncrementalJsonlCache<JsonlParseState>,
+    /// Everything parsed so far, folded into per-day aggregates. Grows with days and distinct
+    /// messages, never with the size of the corpus (BZL-14).
+    accum: std::sync::Mutex<Accumulator>,
+}
+
+/// Fold state for one `local_hash`. Claude Code writes a single assistant turn as several JSONL
+/// rows that repeat the same usage; dedup folds them back together. Those rows can land in
+/// different refreshes, so the fold has to survive between them.
+struct FoldState {
+    /// Token tuples already folded in. A repeat means a redundant row, not a new part.
+    fingerprints: HashSet<TokenFingerprint>,
+    /// Stats currently attributed to this message.
+    stats: Stats,
+    /// The day its contribution was added to, so corrections land on the same day.
+    day: String,
+    model: Option<String>,
+}
+
+#[derive(Default)]
+struct Accumulator {
+    /// Per-day sums, before finalisation.
+    days: BTreeMap<String, DailyStats>,
+    conversation_start: BTreeMap<String, String>,
+    /// Per-day message timestamps, reduced to `active_seconds` at finalisation. Eight bytes a
+    /// message, so keeping all of history here costs about a megabyte.
+    timestamps_by_day: BTreeMap<String, Vec<i64>>,
+    folded: HashMap<String, FoldState>,
+    /// Raw messages inside the live window, for the views that need individual messages.
+    recent: Vec<ConversationMessage>,
+}
+
+impl Accumulator {
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    fn day_of(message: &ConversationMessage) -> String {
+        message
+            .date
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
+    /// Fold one freshly parsed message in, applying the same dedup rules as `dedup_messages`.
+    fn fold(&mut self, message: &ConversationMessage) {
+        let date = Self::day_of(message);
+
+        self.conversation_start
+            .entry(message.conversation_hash.clone())
+            .and_modify(|existing| {
+                if date < *existing {
+                    *existing = date.clone();
+                }
+            })
+            .or_insert_with(|| date.clone());
+
+        self.recent.push(message.clone());
+
+        let fp = (
+            message.stats.input_tokens,
+            message.stats.output_tokens,
+            message.stats.cache_creation_tokens,
+            message.stats.cache_read_tokens,
+            message.stats.cached_tokens,
+        );
+
+        if let Some(local_hash) = message.local_hash.clone()
+            && let Some(state) = self.folded.get_mut(&local_hash)
+        {
+            let Some(day) = self.days.get_mut(&state.day) else {
+                return;
+            };
+            if state.fingerprints.contains(&fp) {
+                // A redundant repeat of a row already folded: keep the richest activity counts,
+                // and move the day by exactly what changed.
+                let delta = max_activity_delta(&state.stats, &message.stats);
+                apply_max_activity(&mut state.stats, &message.stats);
+                crate::utils::add_stats_delta_into_day(day, &delta, 0.0);
+            } else {
+                // A distinct part of a split message: its tokens and activity add to the whole,
+                // and the cost is recomputed from the combined tokens.
+                state.fingerprints.insert(fp);
+                let previous_cost = state.stats.cost;
+                add_stats(&mut state.stats, &message.stats);
+                if let Some(model) = &state.model {
+                    state.stats.cost = calculate_total_cost(
+                        model,
+                        state.stats.input_tokens,
+                        state.stats.output_tokens,
+                        state.stats.cache_creation_tokens,
+                        state.stats.cache_read_tokens,
+                    );
+                }
+                crate::utils::add_stats_delta_into_day(
+                    day,
+                    &message.stats,
+                    state.stats.cost - previous_cost,
+                );
+            }
+            return;
+        }
+
+        // First time we have seen this message: count it.
+        let day = self.days.entry(date.clone()).or_insert_with(|| DailyStats {
+            date: date.clone(),
+            ..Default::default()
+        });
+        crate::utils::fold_entry_into_day(day, message);
+        self.timestamps_by_day
+            .entry(date.clone())
+            .or_default()
+            .push(message.date.timestamp());
+
+        if let Some(local_hash) = message.local_hash.clone() {
+            let mut fingerprints = HashSet::new();
+            fingerprints.insert(fp);
+            self.folded.insert(
+                local_hash,
+                FoldState {
+                    fingerprints,
+                    stats: message.stats.clone(),
+                    day: date,
+                    model: message.model.clone(),
+                },
+            );
+        }
+    }
+
+    /// Drop raw messages that have aged out. Their contribution is already in `days`.
+    fn trim_recent(&mut self, cutoff: chrono::DateTime<Utc>) {
+        if self.recent.iter().any(|m| m.date < cutoff) {
+            self.recent.retain(|m| m.date >= cutoff);
+            self.recent.shrink_to_fit();
+        }
+    }
+
+    fn daily_stats(&self) -> BTreeMap<String, DailyStats> {
+        let mut timestamps = self.timestamps_by_day.clone();
+        crate::utils::finalize_daily(self.days.clone(), &self.conversation_start, &mut timestamps)
+    }
+}
+
+/// How much each activity counter would rise if `from` were merged in at its maximum.
+fn max_activity_delta(current: &Stats, from: &Stats) -> Stats {
+    let mut delta = Stats::default();
+    delta.tool_calls = from.tool_calls.saturating_sub(current.tool_calls);
+    delta.files_read = from.files_read.saturating_sub(current.files_read);
+    delta.files_edited = from.files_edited.saturating_sub(current.files_edited);
+    delta.files_added = from.files_added.saturating_sub(current.files_added);
+    delta.terminal_commands = from.terminal_commands.saturating_sub(current.terminal_commands);
+    delta.file_searches = from.file_searches.saturating_sub(current.file_searches);
+    delta.file_content_searches = from
+        .file_content_searches
+        .saturating_sub(current.file_content_searches);
+    delta.todo_writes = from.todo_writes.saturating_sub(current.todo_writes);
+    delta.todo_reads = from.todo_reads.saturating_sub(current.todo_reads);
+    delta.todos_created = from.todos_created.saturating_sub(current.todos_created);
+    delta.todos_completed = from.todos_completed.saturating_sub(current.todos_completed);
+    delta.todos_in_progress = from
+        .todos_in_progress
+        .saturating_sub(current.todos_in_progress);
+    delta
+}
+
+fn apply_max_activity(into: &mut Stats, from: &Stats) {
+    into.tool_calls = into.tool_calls.max(from.tool_calls);
+    into.files_read = into.files_read.max(from.files_read);
+    into.files_edited = into.files_edited.max(from.files_edited);
+    into.files_added = into.files_added.max(from.files_added);
+    into.terminal_commands = into.terminal_commands.max(from.terminal_commands);
+    into.file_searches = into.file_searches.max(from.file_searches);
+    into.file_content_searches = into.file_content_searches.max(from.file_content_searches);
+    into.todo_writes = into.todo_writes.max(from.todo_writes);
+    into.todo_reads = into.todo_reads.max(from.todo_reads);
+    into.todos_created = into.todos_created.max(from.todos_created);
+    into.todos_completed = into.todos_completed.max(from.todos_completed);
+    into.todos_in_progress = into.todos_in_progress.max(from.todos_in_progress);
+}
+
+/// Sum the parts of a split message.
+fn add_stats(into: &mut Stats, from: &Stats) {
+    into.input_tokens += from.input_tokens;
+    into.output_tokens += from.output_tokens;
+    into.cache_creation_tokens += from.cache_creation_tokens;
+    into.cache_read_tokens += from.cache_read_tokens;
+    into.cached_tokens += from.cached_tokens;
+    into.tool_calls += from.tool_calls;
+    into.files_read += from.files_read;
+    into.files_edited += from.files_edited;
+    into.files_added += from.files_added;
+    into.terminal_commands += from.terminal_commands;
+    into.file_searches += from.file_searches;
+    into.file_content_searches += from.file_content_searches;
+    into.todo_writes += from.todo_writes;
+    into.todo_reads += from.todo_reads;
+    into.todos_created += from.todos_created;
+    into.todos_completed += from.todos_completed;
+    into.todos_in_progress += from.todos_in_progress;
 }
 
 impl Default for ClaudeCodeAnalyzer {
@@ -28,19 +230,54 @@ impl ClaudeCodeAnalyzer {
     pub fn new() -> Self {
         Self {
             cache: IncrementalJsonlCache::new(),
+            accum: std::sync::Mutex::new(Accumulator::default()),
         }
     }
 
-    /// Parse (incrementally) every source and report how much work that took.
+    /// Bring the accumulator up to date with `sources` and report how much work that took.
+    /// Returns the raw messages still inside the live window; history is in the accumulator.
     pub fn parse_conversations_with_report(
         &self,
         sources: &[DataSource],
     ) -> (Vec<ConversationMessage>, RefreshReport) {
-        let (all_entries, report) = self.cache.refresh(sources, |path, reader, state| {
+        fn parse_chunk(
+            path: &Path,
+            reader: &mut BufReader<std::fs::File>,
+            state: &mut JsonlParseState,
+        ) -> ChunkResult {
             // Live files may end mid-line; leave that tail for the next refresh.
             parse_jsonl_chunk(path, reader, state, false)
-        });
-        (deduplicate_message_chunks(&all_entries), report)
+        }
+
+        let (mut chunks, mut report) = self.cache.refresh(sources, parse_chunk);
+        let mut accum = self.accum.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A rewritten, shrunk, or vanished file invalidates what we folded from it, and a fold
+        // cannot be undone selectively. Start over from a clean cache.
+        if report.needs_rebuild {
+            accum.clear();
+            self.cache.clear();
+            let (fresh, fresh_report) = self.cache.refresh(sources, parse_chunk);
+            chunks = fresh;
+            report = fresh_report;
+            report.needs_rebuild = true;
+        }
+
+        for chunk in &chunks {
+            for message in chunk.iter() {
+                accum.fold(message);
+            }
+        }
+        accum.trim_recent(crate::utils::current_live_window_cutoff());
+        (accum.recent.clone(), report)
+    }
+
+    /// The accumulated per-day history.
+    pub fn daily_stats(&self) -> BTreeMap<String, DailyStats> {
+        self.accum
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .daily_stats()
     }
 }
 
@@ -88,8 +325,9 @@ impl Analyzer for ClaudeCodeAnalyzer {
 
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
         let sources = self.discover_data_sources()?;
+        // Folds new bytes into the accumulator and hands back the live window.
         let messages = self.parse_conversations(sources).await?;
-        let mut daily_stats = crate::utils::aggregate_by_date(&messages);
+        let mut daily_stats = self.daily_stats();
 
         // Remove any remaining "unknown" entries from daily_stats
         daily_stats.retain(|date, _| date != "unknown");

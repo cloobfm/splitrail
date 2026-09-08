@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.20] - 2026-09-07
+
+BZL-14 phase 2 (in-memory half). The Claude Code analyzer folds parsed messages into per-day
+aggregates as they arrive instead of retaining the corpus to re-aggregate on every reload.
+
+### Changed
+- `IncrementalJsonlCache` stores cursors, not contents. `CachedFile` no longer holds messages, and
+  `refresh` returns only what it actually read this pass: nothing for an unchanged file, just the
+  appended lines for a grown one. Callers fold what they are handed.
+- `RefreshReport::needs_rebuild` reports that a file we had already consumed was rewritten, shrank,
+  or vanished, invalidating folded state. A *first* parse never sets it — treating it as an
+  invalidation would have made the initial load parse the whole corpus twice.
+- `ClaudeCodeAnalyzer` keeps an accumulator (per-day sums, conversation start dates, per-day
+  timestamps for active time, and dedup fold state) and `get_stats` reads aggregates from it.
+  Raw messages are trimmed to the live window.
+- `aggregate_by_date` is now built from `fold_entry_into_day` and `finalize_daily`, and the
+  accumulator calls the same two functions, so the batch and incremental paths cannot drift.
+
+### Performance
+- Real corpus, four consecutive loads of all nine analyzers: RSS 337 → 395 → 429 → 468 MB before
+  (~44 MB per reload, unbounded), 382 → 389 → 391 → 394 MB after (~4 MB per reload). Absolute RSS
+  crosses over at the third load and diverges from there.
+
+### Verified
+- Total computed cost matches the previous implementation to $0.44 on $22,569.92 (0.002%), the
+  residue of folding costs incrementally in f64 rather than summing once at the end.
+- `incremental_accumulation_matches_a_cold_full_parse` folds a split message across separate
+  refreshes and asserts the result equals a cold full parse.
+
+### Note
+- Only the Claude Code analyzer folds incrementally so far; the other eight still retain their
+  messages and re-aggregate. They are a smaller share of the corpus but the same change applies.
+
 ## [2.0.0-dash-0.19] - 2026-09-07
 
 ### Fixed
