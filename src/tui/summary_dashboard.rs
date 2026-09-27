@@ -230,7 +230,7 @@ pub fn draw_summary_view(
         Constraint::Length(1),  // Space above overview
         Constraint::Length(10), // Overview table (header + 6 rows + border) - reduced by 2 after removing cached/reasoning
         Constraint::Length(1),  // Space between tables
-        Constraint::Length(14), // CLI breakdown table (fixed height)
+        Constraint::Length(16), // CLI breakdown table (fixed height)
         Constraint::Length(1),  // Space before visual panels
         Constraint::Min(0),     // Visual CLI panels (takes remaining space)
     ])
@@ -724,7 +724,15 @@ pub fn draw_summary_view(
                     .cloned()
                     .collect();
 
-                let health = if cli_messages.is_empty() {
+                // A Claude account with captured plan limits reports the room actually left in
+                // its 5h/weekly windows (BZL-65); everything else keeps the token estimate.
+                let plan_health = crate::plan_limits::limits_for_analyzer(
+                    &analyzer_stats.analyzer_name,
+                )
+                .and_then(|limits| limits.health());
+                let health = if let Some(health) = plan_health {
+                    health
+                } else if cli_messages.is_empty() {
                     1.0 // No usage today = full health
                 } else {
                     calculate_overall_health(&cli_messages, &today)
@@ -755,6 +763,22 @@ pub fn draw_summary_view(
             }
             Row::new(cells)
         },
+        // Plan-limit rows: usage and time to reset per window, for Claude accounts whose status
+        // line has captured them (BZL-66). Other tools have no plan windows.
+        limit_row(
+            "⏳ 5h Limit",
+            Color::LightMagenta,
+            visible_indices,
+            &filtered_stats,
+            |limits| limits.five_hour,
+        ),
+        limit_row(
+            "📅 Week Limit",
+            Color::Magenta,
+            visible_indices,
+            &filtered_stats,
+            |limits| limits.seven_day,
+        ),
         // Status row
         {
             let mut cells = vec![Cell::new(
@@ -846,6 +870,38 @@ pub fn create_percentage_bar(
     let pct_text = format!("{:>5.1}%", percentage);
 
     (bar, pct_text)
+}
+
+/// One plan-limit row: `23% ↻2h13m` per Claude account, colored by how full the window is.
+fn limit_row<'a>(
+    label: &'a str,
+    label_color: Color,
+    visible_indices: &[usize],
+    filtered_stats: &[&AgenticCodingToolStats],
+    window: impl Fn(&crate::plan_limits::AccountLimits) -> Option<crate::plan_limits::WindowStatus>,
+) -> Row<'a> {
+    let mut cells = vec![Cell::new(
+        Line::from(label).style(Style::default().fg(label_color)),
+    )];
+    for &idx in visible_indices {
+        let status = crate::plan_limits::limits_for_analyzer(&filtered_stats[idx].analyzer_name)
+            .and_then(|limits| window(&limits));
+        let cell = match status {
+            Some(status) => {
+                let color = match status.used_percentage {
+                    p if p >= 90.0 => Color::Red,
+                    p if p >= 70.0 => Color::LightRed,
+                    p if p >= 50.0 => Color::Yellow,
+                    _ => Color::Green,
+                };
+                Line::from(crate::plan_limits::format_window(&status))
+                    .style(Style::default().fg(color))
+            }
+            None => Line::from("-").style(Style::default().fg(Color::DarkGray)),
+        };
+        cells.push(Cell::new(cell.right_aligned()));
+    }
+    Row::new(cells)
 }
 
 // Helper function to create ultra-granular Braille health bar (104 dots total)

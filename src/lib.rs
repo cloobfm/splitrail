@@ -6,6 +6,7 @@ pub mod analyzers;
 pub mod config;
 pub mod incremental;
 pub mod models;
+pub mod plan_limits;
 pub mod price_feed;
 pub mod types;
 pub mod utils;

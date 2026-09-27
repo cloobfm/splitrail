@@ -14,6 +14,7 @@ mod config;
 mod incremental;
 mod models;
 mod notifications;
+mod plan_limits;
 mod price_feed;
 mod reqwest_simd_json;
 mod tui;

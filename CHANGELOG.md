@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.23] - 2026-09-27
+
+Plan-limit usage and reset times per Claude account (BZL-66), and health based on them (BZL-65).
+
+### Added
+- `scripts/claude_statusline_capture.py`: a Claude Code `statusLine` command that saves each
+  account's `rate_limits` payload (5-hour and weekly `used_percentage` + `resets_at`) to
+  `~/.config/splitrail/limits/<label>.json` and prints `label · model · 5h 23% ↻1h33m · 7d 16% ↻6d3h`.
+  Configure it in each account's `settings.json` with that account's label; it never fails the
+  status line.
+- `plan_limits` module reads those snapshots. A window whose reset time has passed reads as 0%
+  until the status line next runs; snapshots older than a week are ignored.
+- Dashboard rows `⏳ 5h Limit` and `📅 Week Limit` show `used% ↻countdown` per Claude account,
+  colored by fullness (`-` for tools without plan windows). The CLI table grows from 14 to 16 lines.
+
+### Changed
+- Health for a Claude account with a captured snapshot is the room left in its fuller window
+  (`1 - max(5h, weekly) / 100`) instead of the fixed 250K/1.75M output-token targets. Other tools,
+  and Claude accounts without a snapshot, keep the token estimate.
+
 ## [2.0.0-dash-0.22] - 2026-09-27
 
 Claude Code now counts subagent work (BZL-63) and reads every account, each shown separately
