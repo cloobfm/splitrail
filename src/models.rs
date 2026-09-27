@@ -1,6 +1,7 @@
 use phf::phf_map;
 use serde::{Deserialize, Serialize};
 
+use crate::price_feed::{self, ModelPrice, PriceSource};
 use crate::utils::warn_once;
 
 /// Represents different pricing tier structures for various models
@@ -547,6 +548,16 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         caching: CachingSupport::Anthropic {
             cache_write_per_1m: 12.5,
             cache_read_per_1m: 1.0,
+        },
+    },
+    "claude-opus-5-5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 4.0,
+            output_per_1m: 20.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 5.0,
+            cache_read_per_1m: 0.2,
         },
     },
     "claude-opus-5" => ModelInfo {
@@ -1632,6 +1643,8 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "mythos" => "claude-mythos-5-1",
     "claude-fable-5" => "claude-fable-5",
     "claude-mythos-5" => "claude-mythos-5",
+    "claude-opus-5-5" => "claude-opus-5-5",
+    "claude-opus-5.5" => "claude-opus-5-5",
     "claude-opus-5" => "claude-opus-5",
     "claude-opus-5-0" => "claude-opus-5",
     "opus" => "claude-opus-5",
@@ -1828,8 +1841,78 @@ pub fn get_model_info(model_name: &str) -> Option<&ModelInfo> {
     None
 }
 
+/// A price from the config overrides or the live feed, tried under the name as logged and then
+/// under its canonical alias. Takes precedence over the hardcoded table.
+fn live_price(model_name: &str) -> Option<ModelPrice> {
+    price_feed::lookup(model_name)
+        .or_else(|| {
+            MODEL_ALIASES
+                .get(model_name)
+                .and_then(|canonical| price_feed::lookup(canonical))
+        })
+        .map(|(price, _)| price)
+}
+
+fn warn_unknown(model_name: &str) {
+    warn_once(format!(
+        "WARNING: Unknown model: {model_name}. Defaulting to $0."
+    ));
+}
+
+/// Base input/output prices from the hardcoded table (first tier for tiered models). The price
+/// feed checks new prices against these before trusting them.
+pub fn builtin_flat_price(model_name: &str) -> Option<(f64, f64)> {
+    match &get_model_info(model_name)?.pricing {
+        PricingStructure::Flat {
+            input_per_1m,
+            output_per_1m,
+        } => Some((*input_per_1m, *output_per_1m)),
+        PricingStructure::Tiered { tiers } => tiers
+            .first()
+            .map(|tier| (tier.input_per_1m, tier.output_per_1m)),
+    }
+}
+
+/// Where a model's price resolves from, for `splitrail pricing show`.
+pub fn describe_price(model_name: &str) -> String {
+    let resolved = price_feed::lookup(model_name).or_else(|| {
+        MODEL_ALIASES
+            .get(model_name)
+            .and_then(|canonical| price_feed::lookup(canonical))
+    });
+    if let Some((price, source)) = resolved {
+        let source = match source {
+            PriceSource::Override => "config override",
+            PriceSource::Feed => "live feed (LiteLLM)",
+        };
+        let mut line = format!(
+            "{model_name}: ${:.4} in / ${:.4} out",
+            price.input_per_1m, price.output_per_1m
+        );
+        if let Some(write) = price.cache_write_per_1m {
+            line.push_str(&format!(" / ${write:.4} cache write"));
+        }
+        if let Some(read) = price.cache_read_per_1m {
+            line.push_str(&format!(" / ${read:.4} cache read"));
+        }
+        if !price.tiers.is_empty() {
+            line.push_str(&format!(" (+{} long-context tier(s))", price.tiers.len()));
+        }
+        return format!("{line} per 1M tokens — from {source}");
+    }
+    match builtin_flat_price(model_name) {
+        Some((input, output)) => format!(
+            "{model_name}: ${input:.4} in / ${output:.4} out per 1M tokens — from built-in table"
+        ),
+        None => format!("{model_name}: no price found (costs as $0)"),
+    }
+}
+
 /// Calculate cost for input tokens using the model's pricing structure
 pub fn calculate_input_cost(model_name: &str, input_tokens: u64) -> f64 {
+    if let Some(price) = live_price(model_name) {
+        return price.input_cost(input_tokens);
+    }
     match get_model_info(model_name) {
         Some(model_info) => match &model_info.pricing {
             PricingStructure::Flat { input_per_1m, .. } => {
@@ -1838,16 +1921,17 @@ pub fn calculate_input_cost(model_name: &str, input_tokens: u64) -> f64 {
             PricingStructure::Tiered { tiers } => calculate_tiered_cost(input_tokens, tiers, true),
         },
         None => {
-            warn_once(format!(
-                "WARNING: Unknown model: {model_name}. Defaulting to $0."
-            ));
-            (input_tokens as f64 / 1_000_000.0) * 0.0 // $0 per 1M tokens fallback
+            warn_unknown(model_name);
+            0.0
         }
     }
 }
 
 /// Calculate cost for output tokens using the model's pricing structure
 pub fn calculate_output_cost(model_name: &str, output_tokens: u64) -> f64 {
+    if let Some(price) = live_price(model_name) {
+        return price.output_cost(output_tokens);
+    }
     match get_model_info(model_name) {
         Some(model_info) => match &model_info.pricing {
             PricingStructure::Flat { output_per_1m, .. } => {
@@ -1858,10 +1942,8 @@ pub fn calculate_output_cost(model_name: &str, output_tokens: u64) -> f64 {
             }
         },
         None => {
-            warn_once(format!(
-                "WARNING: Unknown model: {model_name}. Defaulting to $0."
-            ));
-            (output_tokens as f64 / 1_000_000.0) * 0.0 // $0 per 1M tokens fallback
+            warn_unknown(model_name);
+            0.0
         }
     }
 }
@@ -1872,6 +1954,9 @@ pub fn calculate_cache_cost(
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
 ) -> f64 {
+    if let Some(price) = live_price(model_name) {
+        return price.cache_cost(cache_creation_tokens, cache_read_tokens);
+    }
     match get_model_info(model_name) {
         Some(model_info) => {
             match &model_info.caching {
@@ -1898,10 +1983,8 @@ pub fn calculate_cache_cost(
             }
         }
         None => {
-            warn_once(format!(
-                "WARNING: Unknown model: {model_name}. Defaulting to $0."
-            ));
-            (cache_read_tokens as f64 / 1_000_000.0) * 0.0 // $0 per 1M tokens fallback
+            warn_unknown(model_name);
+            0.0
         }
     }
 }
@@ -1914,6 +1997,12 @@ pub fn calculate_total_cost(
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
 ) -> f64 {
+    // One lookup instead of three on the hot path.
+    if let Some(price) = live_price(model_name) {
+        return price.input_cost(input_tokens)
+            + price.output_cost(output_tokens)
+            + price.cache_cost(cache_creation_tokens, cache_read_tokens);
+    }
     let input_cost = calculate_input_cost(model_name, input_tokens);
     let output_cost = calculate_output_cost(model_name, output_tokens);
     let cache_cost = calculate_cache_cost(model_name, cache_creation_tokens, cache_read_tokens);
@@ -1976,6 +2065,8 @@ mod tests {
             // Anthropic
             "claude-fable-5-1",
             "claude-fable-5",
+            "claude-opus-5-5",
+            "claude-opus-5.5",
             "claude-opus-5",
             "claude-opus-4-8",
             "claude-opus-4-6",

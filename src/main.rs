@@ -14,6 +14,7 @@ mod config;
 mod incremental;
 mod models;
 mod notifications;
+mod price_feed;
 mod reqwest_simd_json;
 mod tui;
 mod types;
@@ -57,6 +58,27 @@ enum Commands {
     /// Manage WARP integration (setup, refresh, status)
     #[command(about = "Manage WARP integration and auth token")]
     Warp(WarpArgs),
+    /// Refresh or inspect model pricing
+    #[command(about = "Refresh or inspect model pricing from the live price feed")]
+    Pricing(PricingArgs),
+}
+
+#[derive(Args)]
+struct PricingArgs {
+    #[command(subcommand)]
+    command: PricingSubcommands,
+}
+
+#[derive(Subcommand)]
+enum PricingSubcommands {
+    /// Fetch the latest prices now, regardless of cache age
+    Refresh,
+    /// Show the price used for one or more models and where it comes from
+    Show {
+        /// Model names as they appear in logs (e.g. claude-opus-5-5)
+        #[arg(required = true)]
+        models: Vec<String>,
+    },
 }
 
 #[derive(Args)]
@@ -75,7 +97,6 @@ enum WarpSubcommands {
     Status,
 }
 
-
 #[derive(Subcommand)]
 enum ConfigSubcommands {
     /// Create default configuration file
@@ -87,7 +108,7 @@ enum ConfigSubcommands {
     Show,
     /// Set configuration value
     Set {
-        /// Configuration key (api-token, auto-upload, number-comma, number-human, locale, decimal-places, health-display-style, notifications-enabled, notifications-wait-seconds, notifications-stale-minutes, notifications-sample-messages, slack-enabled, slack-webhook-url, slack-channel, slack-username)
+        /// Configuration key (api-token, auto-upload, number-comma, number-human, locale, decimal-places, health-display-style, notifications-enabled, notifications-wait-seconds, notifications-stale-minutes, notifications-sample-messages, slack-enabled, slack-webhook-url, slack-channel, slack-username, pricing-feed-enabled)
         key: String,
         /// Configuration value
         value: String,
@@ -121,6 +142,12 @@ async fn main() {
             .unwrap_or(config.formatting.decimal_places),
     };
 
+    // Prices must be in place before any analyzer parses a message.
+    price_feed::init(
+        config.pricing.overrides.clone(),
+        config.pricing.feed_enabled,
+    );
+
     match cli.command {
         None => {
             // No subcommand - run default behavior
@@ -139,6 +166,66 @@ async fn main() {
         Some(Commands::Warp(warp_args)) => {
             handle_warp_subcommand(warp_args).await;
         }
+        Some(Commands::Pricing(pricing_args)) => {
+            handle_pricing_subcommand(pricing_args, config.pricing.feed_enabled).await;
+        }
+    }
+}
+
+async fn handle_pricing_subcommand(args: PricingArgs, feed_enabled: bool) {
+    match args.command {
+        PricingSubcommands::Refresh => {
+            if !feed_enabled {
+                println!(
+                    "⚠️  Pricing feed is disabled (pricing-feed-enabled = false); refreshing anyway."
+                );
+            }
+            match price_feed::refresh().await {
+                Ok(report) => {
+                    println!(
+                        "✅ Loaded prices for {} models from {}",
+                        report.models,
+                        price_feed::FEED_URL
+                    );
+                    for name in &report.rejected {
+                        println!(
+                            "⚠️  Ignored a >10x price change for {name}; kept the previous price"
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Could not refresh prices: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        PricingSubcommands::Show { models } => {
+            match price_feed::cache_age() {
+                Some(age) => println!("Price feed cached {}h ago", age.as_secs() / 3600),
+                None => println!("No price feed cached; run `splitrail pricing refresh`"),
+            }
+            for model in models {
+                println!("{}", models::describe_price(&model));
+            }
+        }
+    }
+}
+
+/// Bring prices up to date before parsing. With no cache at all, wait for the first fetch so the
+/// first run is priced from the feed; otherwise refresh in the background and let the cached
+/// prices serve until it lands.
+async fn prepare_prices(feed_enabled: bool) {
+    if !feed_enabled {
+        return;
+    }
+    if price_feed::has_cache() {
+        tokio::spawn(price_feed::refresh_if_stale(feed_enabled));
+    } else {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            price_feed::refresh_if_stale(feed_enabled),
+        )
+        .await;
     }
 }
 
@@ -201,6 +288,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
 }
 
 async fn run_default(format_options: utils::NumberFormatOptions, config: config::Config) {
+    prepare_prices(config.pricing.feed_enabled).await;
     let registry = create_analyzer_registry();
 
     // Create file watcher
@@ -288,6 +376,17 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
 }
 
 async fn run_upload() -> Result<()> {
+    // Uploaded costs are durable, so wait for a stale feed to refresh rather than racing it.
+    let feed_enabled = config::Config::load()
+        .unwrap_or(None)
+        .unwrap_or_default()
+        .pricing
+        .feed_enabled;
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        price_feed::refresh_if_stale(feed_enabled),
+    )
+    .await;
     let registry = create_analyzer_registry();
     let stats = registry.load_all_stats().await?;
     let mut messages = vec![];
@@ -359,7 +458,7 @@ async fn handle_config_subcommand(config_args: ConfigArgs) {
                 Ok(Some(mut config)) => {
                     let _was_enabled = config.notifications.slack.enabled;
                     config.notifications.slack.enabled = !config.notifications.slack.enabled;
-                    
+
                     // Save the updated config
                     if let Err(e) = config.save(false) {
                         eprintln!("Failed to save config: {}", e);
@@ -374,7 +473,9 @@ async fn handle_config_subcommand(config_args: ConfigArgs) {
                     }
                 }
                 Ok(None) => {
-                    println!("❌ No configuration found. Run 'splitrail config init' to create one.");
+                    println!(
+                        "❌ No configuration found. Run 'splitrail config init' to create one."
+                    );
                     std::process::exit(1);
                 }
                 Err(e) => {

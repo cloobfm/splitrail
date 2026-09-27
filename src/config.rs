@@ -12,6 +12,8 @@ pub struct Config {
     pub notifications: NotificationConfig,
     #[serde(default)]
     pub warp: WarpConfig,
+    #[serde(default)]
+    pub pricing: PricingConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -70,6 +72,37 @@ pub struct WarpConfig {
     pub auto_sync: bool,
     #[serde(default = "default_warp_sync_interval_hours")]
     pub sync_interval_hours: u64,
+}
+
+/// Model pricing. Prices come from the live feed (see `price_feed`) unless the feed is disabled,
+/// with `overrides` taking precedence over both the feed and the built-in table:
+///
+/// ```toml
+/// [pricing.overrides."claude-opus-5-5"]
+/// input_per_1m = 4.0
+/// output_per_1m = 20.0
+/// cache_write_per_1m = 5.0
+/// cache_read_per_1m = 0.2
+/// ```
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PricingConfig {
+    #[serde(default = "default_pricing_feed_enabled")]
+    pub feed_enabled: bool,
+    #[serde(default)]
+    pub overrides: std::collections::HashMap<String, crate::price_feed::ModelPrice>,
+}
+
+impl Default for PricingConfig {
+    fn default() -> Self {
+        Self {
+            feed_enabled: default_pricing_feed_enabled(),
+            overrides: Default::default(),
+        }
+    }
+}
+
+fn default_pricing_feed_enabled() -> bool {
+    true
 }
 
 fn default_warp_auto_sync() -> bool {
@@ -132,6 +165,7 @@ impl Default for Config {
                 slack: SlackConfig::default(),
             },
             warp: WarpConfig::default(),
+            pricing: PricingConfig::default(),
         }
     }
 }
@@ -264,6 +298,8 @@ pub fn show_config() -> Result<()> {
                     "Disabled"
                 }
             );
+            println!("   Pricing Feed: {}", config.pricing.feed_enabled);
+            println!("   Price Overrides: {}", config.pricing.overrides.len());
         }
         None => {
             println!("❌ No configuration file found.");
@@ -354,6 +390,11 @@ pub fn set_config_value(key: &str, value: &str) -> Result<()> {
         }
         "slack-username" => {
             config.notifications.slack.username = Some(value.to_string());
+        }
+        "pricing-feed-enabled" => {
+            config.pricing.feed_enabled = value
+                .parse::<bool>()
+                .context("Invalid boolean value. Use 'true' or 'false'")?;
         }
         _ => anyhow::bail!("Unknown config key: {}", key),
     }

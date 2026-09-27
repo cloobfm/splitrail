@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.21] - 2026-09-27
+
+Model prices come from a live feed instead of only the hardcoded table, so new models are priced
+without a release.
+
+### Added
+- `price_feed` module: fetches LiteLLM's public price list (`model_prices_and_context_window.json`)
+  at most once a day and caches it at `~/.config/splitrail/prices.json`. Lookup order is
+  `[pricing.overrides]` in the config, then the feed, then the built-in table in `models.rs`.
+  Long-context surcharges (`*_above_{N}k_tokens`) become progressive tiers, matching the built-in
+  tier math.
+- A refreshed price that moves more than 10x from the previous feed (or from the built-in table,
+  for a model the feed did not have before) is ignored and warned about, guarding against a bad
+  upstream commit.
+- `splitrail pricing refresh` fetches now; `splitrail pricing show <model>...` prints the price
+  used and where it came from.
+- Config: `[pricing] feed_enabled` (default true, also `config set pricing-feed-enabled`) and
+  `[pricing.overrides."<model>"]` with `input_per_1m`, `output_per_1m`, optional
+  `cache_write_per_1m` / `cache_read_per_1m`.
+- Built-in price for `claude-opus-5-5` ($4 / $20, cache $5 write / $0.20 read), which was falling
+  through to $0.
+
+### Changed
+- The dashboard waits up to 10s for the first-ever fetch, then refreshes a stale feed in the
+  background; prices from a background refresh apply to messages parsed after it lands.
+  `splitrail upload` waits up to 10s for a stale feed so uploaded costs use current prices.
+  Costs already aggregated or uploaded are not re-priced.
+
 ## [2.0.0-dash-0.20] - 2026-09-07
 
 BZL-14 phase 2 (in-memory half). The Claude Code analyzer folds parsed messages into per-day
