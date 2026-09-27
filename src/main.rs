@@ -268,8 +268,18 @@ async fn handle_warp_subcommand(args: WarpArgs) {
 fn create_analyzer_registry() -> AnalyzerRegistry {
     let mut registry = AnalyzerRegistry::new();
 
-    // Register available analyzers
-    registry.register(ClaudeCodeAnalyzer::new());
+    // Register available analyzers. One Claude Code analyzer per account, so each account's
+    // usage and limits are shown separately (BZL-64); a single account keeps the plain name.
+    let claude_accounts = config::Config::load()
+        .unwrap_or(None)
+        .unwrap_or_default()
+        .claude_code
+        .resolved_accounts();
+    let label_accounts = claude_accounts.len() > 1;
+    for (label, dir) in claude_accounts {
+        let label = label_accounts.then_some(label.as_str());
+        registry.register(ClaudeCodeAnalyzer::for_account(label, dir));
+    }
     registry.register(ClineAnalyzer::new());
     // registry.register(RooCodeAnalyzer::new()); // Temporarily disabled
     registry.register(KiloCodeAnalyzer::new());

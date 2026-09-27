@@ -4,10 +4,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::analyzer::{Analyzer, DataSource};
-use crate::incremental::{ChunkResult, IncrementalJsonlCache, MessageChunk, RefreshReport};
+use crate::incremental::{ChunkResult, IncrementalJsonlCache, RefreshReport};
 use crate::models::calculate_total_cost;
 use crate::types::{
     AgenticCodingToolStats, Application, ConversationMessage, DailyStats, MessageRole, Stats,
@@ -16,6 +16,10 @@ use crate::utils::hash_text;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub struct ClaudeCodeAnalyzer {
+    /// The Claude Code config directory to read (`~/.claude` unless this is a second account).
+    config_dir: Option<PathBuf>,
+    /// Display name; distinct per account so each gets its own dashboard column (BZL-64).
+    name: &'static str,
     /// Per-file parse cache so a reload only parses bytes appended since the last one. It holds
     /// cursors, not contents.
     cache: IncrementalJsonlCache<JsonlParseState>,
@@ -229,6 +233,25 @@ impl Default for ClaudeCodeAnalyzer {
 impl ClaudeCodeAnalyzer {
     pub fn new() -> Self {
         Self {
+            config_dir: std::env::home_dir().map(|home| home.join(".claude")),
+            name: "Claude Code",
+            cache: IncrementalJsonlCache::new(),
+            accum: std::sync::Mutex::new(Accumulator::default()),
+        }
+    }
+
+    /// An analyzer for one account's config directory. With a label it is shown as
+    /// `Claude (<label>)`, kept short to fit a 13-column dashboard cell; without one it keeps the
+    /// plain `Claude Code` name.
+    pub fn for_account(label: Option<&str>, config_dir: PathBuf) -> Self {
+        Self {
+            config_dir: Some(config_dir),
+            // Analyzers live for the whole process and there is one per account, so leaking the
+            // name to satisfy `display_name(&self) -> &'static str` costs a few bytes once.
+            name: match label {
+                Some(label) => Box::leak(format!("Claude ({label})").into_boxed_str()),
+                None => "Claude Code",
+            },
             cache: IncrementalJsonlCache::new(),
             accum: std::sync::Mutex::new(Accumulator::default()),
         }
@@ -284,18 +307,19 @@ impl ClaudeCodeAnalyzer {
 #[async_trait]
 impl Analyzer for ClaudeCodeAnalyzer {
     fn display_name(&self) -> &'static str {
-        "Claude Code"
+        self.name
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
-        let mut patterns = Vec::new();
-
-        if let Some(home_dir) = std::env::home_dir() {
-            let home_str = home_dir.to_string_lossy();
-            patterns.push(format!("{home_str}/.claude/projects/*/*.jsonl"));
-        }
-
-        patterns
+        let Some(config_dir) = &self.config_dir else {
+            return Vec::new();
+        };
+        let dir = config_dir.to_string_lossy();
+        vec![
+            format!("{dir}/projects/*/*.jsonl"),
+            // Subagent transcripts live one level down, beside their parent session (BZL-63).
+            format!("{dir}/projects/*/*/subagents/*.jsonl"),
+        ]
     }
 
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
@@ -353,9 +377,25 @@ impl Analyzer for ClaudeCodeAnalyzer {
 
 // Claude Code specific implementation functions
 
+/// For a subagent transcript (`projects/{PROJECT_ID}/{session_uuid}/subagents/agent-*.jsonl`),
+/// the path of the session transcript that spawned it (`projects/{PROJECT_ID}/{session_uuid}.jsonl`).
+pub fn subagent_parent_transcript(file_path: &Path) -> Option<PathBuf> {
+    let subagents_dir = file_path.parent()?;
+    if subagents_dir.file_name()? != "subagents" {
+        return None;
+    }
+    let session_dir = subagents_dir.parent()?;
+    let session_id = session_dir.file_name()?.to_str()?;
+    Some(session_dir.parent()?.join(format!("{session_id}.jsonl")))
+}
+
 // Helper function to extract project ID from Claude Code file path and hash it
 pub fn extract_project_id(file_path: &Path) -> String {
     // Claude Code path format: ~/.claude/projects/{PROJECT_ID}/{conversation_uuid}.jsonl
+    // Subagents resolve through their parent session so they land in the same project.
+    if let Some(parent_transcript) = subagent_parent_transcript(file_path) {
+        return extract_project_id(&parent_transcript);
+    }
 
     if let Some(parent) = file_path.parent()
         && let Some(project_id) = parent.file_name().and_then(|name| name.to_str())
@@ -747,7 +787,11 @@ where
 
     let project_id_from_path = extract_project_id(file_path);
     let mut entries = Vec::new();
-    let file_path_str = file_path.to_string_lossy();
+    // A subagent's work belongs to the session that spawned it: sharing the parent's
+    // conversation hash rolls its usage in without counting it as a session of its own.
+    let conversation_path = subagent_parent_transcript(file_path);
+    let conversation_path = conversation_path.as_deref().unwrap_or(file_path);
+    let conversation_hash = hash_text(&conversation_path.to_string_lossy());
     let mut consumed: u64 = 0;
     let mut buf: Vec<u8> = Vec::new();
 
@@ -906,7 +950,7 @@ where
                 .project_label
                 .clone()
                 .unwrap_or_else(|| project_id_from_path.clone()),
-            conversation_hash: hash_text(&file_path_str),
+            conversation_hash: conversation_hash.clone(),
             stats,
             role: if is_assistant {
                 MessageRole::Assistant
@@ -923,14 +967,12 @@ where
 
 // Type alias for token fingerprint tracking to avoid type complexity
 type TokenFingerprint = (u64, u64, u64, u64, u64);
+#[cfg(test)]
 type TokenFingerprintMap = HashMap<String, HashSet<TokenFingerprint>>;
 
-/// Deduplicate across the cache's shared per-file chunks without first flattening them into one
-/// big owned vector — that concat was a full extra copy of the corpus on every reload (BZL-13).
-pub fn deduplicate_message_chunks(chunks: &[MessageChunk]) -> Vec<ConversationMessage> {
-    dedup_messages(chunks.iter().flat_map(|chunk| chunk.iter()))
-}
-
+/// Batch reference for the dedup rules `Accumulator::fold` applies incrementally. The live path
+/// no longer calls it (BZL-14); tests keep it to pin down what folding must reproduce.
+#[cfg(test)]
 pub(crate) fn dedup_messages<'a>(
     messages: impl Iterator<Item = &'a ConversationMessage>,
 ) -> Vec<ConversationMessage> {

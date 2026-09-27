@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.22] - 2026-09-27
+
+Claude Code now counts subagent work (BZL-63) and reads every account, each shown separately
+(BZL-64).
+
+### Fixed
+- Subagent transcripts (`projects/<project>/<session>/subagents/agent-*.jsonl`) were never
+  discovered: the pattern only matched `projects/*/*.jsonl`. They are now read and share their
+  parent session's conversation hash and project, so their tokens, cost and tool calls count while
+  Sessions still means one per conversation you started. On the author's data: 108 → 427 files,
+  output tokens 65.1M → 74.2M (+14%), estimated cost $23,748 → $26,429, sessions unchanged at 105.
+
+### Added
+- Multiple Claude Code accounts. `[[claude_code.accounts]]` (`label`, `dir`) lists config
+  directories; left empty, Splitrail uses `~/.claude` as "main" plus every `~/.claude-<label>` that
+  holds both `projects/` and `.claude.json`. With more than one account, each gets its own
+  analyzer and dashboard column, `Claude (<label>)`; a single account keeps the `Claude Code` name.
+  `config show` lists the resolved accounts. The second account on the author's machine
+  (`~/.claude-v`: 59 files, 35 sessions, 4.2M output tokens) was previously invisible.
+
+### Performance
+- The Claude Code conversation hash is computed once per file chunk instead of once per message.
+
+### Removed
+- `deduplicate_message_chunks`, unused since BZL-14 phase 2. `dedup_messages` is now test-only:
+  it remains the batch reference that `Accumulator::fold` is tested against. `cargo build` is
+  warning-free.
+
 ## [2.0.0-dash-0.21] - 2026-09-27
 
 Model prices come from a live feed instead of only the hardcoded table, so new models are priced

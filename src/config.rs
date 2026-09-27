@@ -14,6 +14,79 @@ pub struct Config {
     pub warp: WarpConfig,
     #[serde(default)]
     pub pricing: PricingConfig,
+    #[serde(default)]
+    pub claude_code: ClaudeCodeConfig,
+}
+
+/// Claude Code accounts to read, one config directory each. Empty means auto-detect: `~/.claude`
+/// plus any `~/.claude-<label>` directory that holds both `projects/` and `.claude.json`.
+///
+/// ```toml
+/// [[claude_code.accounts]]
+/// label = "main"
+/// dir = "~/.claude"
+///
+/// [[claude_code.accounts]]
+/// label = "v"
+/// dir = "~/.claude-v"
+/// ```
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ClaudeCodeConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<ClaudeAccount>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ClaudeAccount {
+    pub label: String,
+    pub dir: String,
+}
+
+impl ClaudeCodeConfig {
+    /// The accounts to read, as (label, directory), with `~` expanded.
+    pub fn resolved_accounts(&self) -> Vec<(String, PathBuf)> {
+        let Some(home) = std::env::home_dir() else {
+            return Vec::new();
+        };
+        if !self.accounts.is_empty() {
+            return self
+                .accounts
+                .iter()
+                .map(|a| (a.label.clone(), expand_home(&a.dir, &home)))
+                .collect();
+        }
+        detect_claude_accounts(&home)
+    }
+}
+
+fn expand_home(dir: &str, home: &std::path::Path) -> PathBuf {
+    match dir.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None if dir == "~" => home.to_path_buf(),
+        None => PathBuf::from(dir),
+    }
+}
+
+/// `~/.claude` as "main", plus each `~/.claude-<label>` that looks like a Claude Code config
+/// directory. Siblings such as `~/.claude-worktrees` have no `.claude.json` and are skipped.
+pub fn detect_claude_accounts(home: &std::path::Path) -> Vec<(String, PathBuf)> {
+    let mut accounts = vec![("main".to_string(), home.join(".claude"))];
+    let Ok(entries) = fs::read_dir(home) else {
+        return accounts;
+    };
+    let mut extra: Vec<(String, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let label = name.strip_prefix(".claude-")?.to_string();
+            let path = entry.path();
+            (path.join("projects").is_dir() && path.join(".claude.json").is_file())
+                .then_some((label, path))
+        })
+        .collect();
+    extra.sort();
+    accounts.extend(extra);
+    accounts
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -166,6 +239,7 @@ impl Default for Config {
             },
             warp: WarpConfig::default(),
             pricing: PricingConfig::default(),
+            claude_code: ClaudeCodeConfig::default(),
         }
     }
 }
@@ -300,6 +374,9 @@ pub fn show_config() -> Result<()> {
             );
             println!("   Pricing Feed: {}", config.pricing.feed_enabled);
             println!("   Price Overrides: {}", config.pricing.overrides.len());
+            for (label, dir) in config.claude_code.resolved_accounts() {
+                println!("   Claude Account: {label} → {}", dir.display());
+            }
         }
         None => {
             println!("❌ No configuration file found.");

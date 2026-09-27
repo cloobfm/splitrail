@@ -527,3 +527,66 @@ async fn test_analyzer_reloads_incrementally() {
         "the appended turn's model reached the daily aggregate"
     );
 }
+
+/// BZL-63: subagent transcripts are discovered, their usage counts, and they roll into the parent
+/// session rather than adding sessions of their own.
+#[tokio::test]
+async fn subagent_transcripts_roll_into_their_parent_session() {
+    use crate::analyzer::Analyzer;
+    use crate::analyzers::claude_code::subagent_parent_transcript;
+
+    let config_dir = tempfile::tempdir().unwrap();
+    let project_dir = config_dir.path().join("projects").join("-Users-test-proj");
+    let subagents_dir = project_dir.join("session-1").join("subagents");
+    std::fs::create_dir_all(&subagents_dir).unwrap();
+    let parent = project_dir.join("session-1.jsonl");
+    std::fs::write(&parent, format!("{}\n", JSONL_DATA.as_str())).unwrap();
+
+    let subagent_line = r#"{"parentUuid":null,"isSidechain":true,"userType":"external","cwd":"D:\\splitrail","sessionId":"session-1","version":"2.1.0","agentId":"a1","type":"assistant","message":{"id":"msg_sub","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"sub"}],"usage":{"input_tokens":100,"output_tokens":1000}},"requestId":"req_sub","uuid":"sub-uuid","timestamp":"2025-08-02T14:10:00.000Z"}"#;
+    let subagent = subagents_dir.join("agent-a1.jsonl");
+    std::fs::write(&subagent, format!("{subagent_line}\n")).unwrap();
+
+    assert_eq!(subagent_parent_transcript(&subagent), Some(parent.clone()));
+    assert_eq!(subagent_parent_transcript(&parent), None);
+    assert_eq!(extract_project_id(&subagent), "-Users-test-proj");
+
+    let analyzer = ClaudeCodeAnalyzer::for_account(None, config_dir.path().to_path_buf());
+    let sources = analyzer.discover_data_sources().unwrap();
+    assert_eq!(sources.len(), 2, "parent and subagent transcripts are both discovered");
+
+    let stats = analyzer.get_stats().await.unwrap();
+    let output: u64 = stats.daily_stats.values().map(|d| d.stats.output_tokens).sum();
+    assert_eq!(output, 7 + 15 + 1000, "subagent output tokens are counted");
+    assert_eq!(stats.num_conversations, 1, "a subagent is not a session of its own");
+}
+
+/// BZL-64: each account reads only its own config directory and gets its own name.
+#[test]
+fn accounts_read_their_own_directory_under_their_own_name() {
+    use crate::analyzer::Analyzer;
+
+    let v = ClaudeCodeAnalyzer::for_account(Some("v"), "/home/u/.claude-v".into());
+    assert_eq!(v.display_name(), "Claude (v)");
+    assert!(
+        v.get_data_glob_patterns()
+            .iter()
+            .all(|p| p.starts_with("/home/u/.claude-v/projects/"))
+    );
+    let solo = ClaudeCodeAnalyzer::for_account(None, "/home/u/.claude".into());
+    assert_eq!(solo.display_name(), "Claude Code");
+}
+
+#[test]
+fn detects_extra_account_dirs_but_not_lookalikes() {
+    let home = tempfile::tempdir().unwrap();
+    let v = home.path().join(".claude-v");
+    std::fs::create_dir_all(v.join("projects")).unwrap();
+    std::fs::write(v.join(".claude.json"), "{}").unwrap();
+    // Has projects/ but is not a config dir.
+    std::fs::create_dir_all(home.path().join(".claude-worktrees").join("projects")).unwrap();
+
+    let accounts = crate::config::detect_claude_accounts(home.path());
+    let labels: Vec<&str> = accounts.iter().map(|(l, _)| l.as_str()).collect();
+    assert_eq!(labels, vec!["main", "v"]);
+    assert_eq!(accounts[1].1, v);
+}
