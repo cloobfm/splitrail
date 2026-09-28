@@ -109,13 +109,21 @@ impl NotificationManager {
                     // Only send one notification per analyzer per tick
                     if let Some(slack) = &self.slack {
                         if let Err(e) = slack.send(&text).await {
-                            eprintln!("⚠️ Failed to deliver Slack notification: {e:#}");
+                            crate::utils::report(format!(
+                                "⚠️ Failed to deliver Slack notification: {e:#}"
+                            ));
                         } else {
                             mark_notification_sent();
                         }
                     } else {
-                        // Surface locally so the user still sees the alert
-                        eprintln!("{text}");
+                        // Surface locally so the user still sees the alert. Under the TUI, printing
+                        // multi-line alert text scrambled the screen until a resize; the dashboard
+                        // shows the alert time in its activity bar, and the text goes to the log.
+                        if crate::utils::tui_active() {
+                            crate::utils::log_error(format!("Notification: {text}"));
+                        } else {
+                            eprintln!("{text}");
+                        }
                         mark_notification_sent();
                     }
                 }

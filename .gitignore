@@ -9,3 +9,4 @@ releases/
 schemas/warp/captured/*.jsonl
 schemas/warp/samples/*.log
 schemas/warp/samples/.warp_offset
+__pycache__/

@@ -14,14 +14,22 @@ Configure it once per account, passing that account's label:
     }
 
 It never fails the status line: any error still prints something and exits 0.
+
+Every open session on an account runs its own status line, and each reports the limits it saw
+on its own last API call, so an idle session reports old numbers. Overwriting the file with
+whatever arrived last made the dashboard flicker (weekly 5% -> 24% -> 9% within a minute).
+Snapshots are therefore merged per window: usage within a window only grows, so for the same
+window the higher figure wins, a later reset time means a new window, and an earlier reset time
+is a stale session and is ignored.
 """
 
+import fcntl
 import json
 import os
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 LIMITS_DIR = os.path.expanduser("~/.config/splitrail/limits")
 
@@ -63,28 +71,71 @@ def countdown(seconds):
     return f"{minutes}m"
 
 
+# Reset times of the same window can differ slightly between reports; beyond this they are
+# different windows.
+SAME_WINDOW_TOLERANCE_SECS = 30 * 60
+
+
+def merge_window(old, new):
+    """The more current of two reports of one window (dicts with used_percentage/resets_at)."""
+    if not isinstance(new, dict) or used_percent(new) is None:
+        return old
+    if not isinstance(old, dict) or used_percent(old) is None:
+        return new
+    old_reset, new_reset = parse_reset(old.get("resets_at")), parse_reset(new.get("resets_at"))
+    if old_reset is not None and new_reset is not None:
+        if new_reset > old_reset + SAME_WINDOW_TOLERANCE_SECS:
+            return new  # A newer window has started.
+        if new_reset < old_reset - SAME_WINDOW_TOLERANCE_SECS:
+            return old  # A stale session still reporting the previous window.
+    return new if used_percent(new) >= used_percent(old) else old
+
+
+def merge_limits(old, new):
+    old = old if isinstance(old, dict) else {}
+    new = new if isinstance(new, dict) else {}
+    merged = {}
+    for key in set(old) | set(new):
+        window = merge_window(old.get(key), new.get(key))
+        if window is not None:
+            merged[key] = window
+    return merged or None
+
+
 def save_snapshot(label, payload):
+    """Merge this payload into the account's snapshot and return the merged rate limits."""
     os.makedirs(LIMITS_DIR, exist_ok=True)
-    snapshot = {
-        "account": label,
-        "captured_at": time.time(),
-        "rate_limits": payload.get("rate_limits"),
-        # Kept so a payload without rate_limits can be diagnosed from the file alone.
-        "payload_keys": sorted(payload.keys()),
-    }
-    # Write-then-rename: the dashboard may read while a status line refresh is writing.
-    fd, tmp = tempfile.mkstemp(dir=LIMITS_DIR, prefix=f".{label}.", suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
-        json.dump(snapshot, f)
-    os.replace(tmp, os.path.join(LIMITS_DIR, f"{label}.json"))
+    path = os.path.join(LIMITS_DIR, f"{label}.json")
+    # Sessions refresh concurrently; serialise the read-merge-write so none is lost.
+    with open(os.path.join(LIMITS_DIR, f".{label}.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(path) as f:
+                previous = json.load(f).get("rate_limits")
+        except (OSError, ValueError, AttributeError):
+            previous = None
+        merged = merge_limits(previous, payload.get("rate_limits"))
+        snapshot = {
+            "account": label,
+            "captured_at": time.time(),
+            "rate_limits": merged,
+            # Kept so a payload without rate_limits can be diagnosed from the file alone.
+            "payload_keys": sorted(payload.keys()),
+        }
+        # Write-then-rename: the dashboard may read while a status line refresh is writing.
+        fd, tmp = tempfile.mkstemp(dir=LIMITS_DIR, prefix=f".{label}.", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(snapshot, f)
+        os.replace(tmp, path)
+    return merged
 
 
-def summary(label, payload):
+def summary(label, payload, limits):
     parts = [label]
     model = (payload.get("model") or {}).get("display_name")
     if model:
         parts.append(model)
-    limits = payload.get("rate_limits") or {}
+    limits = limits or {}
     now = time.time()
     for key, short in WINDOWS:
         window = limits.get(key)
@@ -109,10 +160,11 @@ def main():
         print(label)
         return
     try:
-        save_snapshot(label, payload)
+        # Show the merged view, so every session agrees on the account's usage.
+        limits = save_snapshot(label, payload)
     except OSError:
-        pass  # A read-only or full disk must not break the status line.
-    print(summary(label, payload))
+        limits = payload.get("rate_limits")  # A read-only or full disk must not break the line.
+    print(summary(label, payload, limits))
 
 
 if __name__ == "__main__":

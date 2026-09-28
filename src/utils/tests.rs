@@ -362,3 +362,23 @@ mod tests {
         chrono::Local::now().format("%Y-%m-%d").to_string()
     }
 }
+#[test]
+fn sanitize_for_terminal_blanks_control_characters() {
+    use crate::utils::sanitize_for_terminal;
+    assert_eq!(sanitize_for_terminal("a\tb\nc\r\u{1b}[2Jd"), "a b c  [2Jd");
+    // Printable non-ASCII (wide or not) passes through untouched.
+    assert_eq!(sanitize_for_terminal("日本 🔷 ok"), "日本 🔷 ok");
+}
+
+#[test]
+fn report_goes_to_warnings_while_the_tui_is_active() {
+    use crate::utils::{get_warnings, report, set_tui_active};
+    set_tui_active(true);
+    report("stray message that must not hit stderr (test)");
+    set_tui_active(false);
+    assert!(
+        get_warnings()
+            .iter()
+            .any(|w| w.contains("stray message that must not hit stderr (test)"))
+    );
+}

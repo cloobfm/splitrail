@@ -263,6 +263,7 @@ pub fn run_tui(
     enable_raw_mode()?;
     let _guard = TerminalGuard;
     stdout.execute(EnterAlternateScreen)?;
+    crate::utils::set_tui_active(true);
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -301,6 +302,7 @@ struct TerminalGuard;
 
 impl TerminalGuard {
     fn restore() {
+        crate::utils::set_tui_active(false);
         let _ = disable_raw_mode();
         let _ = execute!(
             stdout(),
@@ -582,7 +584,9 @@ async fn run_app(
                     }
                 }
                 Err(err) => {
-                    eprintln!("Clock-only redraw failed, falling back to full redraw: {err}");
+                    crate::utils::report(format!(
+                        "Clock-only redraw failed, falling back to full redraw: {err}"
+                    ));
                     needs_redraw = true;
                 }
             }
@@ -644,6 +648,16 @@ async fn run_app(
                         break;
                     }
 
+                    // Ctrl-L repaints every cell, the usual terminal convention, for anything that
+                    // still manages to draw behind ratatui's back.
+                    if matches!(key.code, KeyCode::Char('l'))
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        terminal.clear()?;
+                        needs_redraw = true;
+                        continue;
+                    }
+
                     // Handle mouse mode toggle
                     if matches!(key.code, KeyCode::Char('m')) {
                         tui_state.mouse_mode_enabled = !tui_state.mouse_mode_enabled;
@@ -699,7 +713,7 @@ async fn run_app(
                                 
                                 // Save the updated config
                                 if let Err(e) = config.save(false) {
-                                    eprintln!("Failed to save config: {}", e);
+                                    crate::utils::report(format!("Failed to save config: {e}"));
                                 } else {
                                     // Set status message with auto-clear timer
                                     let status = if config.notifications.slack.enabled {
@@ -1208,13 +1222,13 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, q/Esc: quit",
                 mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, q/Esc: quit",
                 mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))

@@ -824,10 +824,10 @@ impl Analyzer for QwenCodeAnalyzer {
                     match parse_json_session_file(&source.path) {
                         Ok(messages) => messages,
                         Err(e) => {
-                            eprintln!(
+                            crate::utils::report(format!(
                                 "Failed to parse Qwen Code session file {}: {e:#}",
                                 source.path.display(),
-                            );
+                            ));
                             Vec::new()
                         }
                     }
@@ -836,10 +836,10 @@ impl Analyzer for QwenCodeAnalyzer {
                     match parse_jsonl_stats_file(&source.path) {
                         Ok(messages) => messages,
                         Err(e) => {
-                            eprintln!(
+                            crate::utils::report(format!(
                                 "Failed to parse Qwen Code stats file {}: {e:#}",
                                 source.path.display(),
-                            );
+                            ));
                             Vec::new()
                         }
                     }

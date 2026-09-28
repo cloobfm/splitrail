@@ -1146,7 +1146,9 @@ pub fn get_last_message_preview(
         .iter()
         .filter_map(|msg| {
             if let Some(content) = &msg.content {
-                let single_line_content = content.replace('\n', " ").replace('\r', "");
+                // Newlines, tabs and escape codes all become spaces: written raw, they move the
+                // terminal cursor where ratatui does not expect it.
+                let single_line_content = crate::utils::sanitize_for_terminal(content);
                 if !single_line_content.trim().is_empty() {
                     let msg_role_name = match msg.role {
                         crate::types::MessageRole::User => username.as_str(),

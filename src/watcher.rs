@@ -116,11 +116,11 @@ impl FileWatcher {
         // Start watching all directories
         for dir in &watched_dirs {
             if let Err(e) = watcher.watch(dir, RecursiveMode::Recursive) {
-                eprintln!(
+                crate::utils::report(format!(
                     "Warning: Could not watch directory {}: {}",
                     dir.display(),
                     e
-                );
+                ));
             }
         }
 
@@ -271,7 +271,7 @@ impl RealtimeStatsManager {
                 }
             }
             WatcherEvent::Error(err) => {
-                eprintln!("❌ Watcher error: {err}");
+                crate::utils::report(format!("❌ Watcher error: {err}"));
             }
         }
         Ok(())
@@ -297,7 +297,7 @@ impl RealtimeStatsManager {
                     self.last_reload_times.insert(analyzer_name.clone(), now);
 
                     if let Err(e) = self.reload_analyzer_stats(&analyzer_name, true).await {
-                        eprintln!("❌ Error reloading {analyzer_name}: {e}");
+                        crate::utils::report(format!("❌ Error reloading {analyzer_name}: {e}"));
                     }
                 }
 

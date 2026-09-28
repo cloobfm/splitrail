@@ -121,6 +121,40 @@ pub fn log_error(message: impl AsRef<str>) {
     write_log_line("ERROR", message.as_ref());
 }
 
+/// Set while the TUI owns the terminal. Anything written to stdout/stderr then lands on the
+/// alternate screen underneath ratatui, which only repaints cells it believes changed, so the
+/// stray text stays until a resize forces a full redraw.
+static TUI_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_tui_active(active: bool) {
+    TUI_ACTIVE.store(active, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn tui_active() -> bool {
+    TUI_ACTIVE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Report a problem without corrupting the TUI: while it runs, the message goes to the Warnings
+/// panel and the debug log (`d`); otherwise to stderr as before.
+pub fn report(message: impl Into<String>) {
+    let message = message.into();
+    if tui_active() {
+        log_error(&message);
+        warn_once(message);
+    } else {
+        eprintln!("{message}");
+    }
+}
+
+/// Make transcript text safe to hand to the terminal on one line. Tabs, escape sequences and
+/// other control characters are written raw by the terminal backend and move the cursor behind
+/// ratatui's back, so they become spaces.
+pub fn sanitize_for_terminal(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 pub fn read_log_tail(max_lines: usize) -> Option<Vec<String>> {
     if max_lines == 0 {
         return Some(Vec::new());

@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.25] - 2026-09-27
+
+### Fixed
+- Plan-limit rows flickered (weekly for one account read 5% → 24% → 9% → 16% within a minute).
+  Every open Claude Code session runs its own status line and reports the limits from its own
+  last API call, and the capture script let the last writer win, so idle sessions kept rolling the
+  snapshot back. The script now merges each window under a file lock: for the same window the
+  higher usage wins (usage only grows within a window), a reset time more than 30 minutes later
+  starts a new window, an earlier one is a stale session and is ignored, and a payload missing a
+  window keeps the known one (most payloads omitted `five_hour`, leaving it blank). The status
+  line itself now shows the merged figures, so all sessions agree. Sampled live for 75s after the
+  fix: one stable value per account.
+
+- The dashboard slowly scrambled (text from alerts and message previews smeared across other rows)
+  until the terminal was resized. With notifications on and Slack off, waiting-conversation alerts
+  were printed to stderr on top of the running TUI; ratatui only repaints cells it thinks changed,
+  so the stray text stayed. The file watcher, analyzer reloads, the Qwen parser and two TUI error
+  paths did the same. They now go through `utils::report`, which sends messages to the Warnings
+  panel and `~/.splitrail.log` while the TUI owns the terminal (stderr otherwise); alert text goes
+  to the log. Message previews are passed through `sanitize_for_terminal`, which turns tabs,
+  escape sequences and other control characters from transcripts into spaces.
+
+### Added
+- `scripts/test_claude_statusline_capture.py` (`python3 -m unittest scripts/test_claude_statusline_capture.py`).
+- `Ctrl-L` forces a full repaint, for anything that still draws behind ratatui's back.
+
 ## [2.0.0-dash-0.23] - 2026-09-27
 
 Plan-limit usage and reset times per Claude account (BZL-66), and health based on them (BZL-65).
