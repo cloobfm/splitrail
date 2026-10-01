@@ -160,9 +160,13 @@ fn limits_dir() -> Option<PathBuf> {
     )
 }
 
-/// The account label behind a Claude Code analyzer's display name: `Claude (<label>)`, or the
-/// single configured account for a plain `Claude Code`. `None` for other tools.
+/// The snapshot label behind an analyzer's display name: `Claude (<label>)`, the single
+/// configured account for a plain `Claude Code`, or `antigravity` (written by
+/// `scripts/agy_statusline_capture.py`). `None` for other tools.
 pub fn account_label(analyzer_name: &str) -> Option<String> {
+    if analyzer_name == crate::analyzers::antigravity::DISPLAY_NAME {
+        return Some("antigravity".to_string());
+    }
     if let Some(label) = analyzer_name
         .strip_prefix("Claude (")
         .and_then(|rest| rest.strip_suffix(')'))
@@ -191,7 +195,7 @@ pub fn account_label(analyzer_name: &str) -> Option<String> {
     None
 }
 
-/// Current plan limits for a Claude Code analyzer, if its status line has captured any.
+/// Current plan limits for an analyzer, from its own logs or a status line snapshot.
 pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -277,6 +281,7 @@ mod tests {
     fn account_labels_come_from_analyzer_names() {
         assert_eq!(account_label("Claude (v)").as_deref(), Some("v"));
         assert_eq!(account_label("Codex CLI"), None);
+        assert_eq!(account_label("Antigravity").as_deref(), Some("antigravity"));
     }
 
     #[test]

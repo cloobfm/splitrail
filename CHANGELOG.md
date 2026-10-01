@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.28] - 2026-10-01
+
+Antigravity CLI (`agy`) tracking.
+
+### Added
+- Antigravity column: sessions, tokens, and cost per day, plus `⏳ 5h Limit` / `📅 Week Limit`
+  rows and health. `agy` keeps no readable usage logs (each conversation is a SQLite file of
+  protobuf blobs), so `scripts/agy_statusline_capture.py` runs as its status line (configured in
+  `~/.gemini/antigravity-cli/settings.json`) and records what the payload carries: each growth
+  in a conversation's token totals goes to `~/.config/splitrail/antigravity/usage.jsonl`
+  (running totals kept in `state.json` beside it, under a file lock), and the per-model quota
+  goes to `~/.config/splitrail/limits/antigravity.json` in the Claude snapshot format, merged by
+  the same per-window rules. Quota buckets resetting within a day fill the 5h row, later ones
+  the weekly row, keeping the fullest of each.
+- `agy` often sends only a display name (`Gemini 3.8 Flash (High)`); it is reduced to the feed
+  slug (`gemini-3.8-flash`) for pricing.
+- Cost is an upper bound: the totals do not separate cache reads, so all input is priced at the
+  full input rate. Events without a model are counted under `antigravity-unknown` at $0.
+- Usage only accrues while the status line runs; history before this release is not available.
+
+### Fixed
+- Status line temp files orphaned when the process is killed mid-write (seen under `agy`, which
+  restarts the command on rapid state changes; one Claude `.main.*.tmp` too) are swept after 60s.
+
+### Changed
+- Uploads skip Antigravity messages, since Splitrail Cloud does not know the `antigravity`
+  application yet.
+
 ## [2.0.0-dash-0.27] - 2026-10-01
 
 Codex CLI plan limits on the dashboard.

@@ -102,6 +102,27 @@ def merge_limits(old, new):
     return merged or None
 
 
+# Temp files older than this were left by a status line process killed mid-write (agy kills
+# the previous run when the agent state changes quickly).
+STALE_TMP_SECS = 60
+
+
+def sweep_stale_tmp(directory, now=None):
+    now = time.time() if now is None else now
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+    for name in names:
+        if name.startswith(".") and name.endswith(".tmp"):
+            path = os.path.join(directory, name)
+            try:
+                if now - os.path.getmtime(path) > STALE_TMP_SECS:
+                    os.remove(path)
+            except OSError:
+                pass
+
+
 def save_snapshot(label, payload):
     """Merge this payload into the account's snapshot and return the merged rate limits."""
     os.makedirs(LIMITS_DIR, exist_ok=True)
@@ -109,6 +130,7 @@ def save_snapshot(label, payload):
     # Sessions refresh concurrently; serialise the read-merge-write so none is lost.
     with open(os.path.join(LIMITS_DIR, f".{label}.lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        sweep_stale_tmp(LIMITS_DIR)
         try:
             with open(path) as f:
                 previous = json.load(f).get("rate_limits")

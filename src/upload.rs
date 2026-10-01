@@ -1,7 +1,9 @@
 use crate::config::Config;
 use crate::reqwest_simd_json::{ReqwestSimdJsonExt, ResponseSimdJsonExt};
 use crate::tui::UploadStatus;
-use crate::types::{ConversationMessage, ErrorResponse, MultiAnalyzerStats, UploadResponse};
+use crate::types::{
+    Application, ConversationMessage, ErrorResponse, MultiAnalyzerStats, UploadResponse,
+};
 use crate::utils;
 use anyhow::{Context, Result};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -18,6 +20,11 @@ where
     F: FnMut(usize, usize),
 {
     const CHUNK_SIZE: usize = 4500;
+    // Splitrail Cloud does not know `antigravity` yet and may reject a chunk carrying it.
+    let messages: Vec<&ConversationMessage> = messages
+        .iter()
+        .filter(|m| m.application != Application::Antigravity)
+        .collect();
     if messages.is_empty() {
         return Ok(());
     }

@@ -19,6 +19,7 @@ pub enum Application {
     Warp,
     OpenCode,
     DroidCli,
+    Antigravity,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

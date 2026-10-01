@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use analyzer::AnalyzerRegistry;
 use analyzers::{
-    ClaudeCodeAnalyzer, ClineAnalyzer, CodexCliAnalyzer, DroidCliAnalyzer, KiloCodeAnalyzer,
-    KiroCliAnalyzer, OpenCodeAnalyzer, QwenCodeAnalyzer, WarpDevAnalyzer,
+    AntigravityAnalyzer, ClaudeCodeAnalyzer, ClineAnalyzer, CodexCliAnalyzer, DroidCliAnalyzer,
+    KiloCodeAnalyzer, KiroCliAnalyzer, OpenCodeAnalyzer, QwenCodeAnalyzer, WarpDevAnalyzer,
 };
 
 mod analyzer;
@@ -293,6 +293,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     registry.register(KiroCliAnalyzer::new());
     registry.register(OpenCodeAnalyzer::new()); // Ready when OpenCode adds local data storage
     registry.register(WarpDevAnalyzer::new()); // Now includes GraphQL conversation data
+    registry.register(AntigravityAnalyzer::new()); // Fed by scripts/agy_statusline_capture.py
     // registry.register(CopilotAnalyzer::new()); // Temporarily disabled
 
     registry
