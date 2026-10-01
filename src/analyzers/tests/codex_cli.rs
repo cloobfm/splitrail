@@ -320,3 +320,27 @@ fn test_parse_codex_cli_turn_context_with_object_approval_policy() {
 
     assert_eq!(assistant_msg.model, Some("gpt-5.6-terra".to_string()));
 }
+
+/// Codex's `rate_limits` (snake_case windows plus non-window fields, weekly sometimes labelled
+/// `primary`) reach the dashboard's plan-limit rows, matched by window length.
+#[test]
+fn test_parse_codex_cli_rate_limits_feed_plan_limits() {
+    let mut temp_file = NamedTempFile::new().unwrap();
+    // Far-future timestamps so no other test's observation is newer.
+    writeln!(
+        temp_file,
+        r#"{{"timestamp":"2099-01-01T00:00:00.000Z","type":"turn_context","payload":{{"model":"gpt-5"}}}}"#
+    )
+    .unwrap();
+    writeln!(
+        temp_file,
+        r#"{{"timestamp":"2099-01-01T00:00:05.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0,"total_tokens":15}}}},"rate_limits":{{"limit_id":"codex","primary":{{"used_percent":12.0,"window_minutes":10080,"resets_at":4070908800}},"secondary":{{"used_percent":40.0,"window_minutes":300,"resets_at":4070908800}},"credits":{{"has_credits":false,"unlimited":false,"balance":"0"}},"plan_type":"plus"}}}}}}"#
+    )
+    .unwrap();
+
+    parse_codex_cli_jsonl_file(temp_file.path()).unwrap();
+
+    let limits = crate::plan_limits::limits_for_analyzer("Codex CLI").unwrap();
+    assert_eq!(limits.five_hour.unwrap().used_percentage, 40.0);
+    assert_eq!(limits.seven_day.unwrap().used_percentage, 12.0);
+}

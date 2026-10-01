@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.27] - 2026-10-01
+
+Codex CLI plan limits on the dashboard.
+
+### Added
+- Codex CLI fills the `⏳ 5h Limit` and `📅 Week Limit` rows, and its health is the room left in
+  the fuller window, like Claude accounts. Codex writes `rate_limits` into every token-count
+  event; the parser now feeds those windows to `plan_limits::observe`, which keeps the newest
+  observation per window across all sessions (order-independent, so parallel and repeated parsing
+  are harmless). Windows are matched by `window_minutes` (≤1 day → 5h, ≥6 days → weekly) because
+  Codex sometimes labels the weekly window `primary`. First live read: 5h 4% ↻4h30m, week 1% ↻6d17h.
+
+### Removed
+- The old Codex `rate_limits` parse into `Stats.rate_limits`. It expected camelCase window entries
+  and failed on every current event (snake_case, plus `limit_id`/`credits`/`plan_type` fields), so
+  the field was always empty.
+
 ## [2.0.0-dash-0.26] - 2026-09-28
 
 Fewer unpriced models, and a Codex model-detection fix. Warnings panel on the author's data: 7 → 2.

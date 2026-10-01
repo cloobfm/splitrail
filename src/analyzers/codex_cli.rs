@@ -26,7 +26,7 @@ impl CodexCliAnalyzer {
 #[async_trait]
 impl Analyzer for CodexCliAnalyzer {
     fn display_name(&self) -> &'static str {
-        "Codex CLI"
+        CODEX_ANALYZER_NAME
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
@@ -208,6 +208,42 @@ struct CodexCliEventMsg {
     info: Option<CodexCliTokenCountInfo>,
     rate_limits: Option<simd_json::OwnedValue>,
 }
+
+/// Feed the plan windows in a token-count event's `rate_limits` to the dashboard (5h/weekly rows
+/// and health). Codex writes snake_case `primary`/`secondary` objects with `used_percent`,
+/// `window_minutes` and `resets_at`, alongside non-window fields (`limit_id`, `credits`,
+/// `plan_type`); which of primary/secondary is the weekly window varies, so windows are told
+/// apart by length.
+fn observe_rate_limits(rate_limits: &simd_json::OwnedValue, at: DateTime<Utc>) {
+    let Ok(json) = serde_json::to_value(rate_limits) else {
+        return;
+    };
+    let mut five_hour = None;
+    let mut seven_day = None;
+    for key in ["primary", "secondary"] {
+        let Some(window) = json.get(key) else {
+            continue;
+        };
+        let Some(minutes) = window.get("window_minutes").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        let parsed = crate::plan_limits::LimitWindow {
+            used_percentage: window.get("used_percent").and_then(|v| v.as_f64()),
+            resets_at: window.get("resets_at").and_then(|v| v.as_f64()),
+        };
+        if minutes <= 24 * 60 {
+            five_hour = Some(parsed);
+        } else if minutes >= 6 * 24 * 60 {
+            seven_day = Some(parsed);
+        }
+    }
+    if five_hour.is_some() || seven_day.is_some() {
+        crate::plan_limits::observe(CODEX_ANALYZER_NAME, at, five_hour, seven_day);
+    }
+}
+
+/// Codex's analyzer display name; plan limits are keyed by it.
+const CODEX_ANALYZER_NAME: &str = "Codex CLI";
 
 // Wrapper structure for all entries
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -421,22 +457,8 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                             let mut stats = stats_from_usage(&token_usage, &model_state.name);
                             stats.tool_calls = current_tool_call_ids.len() as u32;
 
-                            // Parse and add rate_limits if present
-                            if let Some(rate_limits_value) = &event.rate_limits {
-                                if let Ok(rate_limits_json) =
-                                    serde_json::to_value(rate_limits_value)
-                                {
-                                    if let Ok(rate_limits) =
-                                        serde_json::from_value::<
-                                            std::collections::HashMap<
-                                                String,
-                                                crate::types::RateLimitInfo,
-                                            >,
-                                        >(rate_limits_json)
-                                    {
-                                        stats.rate_limits = Some(rate_limits);
-                                    }
-                                }
+                            if let Some(rate_limits) = &event.rate_limits {
+                                observe_rate_limits(rate_limits, wrapper.timestamp);
                             }
 
                             current_tool_call_ids.clear();

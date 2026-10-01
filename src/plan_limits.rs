@@ -14,9 +14,11 @@
 //! A snapshot is only as fresh as the last time that account's status line ran, so a window
 //! whose reset time has passed is read as empty rather than at its last-seen usage.
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// Snapshots older than this are ignored: after a week even the weekly window has rolled over.
 const MAX_SNAPSHOT_AGE_SECS: f64 = 7.0 * 24.0 * 3600.0;
@@ -96,6 +98,59 @@ pub fn parse_snapshot(content: &str, now: f64) -> Option<AccountLimits> {
     (status.five_hour.is_some() || status.seven_day.is_some()).then_some(status)
 }
 
+/// Limits an analyzer read from its own logs rather than a status line snapshot. Codex writes
+/// `rate_limits` into every token-count event, timestamped, so the newest observation of each
+/// window across all sessions is the current state; there is no stale-session problem to merge
+/// around. Keyed by analyzer display name.
+#[derive(Default, Clone, Copy)]
+struct Observed {
+    five_hour: Option<(DateTime<Utc>, LimitWindow)>,
+    seven_day: Option<(DateTime<Utc>, LimitWindow)>,
+}
+
+static OBSERVED: OnceLock<Mutex<HashMap<String, Observed>>> = OnceLock::new();
+
+fn keep_newer(
+    slot: &mut Option<(DateTime<Utc>, LimitWindow)>,
+    at: DateTime<Utc>,
+    window: Option<LimitWindow>,
+) {
+    if let Some(window) = window
+        && slot.is_none_or(|(seen, _)| at >= seen)
+    {
+        *slot = Some((at, window));
+    }
+}
+
+/// Record limits an analyzer saw in its logs at `at`. Order-independent: each window keeps its
+/// newest observation, so parsing files in parallel or re-parsing them is harmless.
+pub fn observe(
+    analyzer_name: &str,
+    at: DateTime<Utc>,
+    five_hour: Option<LimitWindow>,
+    seven_day: Option<LimitWindow>,
+) {
+    let map = OBSERVED.get_or_init(Default::default);
+    if let Ok(mut map) = map.lock() {
+        let entry = map.entry(analyzer_name.to_string()).or_default();
+        keep_newer(&mut entry.five_hour, at, five_hour);
+        keep_newer(&mut entry.seven_day, at, seven_day);
+    }
+}
+
+fn observed_limits(analyzer_name: &str, now: f64) -> Option<AccountLimits> {
+    let observed = *OBSERVED.get()?.lock().ok()?.get(analyzer_name)?;
+    let fresh = |slot: Option<(DateTime<Utc>, LimitWindow)>| {
+        slot.filter(|(at, _)| now - at.timestamp() as f64 <= MAX_SNAPSHOT_AGE_SECS)
+            .and_then(|(_, window)| window_status(window, now))
+    };
+    let status = AccountLimits {
+        five_hour: fresh(observed.five_hour),
+        seven_day: fresh(observed.seven_day),
+    };
+    (status.five_hour.is_some() || status.seven_day.is_some()).then_some(status)
+}
+
 fn limits_dir() -> Option<PathBuf> {
     Some(
         std::env::home_dir()?
@@ -138,13 +193,16 @@ pub fn account_label(analyzer_name: &str) -> Option<String> {
 
 /// Current plan limits for a Claude Code analyzer, if its status line has captured any.
 pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
-    let label = account_label(analyzer_name)?;
-    let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
-    let now = std::time::SystemTime::now()
+    let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs_f64();
-    parse_snapshot(&content, now)
+    if let Some(limits) = observed_limits(analyzer_name, now_secs) {
+        return Some(limits);
+    }
+    let label = account_label(analyzer_name)?;
+    let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
+    parse_snapshot(&content, now_secs)
 }
 
 /// Short countdown for a 13-column cell: `45m`, `2h13m`, `3d4h`.
@@ -219,6 +277,25 @@ mod tests {
     fn account_labels_come_from_analyzer_names() {
         assert_eq!(account_label("Claude (v)").as_deref(), Some("v"));
         assert_eq!(account_label("Codex CLI"), None);
+    }
+
+    #[test]
+    fn observed_limits_keep_the_newest_report_per_window() {
+        use chrono::TimeZone;
+        let name = "Observed Test Tool";
+        let window = |pct: f64| LimitWindow {
+            used_percentage: Some(pct),
+            resets_at: Some(NOW + 3_600.0),
+        };
+        let t = |s: i64| Utc.timestamp_opt(NOW as i64 - s, 0).unwrap();
+        // Newer report first, older second: the older one must not win.
+        observe(name, t(10), Some(window(30.0)), Some(window(5.0)));
+        observe(name, t(500), Some(window(80.0)), None);
+        // A report with only the weekly window keeps the known 5h one.
+        observe(name, t(5), None, Some(window(6.0)));
+        let limits = observed_limits(name, NOW).unwrap();
+        assert_eq!(limits.five_hour.unwrap().used_percentage, 30.0);
+        assert_eq!(limits.seven_day.unwrap().used_percentage, 6.0);
     }
 
     #[test]
