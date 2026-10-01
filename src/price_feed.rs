@@ -103,7 +103,76 @@ struct CacheFile {
     models: HashMap<String, ModelPrice>,
 }
 
-static FEED: RwLock<Option<Arc<HashMap<String, ModelPrice>>>> = RwLock::new(None);
+/// The installed feed plus an index for names that only appear with a provider prefix.
+struct Feed {
+    models: HashMap<String, ModelPrice>,
+    /// Lower-cased last path segment (`cerebras/qwen-3-32b` -> `qwen-3-32b`) to the feed key
+    /// used for it: the shortest such key, then alphabetical, so the choice is stable.
+    by_segment: HashMap<String, String>,
+    /// Memoised `lookup_loose` answers, including misses: the scan is per model, not per message.
+    loose_memo: std::sync::Mutex<HashMap<String, Option<(String, ModelPrice)>>>,
+}
+
+impl Feed {
+    fn new(models: HashMap<String, ModelPrice>) -> Self {
+        let mut by_segment: HashMap<String, String> = HashMap::new();
+        for key in models.keys() {
+            let segment = key.rsplit('/').next().unwrap_or(key).to_lowercase();
+            by_segment
+                .entry(segment)
+                .and_modify(|best| {
+                    if (key.len(), key.as_str()) < (best.len(), best.as_str()) {
+                        *best = key.clone();
+                    }
+                })
+                .or_insert_with(|| key.clone());
+        }
+        Self {
+            models,
+            by_segment,
+            loose_memo: Default::default(),
+        }
+    }
+
+    fn loose(&self, model_name: &str) -> Option<(String, ModelPrice)> {
+        if let Ok(memo) = self.loose_memo.lock()
+            && let Some(hit) = memo.get(model_name)
+        {
+            return hit.clone();
+        }
+        let found = loose_key(model_name, &self.by_segment)
+            .and_then(|key| self.models.get(&key).map(|price| (key, price.clone())));
+        if let Ok(mut memo) = self.loose_memo.lock() {
+            memo.insert(model_name.to_string(), found.clone());
+        }
+        found
+    }
+}
+
+/// Find a feed key for a model name that has no exact entry. Tried in order:
+/// 1. the name (lower-cased, minus a `custom:` prefix) as a provider-prefixed key's last segment,
+///    e.g. `qwen-3-32b` -> `cerebras/qwen-3-32b`;
+/// 2. the longest such segment the name starts with, ending at a `-`, `:` or `_` boundary, e.g.
+///    `custom:GLM-4.6-Coding-Plan-0` -> `glm-4.6` -> `zai/glm-4.6`. The boundary keeps `gpt-5`
+///    from claiming `gpt-5.6-terra`.
+fn loose_key(model_name: &str, by_segment: &HashMap<String, String>) -> Option<String> {
+    let lower = model_name.to_lowercase();
+    let name = lower.strip_prefix("custom:").unwrap_or(&lower);
+    if let Some(key) = by_segment.get(name) {
+        return Some(key.clone());
+    }
+    by_segment
+        .iter()
+        .filter(|(segment, _)| {
+            name.strip_prefix(segment.as_str())
+                .and_then(|rest| rest.chars().next())
+                .is_some_and(|c| matches!(c, '-' | ':' | '_'))
+        })
+        .max_by(|(a, ka), (b, kb)| a.len().cmp(&b.len()).then(kb.cmp(ka)))
+        .map(|(_, key)| key.clone())
+}
+
+static FEED: RwLock<Option<Arc<Feed>>> = RwLock::new(None);
 static OVERRIDES: OnceLock<HashMap<String, ModelPrice>> = OnceLock::new();
 
 /// Load the on-disk cache and the config overrides. Cheap and offline; call before any parsing.
@@ -122,8 +191,16 @@ pub fn lookup(model_name: &str) -> Option<(ModelPrice, PriceSource)> {
     }
     let feed = FEED.read().ok()?;
     feed.as_ref()?
+        .models
         .get(model_name)
         .map(|price| (price.clone(), PriceSource::Feed))
+}
+
+/// A feed price for a model with no exact entry anywhere, matched by `loose_key`. Returns the
+/// feed key it matched. Only consulted after the exact feed and built-in lookups both miss.
+pub fn lookup_loose(model_name: &str) -> Option<(String, ModelPrice)> {
+    let feed = FEED.read().ok()?;
+    feed.as_ref()?.loose(model_name)
 }
 
 /// Whether the cached feed is missing or older than a day.
@@ -202,8 +279,9 @@ pub async fn refresh_if_stale(feed_enabled: bool) {
 }
 
 fn install(models: HashMap<String, ModelPrice>) {
+    let built = Arc::new(Feed::new(models));
     if let Ok(mut feed) = FEED.write() {
-        *feed = Some(Arc::new(models));
+        *feed = Some(built);
     }
 }
 
@@ -440,6 +518,42 @@ mod tests {
         assert_eq!(rejected, vec!["gemini-long".to_string()]);
         assert!(!merged.contains_key("gemini-long"));
         assert!(merged.contains_key("claude-opus-5-5"));
+    }
+
+    #[test]
+    fn loose_keys_match_provider_prefixed_entries_at_name_boundaries() {
+        let keys = [
+            "cerebras/qwen-3-32b",
+            "vercel_ai_gateway/alibaba/qwen-3-32b",
+            "zai/glm-4.6",
+            "openrouter/z-ai/glm-4.6",
+            "gpt-5",
+        ];
+        let models = keys
+            .iter()
+            .map(|k| {
+                (
+                    k.to_string(),
+                    ModelPrice {
+                        input_per_1m: 1.0,
+                        output_per_1m: 1.0,
+                        cache_write_per_1m: None,
+                        cache_read_per_1m: None,
+                        tiers: vec![],
+                    },
+                )
+            })
+            .collect();
+        let feed = Feed::new(models);
+        let key = |name: &str| loose_key(name, &feed.by_segment);
+        assert_eq!(key("qwen-3-32b").as_deref(), Some("cerebras/qwen-3-32b"));
+        assert_eq!(key("custom:GLM-4.6-Coding-Plan-0").as_deref(), Some("zai/glm-4.6"));
+        // No boundary after the prefix: not a match.
+        assert_eq!(key("gpt-5.6-terra"), None);
+        assert_eq!(key("gpt-oss"), None);
+        // Memoised misses stay misses.
+        assert!(feed.loose("gpt-oss").is_none());
+        assert!(feed.loose("gpt-oss").is_none());
     }
 
     #[test]

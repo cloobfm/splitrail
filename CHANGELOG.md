@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.26] - 2026-09-28
+
+Fewer unpriced models, and a Codex model-detection fix. Warnings panel on the author's data: 7 → 2.
+
+### Fixed
+- Codex CLI: newer Codex writes `turn_context.approval_policy` as an object. The typed parse
+  expected a string, failed, and discarded the whole record including its `model`, so sessions
+  whose model appears only there were priced as the `gpt-5` fallback (e.g. a realtime-voice
+  session on `gpt-5.6-terra`). The model is now read from the payload independently of the typed
+  parse, and `approval_policy` accepts any JSON.
+
+### Added
+- Loose price-feed matching, used only after the exact feed and built-in lookups miss: a name
+  that matches the last segment of a provider-prefixed feed key (`qwen-3-32b` →
+  `cerebras/qwen-3-32b`), or starts with one at a `-`/`:`/`_` boundary after dropping a `custom:`
+  prefix (`custom:GLM-4.6-Coding-Plan-0` → `zai/glm-4.6`). The boundary rule keeps `gpt-5` from
+  claiming `gpt-5.6-terra`. Results are memoised per model name. `pricing show` reports which
+  feed key matched.
+
+### Changed
+- The unpriced-model warning now reads `No price for model X; costed at $0 (set
+  [pricing.overrides."X"] if it is not free)` instead of `WARNING: Unknown model: X. Defaulting to $0.`
+
 ## [2.0.0-dash-0.25] - 2026-09-27
 
 ### Fixed

@@ -193,7 +193,8 @@ struct CodexCliMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CodexCliTurnContext {
     cwd: Option<String>,
-    approval_policy: Option<String>,
+    /// A string in older Codex versions, an object in newer ones; not read, only tolerated.
+    approval_policy: Option<simd_json::OwnedValue>,
     model: Option<String>,
     summary: Option<String>,
 }
@@ -280,12 +281,14 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
             }
             "turn_context" => {
                 let mut payload_bytes = simd_json::to_vec(&wrapper.payload)?;
+                // Read the model straight from the payload, independent of the typed parse: a
+                // schema change elsewhere in turn_context must not cost us the model.
+                if let Some(model_name) = extract_model_from_value(&wrapper.payload) {
+                    session_model = Some(SessionModel::explicit(model_name));
+                }
                 if let Ok(context) =
                     simd_json::from_slice::<CodexCliTurnContext>(&mut payload_bytes)
                 {
-                    if let Some(model_name) = extract_model_from_value(&wrapper.payload) {
-                        session_model = Some(SessionModel::explicit(model_name));
-                    }
                     _turn_context = Some(context);
                 }
             }

@@ -1855,8 +1855,13 @@ fn live_price(model_name: &str) -> Option<ModelPrice> {
 
 fn warn_unknown(model_name: &str) {
     warn_once(format!(
-        "WARNING: Unknown model: {model_name}. Defaulting to $0."
+        "No price for model {model_name}; costed at $0 (set [pricing.overrides.\"{model_name}\"] if it is not free)."
     ));
+}
+
+/// Last resort before $0: a feed entry matched loosely (provider-prefixed or `custom:` names).
+fn loose_price(model_name: &str) -> Option<ModelPrice> {
+    price_feed::lookup_loose(model_name).map(|(_, price)| price)
 }
 
 /// Base input/output prices from the hardcoded table (first tier for tiered models). The price
@@ -1900,9 +1905,15 @@ pub fn describe_price(model_name: &str) -> String {
         }
         return format!("{line} per 1M tokens — from {source}");
     }
-    match builtin_flat_price(model_name) {
-        Some((input, output)) => format!(
+    if let Some((input, output)) = builtin_flat_price(model_name) {
+        return format!(
             "{model_name}: ${input:.4} in / ${output:.4} out per 1M tokens — from built-in table"
+        );
+    }
+    match price_feed::lookup_loose(model_name) {
+        Some((key, price)) => format!(
+            "{model_name}: ${:.4} in / ${:.4} out per 1M tokens — from live feed, matched as {key}",
+            price.input_per_1m, price.output_per_1m
         ),
         None => format!("{model_name}: no price found (costs as $0)"),
     }
@@ -1920,10 +1931,13 @@ pub fn calculate_input_cost(model_name: &str, input_tokens: u64) -> f64 {
             }
             PricingStructure::Tiered { tiers } => calculate_tiered_cost(input_tokens, tiers, true),
         },
-        None => {
-            warn_unknown(model_name);
-            0.0
-        }
+        None => match loose_price(model_name) {
+            Some(price) => price.input_cost(input_tokens),
+            None => {
+                warn_unknown(model_name);
+                0.0
+            }
+        },
     }
 }
 
@@ -1941,10 +1955,13 @@ pub fn calculate_output_cost(model_name: &str, output_tokens: u64) -> f64 {
                 calculate_tiered_cost(output_tokens, tiers, false)
             }
         },
-        None => {
-            warn_unknown(model_name);
-            0.0
-        }
+        None => match loose_price(model_name) {
+            Some(price) => price.output_cost(output_tokens),
+            None => {
+                warn_unknown(model_name);
+                0.0
+            }
+        },
     }
 }
 
@@ -1982,10 +1999,13 @@ pub fn calculate_cache_cost(
                 }
             }
         }
-        None => {
-            warn_unknown(model_name);
-            0.0
-        }
+        None => match loose_price(model_name) {
+            Some(price) => price.cache_cost(cache_creation_tokens, cache_read_tokens),
+            None => {
+                warn_unknown(model_name);
+                0.0
+            }
+        },
     }
 }
 

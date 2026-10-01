@@ -287,3 +287,36 @@ fn test_codex_availability() {
 
     // Don't assert - just print for debugging
 }
+
+/// Newer Codex writes `approval_policy` (and other turn_context fields) as objects. That must
+/// not stop the model being read: it used to, and the session fell back to gpt-5 pricing.
+#[test]
+fn test_parse_codex_cli_turn_context_with_object_approval_policy() {
+    let mut temp_file = NamedTempFile::new().unwrap();
+
+    writeln!(
+        temp_file,
+        r#"{{"timestamp":"2026-08-21T05:29:33.818Z","type":"session_meta","payload":{{"id":"01a022cb","timestamp":"2026-08-21T05:29:26.514Z","cwd":"/home/test","originator":"Codex Desktop","cli_version":"0.149.0","model_provider":"openai"}}}}"#
+    )
+    .unwrap();
+
+    writeln!(
+        temp_file,
+        r#"{{"timestamp":"2026-08-21T06:41:27.692Z","type":"turn_context","payload":{{"turn_id":"t1","cwd":"/home/test","approval_policy":{{"mode":"on-request"}},"sandbox_policy":{{"mode":"workspace-write"}},"realtime_active":true,"model":"gpt-5.6-terra","summary":"auto"}}}}"#
+    )
+    .unwrap();
+
+    writeln!(
+        temp_file,
+        r#"{{"timestamp":"2026-08-21T06:41:30.000Z","type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"Hello!"}}]}}}}"#
+    )
+    .unwrap();
+
+    let result = parse_codex_cli_jsonl_file(temp_file.path()).unwrap();
+    let assistant_msg = result
+        .iter()
+        .find(|msg| matches!(msg.role, crate::types::MessageRole::Assistant))
+        .unwrap();
+
+    assert_eq!(assistant_msg.model, Some("gpt-5.6-terra".to_string()));
+}
