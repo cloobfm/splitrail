@@ -129,6 +129,17 @@ pub struct Stats {
     // Rate limits
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_limits: Option<std::collections::HashMap<String, RateLimitInfo>>,
+
+    // Local inference (Ollama): energy used and what that electricity cost. `cost` stays the
+    // street price, like every other tool, so these are kept beside it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub energy_wh: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub energy_cost: f64,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 #[derive(Debug, Clone, Copy)]

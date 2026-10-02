@@ -196,6 +196,71 @@ pub fn lookup(model_name: &str) -> Option<(ModelPrice, PriceSource)> {
         .map(|price| (price.clone(), PriceSource::Feed))
 }
 
+/// The street price of an open model: the median, per rate, across every provider in the feed
+/// that serves it. Tries each name in turn and stops at the first with matches; a name matches a
+/// key whose last path segment equals it, or failing that starts with it at a `-` boundary
+/// (`qwen3-coder-30b` -> `novita/qwen/qwen3-coder-30b-a3b-instruct`). Free tiers are left out.
+/// Returns how many providers the median is over.
+pub fn median_price(names: &[String]) -> Option<(usize, ModelPrice)> {
+    let feed = FEED.read().ok()?;
+    feed.as_ref()?.median(names)
+}
+
+impl Feed {
+    fn median(&self, names: &[String]) -> Option<(usize, ModelPrice)> {
+        names.iter().find_map(|name| {
+            let name = name.to_lowercase();
+            let segment = |key: &String| key.rsplit('/').next().unwrap_or(key).to_lowercase();
+            let paid = |price: &&ModelPrice| price.output_per_1m > 0.0;
+            let mut prices: Vec<&ModelPrice> = self
+                .models
+                .iter()
+                .filter(|(key, _)| segment(key) == name)
+                .map(|(_, price)| price)
+                .filter(paid)
+                .collect();
+            if prices.is_empty() {
+                let prefix = format!("{name}-");
+                prices = self
+                    .models
+                    .iter()
+                    .filter(|(key, _)| segment(key).starts_with(&prefix))
+                    .map(|(_, price)| price)
+                    .filter(paid)
+                    .collect();
+            }
+            if prices.is_empty() {
+                return None;
+            }
+            let median = |mut values: Vec<f64>| -> Option<f64> {
+                if values.is_empty() {
+                    return None;
+                }
+                values.sort_by(f64::total_cmp);
+                let mid = values.len() / 2;
+                Some(if values.len() % 2 == 0 {
+                    (values[mid - 1] + values[mid]) / 2.0
+                } else {
+                    values[mid]
+                })
+            };
+            let input = median(prices.iter().map(|p| p.input_per_1m).collect())?;
+            let output = median(prices.iter().map(|p| p.output_per_1m).collect())?;
+            let cache_read = median(prices.iter().filter_map(|p| p.cache_read_per_1m).collect());
+            Some((
+                prices.len(),
+                ModelPrice {
+                    input_per_1m: input,
+                    output_per_1m: output,
+                    cache_write_per_1m: None,
+                    cache_read_per_1m: cache_read,
+                    tiers: Vec::new(),
+                },
+            ))
+        })
+    }
+}
+
 /// A feed price for a model with no exact entry anywhere, matched by `loose_key`. Returns the
 /// feed key it matched. Only consulted after the exact feed and built-in lookups both miss.
 pub fn lookup_loose(model_name: &str) -> Option<(String, ModelPrice)> {
@@ -452,6 +517,45 @@ mod tests {
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    fn flat(input: f64, output: f64) -> ModelPrice {
+        ModelPrice {
+            input_per_1m: input,
+            output_per_1m: output,
+            cache_write_per_1m: None,
+            cache_read_per_1m: None,
+            tiers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn street_price_is_the_median_across_providers() {
+        let feed = Feed::new(HashMap::from([
+            ("deepinfra/Qwen/Qwen3.8-27B".to_string(), flat(0.40, 3.00)),
+            ("openrouter/qwen/qwen3.8-27b".to_string(), flat(0.42, 3.00)),
+            ("groq/qwen/qwen3.8-27b".to_string(), flat(0.80, 4.00)),
+            (
+                "openrouter/qwen/qwen3.8-27b:free".to_string(),
+                flat(0.0, 0.0),
+            ),
+            (
+                "novita/qwen/qwen3-coder-30b-a3b-instruct".to_string(),
+                flat(0.07, 0.27),
+            ),
+        ]));
+        let (providers, price) = feed.median(&["qwen3.8-27b".to_string()]).unwrap();
+        assert_eq!(providers, 3); // The free tier is not a street price.
+        assert!(close(price.input_per_1m, 0.42));
+        assert!(close(price.output_per_1m, 3.00));
+
+        // No exact name: a key that extends it at a `-` boundary.
+        let (_, coder) = feed.median(&["qwen3-coder-30b".to_string()]).unwrap();
+        assert!(close(coder.output_per_1m, 0.27));
+        // Names are tried in order; the first with matches wins.
+        let names = ["nope-7b".to_string(), "qwen3.8-27b".to_string()];
+        assert_eq!(feed.median(&names).unwrap().0, 3);
+        assert!(feed.median(&["llama9-8b".to_string()]).is_none());
     }
 
     #[test]

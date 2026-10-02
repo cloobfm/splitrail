@@ -300,6 +300,7 @@ impl DroidCliAnalyzer {
                     config_lines: 0,
                     other_lines: 0,
                     rate_limits: None,
+                    ..Default::default()
                 },
                 role: MessageRole::Assistant,
                 content: Some("Session totals".to_string()),
@@ -404,6 +405,7 @@ tool_calls: tool_calls as u32,
                 config_lines: 0,
                 other_lines: 0,
                 rate_limits: None, // Droid CLI doesn't provide rate limit info
+                ..Default::default()
             },
             role,
             content: Some(content_text),

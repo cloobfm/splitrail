@@ -1921,6 +1921,9 @@ pub fn describe_price(model_name: &str) -> String {
 
 /// Calculate cost for input tokens using the model's pricing structure
 pub fn calculate_input_cost(model_name: &str, input_tokens: u64) -> f64 {
+    if input_tokens == 0 {
+        return 0.0; // Nothing to price, so no lookup and no unknown-model warning.
+    }
     if let Some(price) = live_price(model_name) {
         return price.input_cost(input_tokens);
     }
@@ -1943,6 +1946,9 @@ pub fn calculate_input_cost(model_name: &str, input_tokens: u64) -> f64 {
 
 /// Calculate cost for output tokens using the model's pricing structure
 pub fn calculate_output_cost(model_name: &str, output_tokens: u64) -> f64 {
+    if output_tokens == 0 {
+        return 0.0;
+    }
     if let Some(price) = live_price(model_name) {
         return price.output_cost(output_tokens);
     }
@@ -1971,6 +1977,9 @@ pub fn calculate_cache_cost(
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
 ) -> f64 {
+    if cache_creation_tokens == 0 && cache_read_tokens == 0 {
+        return 0.0;
+    }
     if let Some(price) = live_price(model_name) {
         return price.cache_cost(cache_creation_tokens, cache_read_tokens);
     }
@@ -2017,6 +2026,15 @@ pub fn calculate_total_cost(
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
 ) -> f64 {
+    // Zero-token records (sessions that never ran a model) cost nothing whatever the model, and
+    // must not raise "No price for model" for names that will never be priced.
+    if input_tokens == 0
+        && output_tokens == 0
+        && cache_creation_tokens == 0
+        && cache_read_tokens == 0
+    {
+        return 0.0;
+    }
     // One lookup instead of three on the hot path.
     if let Some(price) = live_price(model_name) {
         return price.input_cost(input_tokens)
@@ -2079,6 +2097,19 @@ fn calculate_tiered_cache_cost(tokens: u64, tiers: &[CachingTier]) -> f64 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn zero_token_records_are_free_and_raise_no_warning() {
+        let model = "zero-token-test-model-that-has-no-price";
+        assert_eq!(calculate_total_cost(model, 0, 0, 0, 0), 0.0);
+        assert_eq!(calculate_input_cost(model, 0), 0.0);
+        assert_eq!(calculate_output_cost(model, 0), 0.0);
+        assert_eq!(calculate_cache_cost(model, 0, 0), 0.0);
+        assert!(
+            !crate::utils::get_warnings()
+                .iter()
+                .any(|w| w.contains(model))
+        );
+    }
     #[test]
     fn frontier_2026_models_resolve() {
         for name in [

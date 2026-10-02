@@ -16,6 +16,33 @@ pub struct Config {
     pub pricing: PricingConfig,
     #[serde(default)]
     pub claude_code: ClaudeCodeConfig,
+    #[serde(default)]
+    pub ollama: OllamaConfig,
+}
+
+/// Local inference is costed as the electricity it uses, at the household rate. The proxy
+/// measures each request's energy with `macmon` when it can; `power_watts` × duration is the
+/// fallback for requests logged without a measurement. Both default to 0, so Ollama stays at $0
+/// until they are set.
+///
+/// ```toml
+/// [ollama]
+/// power_watts = 60          # extra draw while generating (M1 Max GPU-bound inference)
+/// electricity_per_kwh = 0.24
+/// ```
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct OllamaConfig {
+    #[serde(default)]
+    pub power_watts: f64,
+    #[serde(default)]
+    pub electricity_per_kwh: f64,
+}
+
+impl OllamaConfig {
+    /// Dollars of electricity for a measured amount of energy.
+    pub fn joules_cost(&self, joules: f64) -> f64 {
+        joules / 3_600_000.0 * self.electricity_per_kwh
+    }
 }
 
 /// Claude Code accounts to read, one config directory each. Empty means auto-detect: `~/.claude`
@@ -240,6 +267,7 @@ impl Default for Config {
             warp: WarpConfig::default(),
             pricing: PricingConfig::default(),
             claude_code: ClaudeCodeConfig::default(),
+            ollama: OllamaConfig::default(),
         }
     }
 }

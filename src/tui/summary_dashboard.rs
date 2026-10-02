@@ -704,6 +704,27 @@ pub fn draw_summary_view(
             }
             Row::new(cells)
         },
+        // Energy row: electricity used by local inference (Ollama) on the selected day.
+        {
+            let mut cells = vec![Cell::new(
+                Line::from("🔌 Energy").style(Style::default().fg(Color::LightYellow)),
+            )];
+            let day_key = selected_day_date.format("%Y-%m-%d").to_string();
+            for &idx in visible_indices {
+                let day = filtered_stats[idx]
+                    .daily_stats
+                    .get(&day_key)
+                    .map(|d| (d.stats.energy_wh, d.stats.energy_cost));
+                let cell = match day {
+                    Some((wh, cost)) if wh > 0.0 => {
+                        Line::from(format!("{} ${cost:.3}", format_energy(wh)))
+                    }
+                    _ => Line::from("-").style(Style::default().fg(Color::DarkGray)),
+                };
+                cells.push(Cell::new(cell.right_aligned()));
+            }
+            Row::new(cells)
+        },
         // Health row
         {
             let mut cells = vec![Cell::new(
@@ -873,6 +894,15 @@ pub fn create_percentage_bar(
 }
 
 /// One plan-limit row: `23% ↻2h13m` per Claude account, colored by how full the window is.
+/// Energy for a 13-column cell: `640Wh`, `1.2kWh`.
+fn format_energy(wh: f64) -> String {
+    if wh >= 1000.0 {
+        format!("{:.1}kWh", wh / 1000.0)
+    } else {
+        format!("{wh:.0}Wh")
+    }
+}
+
 fn limit_row<'a>(
     label: &'a str,
     label_color: Color,
@@ -886,18 +916,31 @@ fn limit_row<'a>(
     for &idx in visible_indices {
         let status = crate::plan_limits::limits_for_analyzer(&filtered_stats[idx].analyzer_name)
             .and_then(|limits| window(&limits));
+        let color_for = |used: f64| match used {
+            p if p >= 90.0 => Color::Red,
+            p if p >= 70.0 => Color::LightRed,
+            p if p >= 50.0 => Color::Yellow,
+            _ => Color::Green,
+        };
+        // Local model servers have no plan, so the row shows capacity instead: how much of what
+        // the machine could generate running nonstop it actually generated in the window.
+        let capacity = || {
+            let (five_hour, seven_day) =
+                crate::plan_limits::capacity_for_analyzer(&filtered_stats[idx].analyzer_name)?;
+            Some(if label.contains("5h") {
+                five_hour
+            } else {
+                seven_day
+            })
+        };
         let cell = match status {
-            Some(status) => {
-                let color = match status.used_percentage {
-                    p if p >= 90.0 => Color::Red,
-                    p if p >= 70.0 => Color::LightRed,
-                    p if p >= 50.0 => Color::Yellow,
-                    _ => Color::Green,
-                };
-                Line::from(crate::plan_limits::format_window(&status))
-                    .style(Style::default().fg(color))
-            }
-            None => Line::from("-").style(Style::default().fg(Color::DarkGray)),
+            Some(status) => Line::from(crate::plan_limits::format_window(&status))
+                .style(Style::default().fg(color_for(status.used_percentage))),
+            None => match capacity() {
+                Some(capacity) => Line::from(crate::plan_limits::format_capacity(&capacity))
+                    .style(Style::default().fg(color_for(capacity.used_percentage()))),
+                None => Line::from("-").style(Style::default().fg(Color::DarkGray)),
+            },
         };
         cells.push(Cell::new(cell.right_aligned()));
     }

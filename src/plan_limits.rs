@@ -151,6 +151,91 @@ fn observed_limits(analyzer_name: &str, now: f64) -> Option<AccountLimits> {
     (status.five_hour.is_some() || status.seven_day.is_some()).then_some(status)
 }
 
+/// Capacity of a local model server, for tools with no plan limits (Ollama): how much of what
+/// the machine could generate running nonstop was actually generated in a window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Capacity {
+    /// Output tokens generated in the window.
+    pub used_tokens: u64,
+    /// Output tokens the machine could generate in the window at its measured throughput.
+    pub capacity_tokens: f64,
+}
+
+impl Capacity {
+    pub fn used_percentage(&self) -> f64 {
+        if self.capacity_tokens <= 0.0 {
+            0.0
+        } else {
+            (self.used_tokens as f64 / self.capacity_tokens * 100.0).min(100.0)
+        }
+    }
+}
+
+/// One finished request: when it ended (epoch seconds), how long it kept the model busy, and
+/// the output tokens it produced.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BusySample {
+    pub ended_at: f64,
+    pub busy_secs: f64,
+    pub output_tokens: u64,
+}
+
+static BUSY: OnceLock<Mutex<HashMap<String, Vec<BusySample>>>> = OnceLock::new();
+
+/// Replace an analyzer's request history, used to work out its capacity at render time.
+pub fn record_busy(analyzer_name: &str, samples: Vec<BusySample>) {
+    if let Ok(mut map) = BUSY.get_or_init(Default::default).lock() {
+        map.insert(analyzer_name.to_string(), samples);
+    }
+}
+
+/// Capacity over the `window_secs` before `now`. Throughput is output tokens per busy second
+/// across the whole history, so it reflects the actual workload (prompt processing included)
+/// rather than a benchmark.
+pub fn capacity_in(samples: &[BusySample], window_secs: f64, now: f64) -> Option<Capacity> {
+    let busy: f64 = samples.iter().map(|s| s.busy_secs).sum();
+    let output: u64 = samples.iter().map(|s| s.output_tokens).sum();
+    if busy <= 0.0 || output == 0 {
+        return None;
+    }
+    let used_tokens = samples
+        .iter()
+        .filter(|s| s.ended_at > now - window_secs && s.ended_at <= now)
+        .map(|s| s.output_tokens)
+        .sum();
+    Some(Capacity {
+        used_tokens,
+        capacity_tokens: output as f64 / busy * window_secs,
+    })
+}
+
+/// Capacity for the 5h and weekly windows, for an analyzer that recorded its requests.
+pub fn capacity_for_analyzer(analyzer_name: &str) -> Option<(Capacity, Capacity)> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs_f64();
+    let map = BUSY.get()?.lock().ok()?;
+    let samples = map.get(analyzer_name)?;
+    Some((
+        capacity_in(samples, 5.0 * 3600.0, now)?,
+        capacity_in(samples, 7.0 * 86_400.0, now)?,
+    ))
+}
+
+/// A capacity cell: `4% of 1.6M`.
+pub fn format_capacity(capacity: &Capacity) -> String {
+    let tokens = capacity.capacity_tokens;
+    let short = if tokens >= 1e6 {
+        format!("{:.1}M", tokens / 1e6)
+    } else if tokens >= 1e3 {
+        format!("{:.0}K", tokens / 1e3)
+    } else {
+        format!("{tokens:.0}")
+    };
+    format!("{:.0}% of {short}", capacity.used_percentage())
+}
+
 fn limits_dir() -> Option<PathBuf> {
     Some(
         std::env::home_dir()?
@@ -301,6 +386,29 @@ mod tests {
         let limits = observed_limits(name, NOW).unwrap();
         assert_eq!(limits.five_hour.unwrap().used_percentage, 30.0);
         assert_eq!(limits.seven_day.unwrap().used_percentage, 6.0);
+    }
+
+    #[test]
+    fn capacity_is_output_against_what_nonstop_running_would_produce() {
+        let sample = |ended_at: f64, busy_secs: f64, output_tokens: u64| BusySample {
+            ended_at,
+            busy_secs,
+            output_tokens,
+        };
+        // 10 tok/s over the history; 300 tokens in the last 5h.
+        let samples = [
+            sample(NOW - 86_400.0, 70.0, 700),
+            sample(NOW - 600.0, 20.0, 200),
+            sample(NOW - 60.0, 10.0, 100),
+        ];
+        let five = capacity_in(&samples, 5.0 * 3600.0, NOW).unwrap();
+        assert_eq!(five.used_tokens, 300);
+        assert!((five.capacity_tokens - 180_000.0).abs() < 1e-6);
+        assert_eq!(format_capacity(&five), "0% of 180K");
+        let week = capacity_in(&samples, 7.0 * 86_400.0, NOW).unwrap();
+        assert_eq!(week.used_tokens, 1000);
+        assert_eq!(format_capacity(&week), "0% of 6.0M");
+        assert!(capacity_in(&[], 3600.0, NOW).is_none());
     }
 
     #[test]

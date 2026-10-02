@@ -454,6 +454,8 @@ pub fn fold_entry_into_day(day: &mut DailyStats, entry: &ConversationMessage) {
 
             // Aggregate all stats
             day.stats.cost += entry.stats.cost;
+            day.stats.energy_wh += entry.stats.energy_wh;
+            day.stats.energy_cost += entry.stats.energy_cost;
             day.stats.input_tokens += entry.stats.input_tokens;
             day.stats.output_tokens += entry.stats.output_tokens;
             day.stats.reasoning_tokens += entry.stats.reasoning_tokens;

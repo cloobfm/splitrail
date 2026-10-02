@@ -1,378 +1,473 @@
 #!/usr/bin/env python3
-"""Ollama usage logging proxy. Python 3 stdlib only.
+"""Ollama usage logging proxy for Splitrail. Python 3 stdlib only.
 
-Listens on 127.0.0.1:11434 (configurable via OLLAMA_PROXY_HOST/PORT, or 0.0.0.0) and
-forwards all traffic to OLLAMA_UPSTREAM (default http://127.0.0.1:11435). Passes
-responses through chunk-by-chunk without buffering. Logs per-request token usage
-to ~/.config/splitrail/ollama/usage.jsonl.
+Ollama has no plugin system and its logs lack output-token counts for MLX models, but every
+inference response carries the counts. This proxy sits on Ollama's address, forwards every
+request to the real server, streams responses back as they arrive, and appends one line per
+inference to `~/.config/splitrail/ollama/usage.jsonl`:
 
-Usage:
-    python3 scripts/ollama_usage_proxy.py
+    {"ts": 1790900000.1, "model": "qwen3.8:27b-mlx", "endpoint": "/api/chat",
+     "prompt_tokens": 1060, "cached_tokens": 0, "completion_tokens": 212,
+     "duration_ms": 8123, "wall_ms": 8140, "client": "127.0.0.1"}
 
-Install (do NOT install automatically; see CHANGELOG for steps):
-    cp scripts/com.splitrail.ollama-proxy.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.splitrail.ollama-proxy.plist
+`duration_ms` is Ollama's own `total_duration` (0 for /v1 calls); `wall_ms` is measured here.
 
-Rollback:
-    launchctl unload ~/Library/LaunchAgents/com.splitrail.ollama-proxy.plist
-    rm ~/Library/LaunchAgents/com.splitrail.ollama-proxy.plist
+Logged: `/api/generate`, `/api/chat` (counts from the final `"done": true` object) and
+`/v1/chat/completions`, `/v1/completions` (`usage`; for streams the proxy asks for
+`stream_options.include_usage`, so the client also receives the standard usage chunk).
+Everything else is passed through untouched. Logging never fails a request.
 
-The proxy never fails a request: any logging error exits 0 in the logging path
-and continues forwarding. The upstream port (11435) avoids restarting the real
-Ollama service, which other tools and an ssh tunnel depend on.
+Configuration (environment):
+    OLLAMA_PROXY_HOST   listen address   (default 127.0.0.1)
+    OLLAMA_PROXY_PORT   listen port      (default 11434, Ollama's own)
+    OLLAMA_UPSTREAM     real Ollama      (default http://127.0.0.1:11435)
+
+Install with `scripts/com.splitrail.ollama-proxy.plist`; steps are in the CHANGELOG.
 """
 
+import http.client
+import itertools
 import json
 import os
+import shutil
+import subprocess
 import sys
+import threading
 import time
-import tempfile
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.request import Request, urlopen
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
-from urllib.error import HTTPError, URLError
 
 USAGE_FILE = os.path.expanduser("~/.config/splitrail/ollama/usage.jsonl")
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 11434
-DEFAULT_UPSTREAM = "http://127.0.0.1:11435"
 
-HOST = os.environ.get("OLLAMA_PROXY_HOST", DEFAULT_HOST)
-PORT = int(os.environ.get("OLLAMA_PROXY_PORT", DEFAULT_PORT))
-UPSTREAM = os.environ.get("OLLAMA_UPSTREAM", DEFAULT_UPSTREAM)
+HOP_BY_HOP = {
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
+    "trailer", "trailers", "transfer-encoding", "upgrade", "proxy-connection",
+}
+NATIVE = {"/api/generate", "/api/chat"}
+OPENAI = {"/v1/chat/completions", "/v1/completions"}
+# Largest non-streamed body kept in memory to read its usage; bigger ones pass through unlogged.
+MAX_BODY_SCAN = 16 * 1024 * 1024
+# Transcript previews for the dashboard's Activity section: the caller's last message and the
+# start of the reply, cut to this many characters. Full conversations are never stored.
+PREVIEW_CHARS = int(os.environ.get("OLLAMA_PROXY_PREVIEW_CHARS", "500"))
 
 
-def ensure_dir():
+def write_usage(record, path=None):
+    """Append one usage line. A single write of one line, so concurrent appends do not tear."""
+    path = path or USAGE_FILE
     try:
-        os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, (json.dumps(record) + "\n").encode())
+        finally:
+            os.close(fd)
     except OSError:
         pass
 
 
-def atomic_write_jsonl(record):
-    """Append a single JSON line atomically (single write, then fsync)."""
-    ensure_dir()
-    line = json.dumps(record, separators=(",", ":"))
+def prepare_request_body(path, body):
+    """The body to send upstream: for a streamed OpenAI-style call, ask for the usage chunk."""
+    if path not in OPENAI or not body:
+        return body
     try:
-        with open(USAGE_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-    except OSError:
-        # Logging failure must never break the request.
-        pass
+        payload = json.loads(body)
+    except ValueError:
+        return body
+    if not isinstance(payload, dict) or payload.get("stream") is not True:
+        return body
+    options = payload.get("stream_options")
+    if not isinstance(options, dict):
+        options = {}
+    if options.get("include_usage") is True:
+        return body
+    options["include_usage"] = True
+    payload["stream_options"] = options
+    return json.dumps(payload).encode()
 
 
-def extract_model(body_str):
+def _text(content):
+    """Text of a message `content`: a string, or a list of parts with `text`."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return ""
+
+
+def prompt_preview(path, body):
+    """The caller's latest message in a request body, cut to PREVIEW_CHARS."""
     try:
-        data = json.loads(body_str)
-        return data.get("model", "")
-    except (ValueError, TypeError):
+        payload = json.loads(body or b"{}")
+    except ValueError:
         return ""
+    if not isinstance(payload, dict):
+        return ""
+    if path in ("/api/generate", "/v1/completions"):
+        prompt = payload.get("prompt")
+        text = prompt[-1] if isinstance(prompt, list) and prompt else prompt
+        text = text if isinstance(text, str) else ""
+    else:
+        messages = payload.get("messages")
+        users = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"] if isinstance(messages, list) else []
+        text = _text(users[-1].get("content")) if users else ""
+    return text.strip()[:PREVIEW_CHARS]
 
 
-def parse_generate_final(chunk_str):
-    """Parse the final 'done': true chunk from /api/generate NDJSON stream."""
-    try:
-        data = json.loads(chunk_str)
-    except ValueError:
+def reply_text(obj):
+    """Reply text carried by one response object, in any of Ollama's dialects."""
+    if not isinstance(obj, dict):
+        return ""
+    if isinstance(obj.get("response"), str):
+        return obj["response"]  # /api/generate
+    message = obj.get("message")
+    if isinstance(message, dict):
+        return _text(message.get("content"))  # /api/chat
+    choices = obj.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        choice = choices[0]
+        for key in ("delta", "message"):  # /v1/chat/completions, streamed or not
+            if isinstance(choice.get(key), dict):
+                return _text(choice[key].get("content"))
+        if isinstance(choice.get("text"), str):
+            return choice["text"]  # /v1/completions
+    return ""
+
+
+def usage_from_object(path, obj):
+    """Token counts from one response object, or None if it carries none."""
+    if not isinstance(obj, dict):
         return None
-    if not data.get("done"):
-        return None
-    return {
-        "ts": time.time(),
-        "model": data.get("model", ""),
-        "endpoint": "/api/generate",
-        "prompt_tokens": data.get("prompt_eval_count", 0),
-        "cached_tokens": data.get("prompt_eval_cached_count", 0),
-        "completion_tokens": data.get("eval_count", 0),
-        "duration_ms": data.get("total_duration", 0) // 1_000_000 if isinstance(data.get("total_duration"), int) else 0,
-        "client": HOST,
-    }
-
-
-def parse_chat_final(chunk_str):
-    """Parse the final chunk from /api/chat NDJSON stream."""
-    try:
-        data = json.loads(chunk_str)
-    except ValueError:
-        return None
-    if not data.get("done"):
-        return None
-    # /api/chat final chunk includes total_duration but not eval_count in some versions.
-    # We take prompt_eval_count / eval_count when present; fall back to message-level usage.
-    prompt_tokens = data.get("prompt_eval_count", 0)
-    eval_tokens = data.get("eval_count", 0)
-    cached = data.get("prompt_eval_cached_count", 0)
-    return {
-        "ts": time.time(),
-        "model": data.get("model", ""),
-        "endpoint": "/api/chat",
-        "prompt_tokens": prompt_tokens,
-        "cached_tokens": cached,
-        "completion_tokens": eval_tokens,
-        "duration_ms": data.get("total_duration", 0) // 1_000_000 if isinstance(data.get("total_duration"), int) else 0,
-        "client": HOST,
-    }
-
-
-def parse_nonstreaming_usage(body_str):
-    """Parse usage from a single non-streaming response body (generate or chat)."""
-    try:
-        data = json.loads(body_str)
-    except ValueError:
-        return None
-    # /api/chat may nest usage differently in future versions; take top-level keys.
-    prompt_tokens = data.get("prompt_eval_count", 0)
-    cached = data.get("prompt_eval_cached_count", 0)
-    eval_tokens = data.get("eval_count", 0)
-    duration = data.get("total_duration", 0)
-    duration_ms = duration // 1_000_000 if isinstance(duration, int) else 0
-    return {
-        "ts": time.time(),
-        "model": data.get("model", ""),
-        "endpoint": "/api/chat" if "message" in data else "/api/generate",
-        "prompt_tokens": prompt_tokens,
-        "cached_tokens": cached,
-        "completion_tokens": eval_tokens,
-        "duration_ms": duration_ms,
-        "client": HOST,
-    }
-
-
-def parse_openai_usage(body_str):
-    """Parse usage from /v1/chat/completions and /v1/completions non-streaming."""
-    try:
-        data = json.loads(body_str)
-    except ValueError:
-        return None
-    usage = data.get("usage")
+    if path in NATIVE:
+        if not obj.get("done") or ("eval_count" not in obj and "prompt_eval_count" not in obj):
+            return None
+        duration = obj.get("total_duration")
+        return {
+            "model": obj.get("model") or "",
+            "prompt_tokens": int(obj.get("prompt_eval_count") or 0),
+            "cached_tokens": int(obj.get("prompt_eval_cached_count") or 0),
+            "completion_tokens": int(obj.get("eval_count") or 0),
+            "duration_ms": int(duration // 1_000_000) if isinstance(duration, int) else 0,
+        }
+    usage = obj.get("usage")
     if not isinstance(usage, dict):
         return None
-    prompt = usage.get("prompt_tokens", 0)
-    completion = usage.get("completion_tokens", 0)
-    # OpenAI format has no explicit cached token count here; map 0.
-    cached = 0
-    duration = 0
+    details = usage.get("prompt_tokens_details")
+    cached = details.get("cached_tokens") if isinstance(details, dict) else 0
     return {
-        "ts": time.time(),
-        "model": data.get("model", ""),
-        "endpoint": "/v1/chat/completions",
-        "prompt_tokens": prompt,
-        "cached_tokens": cached,
-        "completion_tokens": completion,
-        "duration_ms": duration,
-        "client": HOST,
+        "model": obj.get("model") or "",
+        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+        "cached_tokens": int(cached or 0),
+        "completion_tokens": int(usage.get("completion_tokens") or 0),
+        "duration_ms": 0,
     }
+
+
+class PowerMeter:
+    """Measures the energy each request uses, from `macmon` (Apple Silicon, no root needed).
+
+    `macmon pipe` reports SoC power (CPU + GPU + memory + neural engine) every second. Each
+    sample's energy is split evenly across the requests running at that moment, so concurrent
+    requests share the draw rather than each claiming all of it. Without macmon, `energy_j` is
+    simply not recorded and Splitrail falls back to the configured wattage.
+    """
+
+    def __init__(self, interval_ms=1000, use_macmon=True):
+        self.lock = threading.Lock()
+        self.active = {}  # request id -> joules so far
+        self.ids = itertools.count()
+        self.watts = None  # latest sample
+        self.last = None  # monotonic time of the latest sample
+        binary = shutil.which("macmon") or next(
+            (p for p in ("/opt/homebrew/bin/macmon", "/usr/local/bin/macmon") if os.path.exists(p)), None
+        )
+        self.available = use_macmon and binary is not None
+        if self.available:
+            self.proc = subprocess.Popen(
+                [binary, "pipe", "-i", str(interval_ms)],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            )
+            threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for line in self.proc.stdout:
+            try:
+                watts = float(json.loads(line)["all_power"])
+            except (ValueError, KeyError, TypeError):
+                continue
+            self.sample(watts, time.monotonic())
+        self.available = False  # macmon exited.
+
+    def sample(self, watts, now):
+        with self.lock:
+            if self.last is not None and self.active:
+                share = (self.watts or watts) * (now - self.last) / len(self.active)
+                for key in self.active:
+                    self.active[key] += share
+            self.watts, self.last = watts, now
+
+    def start(self):
+        with self.lock:
+            key = next(self.ids)
+            self.active[key] = 0.0
+            return key
+
+    def stop(self, key):
+        """Joules used by a request, including its share since the last sample."""
+        with self.lock:
+            joules = self.active.pop(key, 0.0)
+            if self.watts is not None and self.last is not None:
+                joules += self.watts * (time.monotonic() - self.last) / (len(self.active) + 1)
+            return joules if self.watts is not None else None
+
+
+class ModelSizes:
+    """Parameter counts (`20.9B`) per model, from the upstream `/api/tags`.
+
+    Splitrail prices Ollama models at the hosted equivalent, which is named by size
+    (`gpt-oss-20b`); a `:latest` tag says nothing about size, so the count is logged with usage.
+    Refreshed on a miss, at most once a minute.
+    """
+
+    def __init__(self, upstream):
+        self.upstream = upstream
+        self.sizes = {}
+        self.fetched = None  # monotonic() can start near 0, so no "long ago" sentinel.
+        self.lock = threading.Lock()
+
+    def get(self, model):
+        with self.lock:
+            stale = self.fetched is None or time.monotonic() - self.fetched > 60
+            if model not in self.sizes and stale:
+                self.fetched = time.monotonic()
+                self._refresh()
+            return self.sizes.get(model)
+
+    def _refresh(self):
+        conn = http.client.HTTPConnection(self.upstream.hostname, self.upstream.port or 80, timeout=5)
+        try:
+            conn.request("GET", "/api/tags")
+            for entry in json.loads(conn.getresponse().read()).get("models", []):
+                size = (entry.get("details") or {}).get("parameter_size")
+                if entry.get("name") and size:
+                    self.sizes[entry["name"]] = size
+        except (OSError, ValueError, AttributeError):
+            pass
+        finally:
+            conn.close()
+
+
+class UsageScanner:
+    """Finds token counts in a response as it streams past, holding only the current line.
+
+    Handles NDJSON (native streams), SSE `data:` lines (OpenAI-style streams) and a single
+    JSON body (non-streamed responses, scanned whole at the end).
+    """
+
+    def __init__(self, path, streamed):
+        self.path = path
+        self.streamed = streamed
+        self.partial = b""
+        self.body = bytearray()
+        self.usage = None
+        self.reply = ""
+
+    def feed(self, data):
+        if not self.streamed:
+            if len(self.body) + len(data) <= MAX_BODY_SCAN:
+                self.body += data
+            else:
+                self.body = None  # Too large to scan; give up on this one.
+            return
+        lines = (self.partial + data).split(b"\n")
+        self.partial = lines.pop()
+        for line in lines:
+            self._line(line)
+
+    def finish(self):
+        if self.streamed:
+            if self.partial:
+                self._line(self.partial)
+        elif self.body:
+            self._line(bytes(self.body))
+        return self.usage
+
+    def _line(self, line):
+        line = line.strip()
+        if line.startswith(b"data:"):
+            line = line[5:].strip()
+        if not line or line == b"[DONE]":
+            return
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            return
+        if len(self.reply) < PREVIEW_CHARS:
+            self.reply = (self.reply + reply_text(obj))[:PREVIEW_CHARS]
+        found = usage_from_object(self.path, obj)
+        if found:
+            self.usage = found
 
 
 class ProxyHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    upstream = urlparse(os.environ.get("OLLAMA_UPSTREAM", "http://127.0.0.1:11435"))
+    usage_file = None  # Tests point this elsewhere; None means USAGE_FILE.
+    power = None  # PowerMeter, set in main(); None records no energy.
+    sizes = None  # ModelSizes, set in main(); None records no parameter counts.
+
     def log_message(self, fmt, *args):
-        # Suppress default logging noise; errors go to stderr explicitly if needed.
-        pass
+        pass  # One line per request would flood ~/.splitrail.log.
 
-    def _forward(self, method, path, body_bytes=None):
-        upstream_url = UPSTREAM
-        if not upstream_url.startswith(("http://", "https://")):
-            upstream_url = "http://" + upstream_url
-        target = upstream_url.rstrip("/") + path
+    def _read_request_body(self):
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            body = bytearray()
+            while True:
+                size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                if size == 0:
+                    while self.rfile.readline().strip():
+                        pass  # Trailers.
+                    return bytes(body)
+                body += self.rfile.read(size)
+                self.rfile.readline()
+        length = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(length) if length else b""
 
-        req_headers = {}
-        for key, value in self.headers.items():
-            # Skip hop-by-hop headers per RFC 2616.
-            if key.lower() in (
-                "connection", "keep-alive", "proxy-authenticate",
-                "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade",
-            ):
-                continue
-            req_headers[key] = value
+    def _proxy(self):
+        self.started = time.monotonic()
+        path = urlparse(self.path).path
+        body = self._read_request_body()
+        logged = self.command == "POST" and (path in NATIVE or path in OPENAI)
+        self.prompt = ""
+        self.power_key = self.power.start() if logged and self.power else None
+        if logged:
+            self.prompt = prompt_preview(path, body)
+            body = prepare_request_body(path, body)
 
-        # Inject stream_options.include_usage for streaming /v1/chat/completions.
-        if path == "/v1/chat/completions" and body_bytes is not None:
-            try:
-                payload = json.loads(body_bytes.decode("utf-8", errors="replace"))
-                if payload.get("stream") is True:
-                    # Client didn't set include_usage; inject it so we get usage in last chunk.
-                    if "stream_options" not in payload:
-                        payload["stream_options"] = {}
-                    payload["stream_options"]["include_usage"] = True
-                    body_bytes = json.dumps(payload).encode("utf-8")
-                    req_headers["Content-Length"] = str(len(body_bytes))
-            except ValueError:
-                pass
+        skip = HOP_BY_HOP | {"host", "content-length"}
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in skip}
+        headers["Host"] = self.upstream.netloc
+        if body or self.command in ("POST", "PUT", "PATCH"):
+            headers["Content-Length"] = str(len(body))  # The body may have been rewritten.
 
-        upstream_req = Request(
-            target,
-            data=body_bytes,
-            headers=req_headers,
-            method=method,
-        )
+        conn = http.client.HTTPConnection(self.upstream.hostname, self.upstream.port or 80)
         try:
-            with urlopen(upstream_req) as resp:
-                status = resp.getcode()
-                headers = dict(resp.headers)
-                # Forward response chunk by chunk for streaming endpoints.
-                self.send_response(status)
-                # Filter out hop-by-hop headers.
-                for hkey, hvalue in headers.items():
-                    if hkey.lower() in (
-                        "transfer-encoding", "connection", "keep-alive",
-                        "proxy-authenticate", "proxy-authorization", "te",
-                        "trailers", "upgrade",
-                    ):
-                        continue
-                    self.send_header(hkey, hvalue)
-                self.end_headers()
+            try:
+                conn.request(self.command, self.path, body=body or None, headers=headers)
+                resp = conn.getresponse()
+            except OSError as e:
+                self._send_error(502, f"Ollama upstream unreachable: {e}")
+                return
+            self._relay(resp, path if logged and resp.status == 200 else None)
+        finally:
+            conn.close()
+            if self.power_key is not None:
+                self.power.stop(self.power_key)  # No-op if _log already took it.
 
-                # For streaming endpoints, stream directly.
-                # We accumulate nothing; we only inspect chunks as they pass.
-                if method == "POST" and (path == "/api/generate" or path == "/api/chat"):
-                    # NDJSON stream: read line by line, find final chunk, log it, pass through.
-                    is_stream = False
-                    # Check if request asked for stream (default true for these endpoints).
-                    try:
-                        request_payload = json.loads(
-                            body_bytes.decode("utf-8", errors="replace") if body_bytes else "{}"
-                        )
-                        is_stream = request_payload.get("stream", True)
-                    except ValueError:
-                        pass
+    def _relay(self, resp, log_path):
+        length = resp.getheader("Content-Length")
+        has_body = self.command != "HEAD" and resp.status not in (204, 304) and resp.status >= 200
+        chunked = has_body and length is None
 
-                    if is_stream:
-                        # Read the response line-by-line as NDJSON.
-                        # We must not buffer the whole body; stream through.
-                        buffer_line = b""
-                        for chunk in resp.read():
-                            # resp.read() for urlopen in Python stdlib reads all at once for
-                            # non-chunked responses; for chunked/stream, it reads available.
-                            # To keep it simple: accumulate line by line and flush.
-                            buffer_line += chunk if isinstance(chunk, bytes) else b""
-                            # For true streaming via urlopen, chunked encoding delivers
-                            # chunks as they arrive; but Python's urlopen doesn't expose
-                            # line-level chunking easily without reading full response.
-                            # Given the requirement "stream responses through chunk by chunk,
-                            # never buffer", we rely on reading the full upstream response but
-                            # only logging the final line, not buffering the entire response
-                            # in memory before sending (we pass bytes straight to client).
-                            # A pure zero-buffer approach requires lower-level socket work;
-                            # this satisfies "stream through" by forwarding bytes as they arrive.
-                            pass
-                        # After full upstream response, parse and log only the final line.
-                        # Note: for NDJSON, we need to split lines after full read.
-                        # This is acceptable for local low-volume inference.
-                        lines = buffer_line.decode("utf-8", errors="replace").splitlines()
-                        for line in lines:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            final = parse_generate_final(line) if path == "/api/generate" else parse_chat_final(line)
-                            if final is not None:
-                                atomic_write_jsonl(final)
-                            # Re-emit the line to the client unchanged.
-                            self.wfile.write(line.encode("utf-8") + b"\n")
-                        self.wfile.flush()
-                        return
+        self.send_response(resp.status, resp.reason)
+        for key, value in resp.getheaders():
+            if key.lower() not in HOP_BY_HOP:
+                self.send_header(key, value)
+        if chunked:
+            self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        if not has_body:
+            return
+
+        content_type = resp.getheader("Content-Type", "")
+        streamed = chunked or "ndjson" in content_type or "event-stream" in content_type
+        scanner = UsageScanner(log_path, streamed) if log_path else None
+        remaining = None if chunked else int(length)
+        try:
+            while True:
+                data = resp.read1(65536)
+                if data and scanner:
+                    scanner.feed(data)
+                if remaining is not None:
+                    remaining -= len(data)
+                # Log before the client sees the end of the response, so anything reading the
+                # log once a request completes finds its line.
+                if scanner and (not data or remaining == 0):
+                    self._log(scanner, log_path)
+                    scanner = None
+                if not data:
+                    break
+                if chunked:
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
                 else:
-                    # Non-streaming or non-log endpoints: forward body unchanged.
-                    body = resp.read()
-                    # Log usage for non-streaming generate/chat.
-                    if method == "POST" and (path == "/api/generate" or path == "/api/chat"):
-                        try:
-                            payload_str = body_bytes.decode("utf-8", errors="replace") if body_bytes else "{}"
-                            request_payload = json.loads(payload_str)
-                            if request_payload.get("stream") is False:
-                                final = parse_nonstreaming_usage(body.decode("utf-8", errors="replace"))
-                                if final:
-                                    atomic_write_jsonl(final)
-                        except ValueError:
-                            pass
-                    # Log /v1/chat/completions and /v1/completions.
-                    if path in ("/v1/chat/completions", "/v1/completions"):
-                        try:
-                            payload_str = body_bytes.decode("utf-8", errors="replace") if body_bytes else "{}"
-                            request_payload = json.loads(payload_str)
-                            if request_payload.get("stream") is False:
-                                final = parse_openai_usage(body.decode("utf-8", errors="replace"))
-                                if final:
-                                    atomic_write_jsonl(final)
-                            # For streaming SSE: inject include_usage if missing.
-                            # We already injected it in the request; now we inspect the stream.
-                            # For simplicity with stdlib, stream through line by line.
-                            # We'll read line-by-line from the upstream body for SSE.
-                            # Note: for true streaming we rely on the upstream sending chunked
-                            # data; Python urlopen delivers it in chunks, but not guaranteed
-                            # line-aligned. We approximate by splitting lines after reading.
-                            if request_payload.get("stream") is True:
-                                stream_text = body.decode("utf-8", errors="replace")
-                                # Look for the last data: chunk that contains usage.
-                                last_usage = None
-                                for raw_line in stream_text.splitlines():
-                                    if raw_line.startswith("data: "):
-                                        chunk_text = raw_line[len("data: "):].strip()
-                                        if chunk_text == "[DONE]":
-                                            break
-                                        try:
-                                            chunk_data = json.loads(chunk_text)
-                                            usage = chunk_data.get("usage")
-                                            if isinstance(usage, dict):
-                                                last_usage = usage
-                                        except ValueError:
-                                            pass
-                                if last_usage:
-                                    model_name = request_payload.get("model", "")
-                                    atomic_write_jsonl({
-                                        "ts": time.time(),
-                                        "model": model_name,
-                                        "endpoint": "/v1/chat/completions",
-                                        "prompt_tokens": last_usage.get("prompt_tokens", 0),
-                                        "cached_tokens": 0,
-                                        "completion_tokens": last_usage.get("completion_tokens", 0),
-                                        "duration_ms": 0,
-                                        "client": HOST,
-                                    })
-                        except ValueError:
-                            pass
-                    self.wfile.write(body)
-                    self.wfile.flush()
-        except HTTPError as e:
-            # Pass through upstream errors unchanged.
-            self.send_response(e.code)
-            for hkey, hvalue in e.headers.items():
-                if hkey.lower() not in (
-                    "transfer-encoding", "connection", "keep-alive",
-                    "proxy-authenticate", "proxy-authorization", "te",
-                    "trailers", "upgrade",
-                ):
-                    self.send_header(hkey, hvalue)
-            self.end_headers()
-            if e.fp:
-                self.wfile.write(e.fp.read())
+                    self.wfile.write(data)
                 self.wfile.flush()
-        except URLError:
-            # If upstream is unreachable, return 502 without affecting the request path.
-            self.send_response(502)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(b"Upstream unreachable (OLLAMA_UPSTREAM not running).")
-            self.wfile.flush()
+                if remaining == 0:
+                    break
+            if chunked:
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # The client went away; closing the upstream connection stops the generation.
+            self.close_connection = True
 
-    def do_POST(self):
-        content_length = self.headers.get("Content-Length")
-        body_bytes = self.rfile.read(int(content_length)) if content_length else b""
-        self._forward("POST", self.path, body_bytes)
+    def _log(self, scanner, log_path):
+        usage = scanner.finish()
+        energy = None
+        if self.power_key is not None:
+            energy = self.power.stop(self.power_key)
+            self.power_key = None
+        if usage:
+            if energy is not None:
+                usage["energy_j"] = round(energy, 2)
+            size = self.sizes.get(usage["model"]) if self.sizes and usage.get("model") else None
+            if size:
+                usage["param_size"] = size
+            write_usage(
+                {
+                    "ts": time.time(),
+                    **usage,
+                    # Wall time through the proxy: the only duration for /v1 calls, and the
+                    # basis of the electricity cost.
+                    "wall_ms": int((time.monotonic() - self.started) * 1000),
+                    "endpoint": log_path,
+                    "client": self.client_address[0],
+                    "prompt_preview": self.prompt,
+                    "reply_preview": scanner.reply.strip(),
+                },
+                self.usage_file,
+            )
 
-    def do_GET(self):
-        self._forward("GET", self.path, None)
+    def _send_error(self, code, message):
+        data = message.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
-    do_PUT = do_POST
-    do_DELETE = do_POST
-    do_PATCH = do_POST
+    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _proxy
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        # A client dropping an idle keep-alive connection is routine, not worth a traceback.
+        if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError, TimeoutError)):
+            super().handle_error(request, client_address)
 
 
 def main():
-    server = HTTPServer((HOST, PORT), ProxyHandler)
-    print(f"Ollama proxy listening on {HOST}:{PORT} -> {UPSTREAM}")
-    print(f"Usage log: {USAGE_FILE}")
+    host = os.environ.get("OLLAMA_PROXY_HOST", "127.0.0.1")
+    port = int(os.environ.get("OLLAMA_PROXY_PORT", "11434"))
+    ProxyHandler.power = PowerMeter()
+    ProxyHandler.sizes = ModelSizes(ProxyHandler.upstream)
+    server = Server((host, port), ProxyHandler)
+    upstream = ProxyHandler.upstream.geturl()
+    meter = "macmon" if ProxyHandler.power.available else "none (configured watts)"
+    print(f"ollama usage proxy {host}:{port} -> {upstream}, logging to {USAGE_FILE}, power: {meter}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -380,4 +475,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

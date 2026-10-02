@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.30] - 2026-10-01
+
+Ollama tracking that works end to end: a real streaming proxy, the port switch, street-price
+cost, measured electricity, transcripts, and capacity in the limit rows.
+
+### Fixed
+- The 0.29 proxy returned **empty bodies** for `/api/generate` and `/api/chat`, streamed or not
+  (it iterated the ints of a bytes object, and the non-streamed branch never wrote), handled one
+  request at a time, and its tests wrote fixtures into the real `usage.jsonl`. Rewritten: streams
+  as it receives (first byte 13 ms live), threaded, keep-alive, `HEAD`, errors passed through,
+  usage logged before the response ends; tests use a fake upstream and a temp dir.
+- The Ollama analyzer was never registered; it is now.
+- Zero-token records (sessions that never ran a model, e.g. failed OpenCode runs on a local
+  provider) no longer raise "No price for model": nothing to price means no lookup.
+
+### Added
+- `scripts/ollama_proxy_switch.sh` moves Ollama.app to `127.0.0.1:11435` and the proxy onto
+  `127.0.0.1:11434`, installing `com.splitrail.ollama-env` (re-applies `OLLAMA_HOST` at login)
+  and `com.splitrail.ollama-proxy` (KeepAlive). Checks every step and rolls back on failure;
+  `… rollback` undoes it. Ollama.app ignores `OLLAMA_HOST` while "Expose Ollama to the network"
+  is on, so the script refuses to run until it is off. It quits Ollama with `killall`, since an
+  AppleScript quit can be cancelled. Clients, including the devbox ssh tunnel, are unchanged.
+- Ollama cost is the **street price**, like every other tool (their subscriptions are not
+  per-token either): Ollama names map to hosted ones (`qwen3.8:27b-mlx` -> `qwen3.8-27b`,
+  `gpt-oss:latest` at 20.9B -> `gpt-oss-20b`, size from `/api/tags` logged by the proxy) and are
+  priced at the median across providers in the feed (`price_feed::median_price`, free tiers
+  excluded). `[pricing.overrides."<ollama name>"]` wins.
+- `🔌 Energy` row: electricity actually used. The proxy runs `macmon` (no root) and splits each
+  second's SoC power across the requests running then, logging `energy_j`; measured 12-19 W on
+  this M1 Max. Costed at `[ollama] electricity_per_kwh`; `power_watts` is the fallback when no
+  measurement exists. New `Stats.energy_wh` / `energy_cost`.
+- Ollama's `⏳ 5h` / `📅 Week` rows show capacity: output tokens generated in the window against
+  what the machine would generate running nonstop at its measured throughput (output tokens per
+  busy second, prompt processing included), e.g. `19% of 23K`.
+- Transcripts: the proxy keeps the caller's last message and the start of the reply (500
+  characters, `OLLAMA_PROXY_PREVIEW_CHARS`), so Ollama appears in the Activity section.
+
 ## [2.0.0-dash-0.29] - 2026-10-01
 
 Ollama token tracking (BZL-71).
