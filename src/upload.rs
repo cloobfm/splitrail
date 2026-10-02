@@ -23,7 +23,9 @@ where
     // Splitrail Cloud does not know `antigravity` yet and may reject a chunk carrying it.
     let messages: Vec<&ConversationMessage> = messages
         .iter()
-        .filter(|m| m.application != Application::Antigravity)
+        .filter(|m| {
+            m.application != Application::Antigravity && m.application != Application::Ollama
+        })
         .collect();
     if messages.is_empty() {
         return Ok(());

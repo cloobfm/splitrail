@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.29] - 2026-10-01
+
+Ollama token tracking (BZL-71).
+
+### Switch steps (requires short downtime — user approves before applying)
+1. Stop the current inference clients (other tools, ssh tunnel) briefly.
+2. Move Ollama to 11435: `launchctl setenv OLLAMA_HOST http://127.0.0.1:11435` (or edit
+   the Ollama launch agent's `OLLAMA_HOST` env) and restart Ollama.
+3. Install proxy: `cp scripts/com.splitrail.ollama-proxy.plist ~/Library/LaunchAgents/`
+   then `launchctl load ~/Library/LaunchAgents/com.splitrail.ollama-proxy.plist`.
+4. Confirm proxy on 11434: `curl -s http://localhost:11434/api/tags | head`.
+5. Confirm clients (including devbox ssh tunnel) can reach 11434 without reconfig.
+6. Rollback: `launchctl unload ...`, remove plist, restore `OLLAMA_HOST` to 11434, restart Ollama.
+
+### Added
+- `scripts/ollama_usage_proxy.py`: Python 3 stdlib proxy (`ThreadingHTTPServer` + `urllib`).
+  Listens on `OLLAMA_PROXY_HOST:OLLAMA_PROXY_PORT` (default 127.0.0.1:11434), forwards to
+  `OLLAMA_UPSTREAM` (default http://127.0.0.1:11435) without changing Ollama's native port
+  (other tools and an ssh tunnel depend on it). Passes `/api/generate` and `/api/chat` NDJSON
+  and `/v1/chat/completions` / `/v1/completions` through unchanged; reads `prompt_eval_count`,
+  `prompt_eval_cached_count`, `eval_count`, and `total_duration` from the final `done: true`
+  chunk (or `usage` in non-streaming / OpenAI streaming with injected `include_usage`).
+  Each inference writes one atomic line to `~/.config/splitrail/ollama/usage.jsonl`.
+  Logging failures never break requests.
+- `scripts/com.splitrail.ollama-proxy.plist`: launchd agent (`KeepAlive`, logs to `~/.splitrail.log`).
+  Not installed by default; install/rollback steps in `CHANGELOG` only.
+- `src/analyzers/ollama.rs`: reads the proxy's `usage.jsonl`. One assistant message per line,
+  `Application::Ollama`, cost fixed at $0.0 (local inference is free; skips
+  `calculate_total_cost` to avoid price warnings). Each line is its own session (Ollama has no
+  conversation id); malformed lines skipped.
+
+### Fixed
+- `upload.rs`: skips `Ollama` uploads (cloud does not know the application).
+- `notifications.rs`: `Application::Ollama` arm in `format_application`.
+
 ## [2.0.0-dash-0.28] - 2026-10-01
 
 Antigravity CLI (`agy`) tracking.

@@ -20,6 +20,7 @@ pub enum Application {
     OpenCode,
     DroidCli,
     Antigravity,
+    Ollama,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
