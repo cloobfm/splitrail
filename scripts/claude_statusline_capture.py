@@ -27,7 +27,7 @@ switches the whole directory), and each has its own windows. The payload does no
 account it is, so the login is read from the directory's `.claude.json` and limits are kept per
 login; the top-level `rate_limits` is the current login's. A session that has not made an API
 call since the switch still reports the previous account's numbers, so a report identical to
-that session's last one carries no new information and is not attributed to anyone.
+what that session reported under the previous login is not attributed to anyone.
 """
 
 import fcntl
@@ -140,24 +140,48 @@ def claude_json_path(label, environ=os.environ, home=os.path.expanduser("~")):
     return os.path.join(home, ".claude.json")
 
 
+TEAM_ORG_TYPES = ("team", "enterprise")
+
+
+def login_from_account(account):
+    """(key, display name) for an `oauthAccount`. One email can belong to a personal plan and
+    to a team, each with its own limits, so the organization is part of the key."""
+    email = account.get("emailAddress") or account.get("accountUuid")
+    if not email:
+        return None, None
+    name = email.split("@")[0]
+    org_type = account.get("organizationType") or ""
+    if any(t in org_type for t in TEAM_ORG_TYPES):
+        org = account.get("organizationName") or account.get("organizationUuid") or "team"
+        return f"{email} ({org})", f"{name}·team"
+    return f"{email} (personal)", name
+
+
 def current_login(label):
-    """Email of the account the config directory is logged in to, or None if unknown."""
+    """(key, display name) of the account the config directory is logged in to."""
     try:
         with open(claude_json_path(label)) as f:
             account = json.load(f).get("oauthAccount") or {}
     except (OSError, ValueError, AttributeError):
-        return None
-    return account.get("emailAddress") or account.get("accountUuid")
+        return None, None
+    return login_from_account(account)
 
 
 # Sessions not heard from in this long are forgotten.
 SESSION_TTL_SECS = 24 * 3600
+# Logins not heard from in this long are dropped: even their weekly window has rolled over.
+LOGIN_TTL_SECS = 8 * 24 * 3600
 
 
-def update_snapshot(previous, label, payload, login, now):
+def update_snapshot(previous, label, payload, login, now, login_name=None):
     """The new snapshot file contents, from the previous contents and one status line payload."""
     previous = previous if isinstance(previous, dict) else {}
     logins = previous.get("logins") if isinstance(previous.get("logins"), dict) else {}
+    logins = {
+        key: entry
+        for key, entry in logins.items()
+        if isinstance(entry, dict) and now - entry.get("captured_at", 0) < LOGIN_TTL_SECS
+    }
     sessions = previous.get("sessions") if isinstance(previous.get("sessions"), dict) else {}
     sessions = {
         sid: seen
@@ -169,21 +193,27 @@ def update_snapshot(previous, label, payload, login, now):
     fingerprint = json.dumps(reported, sort_keys=True)
     session_id = payload.get("session_id")
     last = sessions.get(session_id) if session_id else None
-    fresh = reported is not None and (last is None or last.get("fp") != fingerprint)
+    # Only a repeat across a login switch is suspect: the session has not called the API since,
+    # so these are the previous account's numbers. A repeat under the same login is just
+    # unchanged usage. Sessions recorded before logins were tracked count as the same login.
+    switched = last is not None and last.get("login", login) != login
+    fresh = reported is not None and not (switched and last.get("fp") == fingerprint)
     if session_id:
-        sessions[session_id] = {"fp": fingerprint, "seen": now}
+        sessions[session_id] = {"fp": fingerprint, "seen": now, "login": login}
 
     key = login or "unknown"
     entry = logins.get(key) if isinstance(logins.get(key), dict) else {}
     if fresh:
         entry = {
             "captured_at": now,
+            "name": login_name or login_name_of(key),
             "rate_limits": merge_limits(entry.get("rate_limits"), reported),
         }
         logins[key] = entry
     return {
         "account": label,
         "login": login,
+        "login_name": login_name or (login_name_of(login) if login else None),
         "captured_at": entry.get("captured_at", now),
         "rate_limits": entry.get("rate_limits"),
         "logins": logins,
@@ -198,7 +228,10 @@ def save_snapshot(label, payload, login=None):
     to the Claude config directory's current login."""
     os.makedirs(LIMITS_DIR, exist_ok=True)
     path = os.path.join(LIMITS_DIR, f"{label}.json")
-    login = login or current_login(label)
+    if login:
+        login_name = login.split("@")[0]
+    else:
+        login, login_name = current_login(label)
     # Sessions refresh concurrently; serialise the read-merge-write so none is lost.
     with open(os.path.join(LIMITS_DIR, f".{label}.lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -208,7 +241,7 @@ def save_snapshot(label, payload, login=None):
                 previous = json.load(f)
         except (OSError, ValueError):
             previous = None
-        snapshot = update_snapshot(previous, label, payload, login, time.time())
+        snapshot = update_snapshot(previous, label, payload, login, time.time(), login_name)
         # Write-then-rename: the dashboard may read while a status line refresh is writing.
         fd, tmp = tempfile.mkstemp(dir=LIMITS_DIR, prefix=f".{label}.", suffix=".tmp")
         with os.fdopen(fd, "w") as f:
@@ -217,13 +250,13 @@ def save_snapshot(label, payload, login=None):
     return snapshot
 
 
-def login_name(login):
+def login_name_of(login):
     return login.split("@")[0] if login else None
 
 
 def summary(label, payload, limits, snapshot=None):
     snapshot = snapshot or {}
-    name = login_name(snapshot.get("login"))
+    name = snapshot.get("login_name") or login_name_of(snapshot.get("login"))
     parts = [f"{label}:{name}" if name else label]
     model = (payload.get("model") or {}).get("display_name")
     if model:
@@ -252,7 +285,7 @@ def summary(label, payload, limits, snapshot=None):
             continue
         reset = parse_reset(week.get("resets_at"))
         pct = 0 if reset is not None and reset <= now else used_percent(week)
-        others.append(f"{login_name(login)} {pct:.0f}%")
+        others.append(f"{entry.get('name') or login_name_of(login)} {pct:.0f}%")
     if others:
         parts.append("7d " + ", ".join(others))
     return " · ".join(parts)

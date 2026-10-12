@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.32] - 2026-10-11
+
+### Fixed
+- One email can be on a personal plan and a team, each with its own limits; 0.31 keyed limits
+  by email alone and mixed them. Logins are now keyed by email plus organization (from
+  `oauthAccount.organizationType`/`organizationName`), and team logins show as `name·team` in
+  the Login row and the status line. Logins unseen for 8 days are dropped from the snapshot.
+- 0.31's idle-session check ignored *any* repeated report, so a login with no entry yet (e.g.
+  after the key change) stayed blank, with no 5h/week limit, until usage moved by 1%. Only a
+  report repeated across a login switch is ignored now.
+
 ## [2.0.0-dash-0.31] - 2026-10-11
 
 Plan limits per login, for a Claude config directory that switches between accounts.

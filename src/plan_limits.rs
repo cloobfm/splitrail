@@ -46,6 +46,9 @@ struct SnapshotFile {
     rate_limits: Option<RateLimits>,
     #[serde(default)]
     login: Option<String>,
+    /// Short display name, with `·team` for a team organization; older snapshots lack it.
+    #[serde(default)]
+    login_name: Option<String>,
 }
 
 /// One window as it stands now.
@@ -300,8 +303,8 @@ pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
     parse_snapshot(&content, now_secs)
 }
 
-/// The account a status line snapshot was last logged in to, as the email's local part
-/// (`support` for `support@virti.us`). `None` for tools without snapshots or older snapshots.
+/// The account a status line snapshot was last logged in to, as the email's local part with
+/// `·team` for a team organization (`support·team` for `support@virti.us` on a team plan). `None` for tools without snapshots or older snapshots.
 pub fn login_for_analyzer(analyzer_name: &str) -> Option<String> {
     let label = account_label(analyzer_name)?;
     let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
@@ -309,7 +312,11 @@ pub fn login_for_analyzer(analyzer_name: &str) -> Option<String> {
 }
 
 fn parse_login(content: &str) -> Option<String> {
-    let login = serde_json::from_str::<SnapshotFile>(content).ok()?.login?;
+    let file = serde_json::from_str::<SnapshotFile>(content).ok()?;
+    if let Some(name) = file.login_name.filter(|n| !n.is_empty()) {
+        return Some(name);
+    }
+    let login = file.login?;
     let name = login.split('@').next().unwrap_or(&login);
     (!name.is_empty()).then(|| name.to_string())
 }
@@ -387,6 +394,8 @@ mod tests {
         let with_login = r#"{"captured_at":1,"rate_limits":null,"login":"support@virti.us"}"#;
         assert_eq!(parse_login(with_login).as_deref(), Some("support"));
         assert_eq!(parse_login(&snapshot(1.0, 2.0, 3.0)), None);
+        let team = r#"{"captured_at":1,"rate_limits":null,"login":"s@v.us (Virtius)","login_name":"s·team"}"#;
+        assert_eq!(parse_login(team).as_deref(), Some("s·team"));
     }
 
     #[test]

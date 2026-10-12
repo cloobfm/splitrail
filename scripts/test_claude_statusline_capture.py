@@ -8,6 +8,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(__file__))
 from claude_statusline_capture import (  # noqa: E402
     claude_json_path,
+    login_from_account,
     merge_limits,
     merge_window,
     summary,
@@ -76,6 +77,15 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 5)
         self.assertEqual(state["logins"]["a@x.com"]["rate_limits"]["seven_day"]["used_percentage"], 80)
 
+    def test_unchanged_usage_under_the_same_login_still_fills_an_empty_login(self):
+        # Sessions recorded before logins were tracked, then a key change left the login empty.
+        state = {"sessions": {"s1": {"fp": '{"seven_day": {"resets_at": %d, "used_percentage": 23}}' % WEEK,
+                                     "seen": NOW}}}
+        state = update_snapshot(state, "main", report("s1", 23), "me (personal)", NOW + 60)
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 23)
+        state = update_snapshot(state, "main", report("s1", 23), "me (personal)", NOW + 120)
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 23)
+
     def test_old_sessions_are_forgotten(self):
         state = update_snapshot(None, "v", report("s1", 5), "a@x.com", NOW)
         state = update_snapshot(state, "v", report("s2", 6), "a@x.com", NOW + 2 * 86400)
@@ -88,6 +98,15 @@ class LoginTests(unittest.TestCase):
         line = summary("v", {}, state["rate_limits"], state)
         self.assertTrue(line.startswith("v:b · "))
         self.assertTrue(line.endswith("7d a 50%"))
+
+    def test_personal_and_team_logins_of_one_email_are_distinct(self):
+        personal = {"emailAddress": "me@x.com", "organizationType": "claude_max",
+                    "organizationName": "me@x.com's Organization"}
+        team = {"emailAddress": "me@x.com", "organizationType": "claude_team",
+                "organizationName": "Acme"}
+        self.assertEqual(login_from_account(personal), ("me@x.com (personal)", "me"))
+        self.assertEqual(login_from_account(team), ("me@x.com (Acme)", "me·team"))
+        self.assertEqual(login_from_account({}), (None, None))
 
     def test_config_dir_comes_from_env_then_label(self):
         home = os.path.dirname(__file__)
