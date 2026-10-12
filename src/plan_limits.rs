@@ -11,6 +11,10 @@
 //!                  "seven_day": {"used_percentage": 16, "resets_at": 1791050400}}}
 //! ```
 //!
+//! One config directory can be logged in to different accounts over time, so the script keeps
+//! limits per login (`logins`) and puts the current login's in `rate_limits`, naming it in
+//! `login`.
+//!
 //! A snapshot is only as fresh as the last time that account's status line ran, so a window
 //! whose reset time has passed is read as empty rather than at its last-seen usage.
 
@@ -40,6 +44,8 @@ struct RateLimits {
 struct SnapshotFile {
     captured_at: f64,
     rate_limits: Option<RateLimits>,
+    #[serde(default)]
+    login: Option<String>,
 }
 
 /// One window as it stands now.
@@ -294,6 +300,20 @@ pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
     parse_snapshot(&content, now_secs)
 }
 
+/// The account a status line snapshot was last logged in to, as the email's local part
+/// (`support` for `support@virti.us`). `None` for tools without snapshots or older snapshots.
+pub fn login_for_analyzer(analyzer_name: &str) -> Option<String> {
+    let label = account_label(analyzer_name)?;
+    let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
+    parse_login(&content)
+}
+
+fn parse_login(content: &str) -> Option<String> {
+    let login = serde_json::from_str::<SnapshotFile>(content).ok()?.login?;
+    let name = login.split('@').next().unwrap_or(&login);
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 /// Short countdown for a 13-column cell: `45m`, `2h13m`, `3d4h`.
 pub fn format_countdown(secs: i64) -> String {
     if secs <= 0 {
@@ -360,6 +380,13 @@ mod tests {
         let no_limits = r#"{"account":"main","captured_at":1790519606,"rate_limits":null}"#;
         assert!(parse_snapshot(no_limits, NOW).is_none());
         assert!(parse_snapshot("not json", NOW).is_none());
+    }
+
+    #[test]
+    fn login_is_the_email_local_part() {
+        let with_login = r#"{"captured_at":1,"rate_limits":null,"login":"support@virti.us"}"#;
+        assert_eq!(parse_login(with_login).as_deref(), Some("support"));
+        assert_eq!(parse_login(&snapshot(1.0, 2.0, 3.0)), None);
     }
 
     #[test]

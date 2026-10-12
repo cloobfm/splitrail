@@ -2,10 +2,17 @@
 
 import os
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from claude_statusline_capture import merge_limits, merge_window  # noqa: E402
+from claude_statusline_capture import (  # noqa: E402
+    claude_json_path,
+    merge_limits,
+    merge_window,
+    summary,
+    update_snapshot,
+)
 
 WEEK = 1791050400
 
@@ -37,6 +44,55 @@ class MergeTests(unittest.TestCase):
         for pct in [5, 24, 9, 16, 24, 5]:
             state = merge_limits(state, {"seven_day": w(pct, WEEK)})
         self.assertEqual(state["seven_day"]["used_percentage"], 24)
+
+
+NOW = WEEK - 3 * 86400
+
+
+def report(session, pct, reset=WEEK):
+    return {"session_id": session, "rate_limits": {"seven_day": w(pct, reset)}}
+
+
+class LoginTests(unittest.TestCase):
+    def test_limits_are_kept_per_login(self):
+        state = update_snapshot(None, "v", report("s1", 50), "a@x.com", NOW)
+        state = update_snapshot(state, "v", report("s1", 10, WEEK + 3600 * 5), "b@x.com", NOW + 60)
+        self.assertEqual(state["login"], "b@x.com")
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 10)
+        self.assertEqual(state["logins"]["a@x.com"]["rate_limits"]["seven_day"]["used_percentage"], 50)
+        # Switching back shows the first login's own figure, not the other's.
+        state = update_snapshot(state, "v", report("s1", 52), "a@x.com", NOW + 120)
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 52)
+        self.assertEqual(state["logins"]["b@x.com"]["rate_limits"]["seven_day"]["used_percentage"], 10)
+
+    def test_idle_session_after_a_switch_is_not_attributed_to_the_new_login(self):
+        state = update_snapshot(None, "v", report("idle", 80), "a@x.com", NOW)
+        # After /login to b, the idle session still repeats a's numbers.
+        state = update_snapshot(state, "v", report("idle", 80), "b@x.com", NOW + 60)
+        self.assertIsNone(state["rate_limits"])
+        self.assertNotIn("b@x.com", state["logins"])
+        # A session that made a call under b reports b's numbers.
+        state = update_snapshot(state, "v", report("busy", 5, WEEK + 7200), "b@x.com", NOW + 90)
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 5)
+        self.assertEqual(state["logins"]["a@x.com"]["rate_limits"]["seven_day"]["used_percentage"], 80)
+
+    def test_old_sessions_are_forgotten(self):
+        state = update_snapshot(None, "v", report("s1", 5), "a@x.com", NOW)
+        state = update_snapshot(state, "v", report("s2", 6), "a@x.com", NOW + 2 * 86400)
+        self.assertEqual(set(state["sessions"]), {"s2"})
+
+    def test_summary_lists_other_logins_weekly_usage(self):
+        future = time.time() + 86400  # summary() counts down from the real clock
+        state = update_snapshot(None, "v", report("s1", 50, future), "a@x.com", NOW)
+        state = update_snapshot(state, "v", report("s2", 10, future), "b@x.com", NOW)
+        line = summary("v", {}, state["rate_limits"], state)
+        self.assertTrue(line.startswith("v:b · "))
+        self.assertTrue(line.endswith("7d a 50%"))
+
+    def test_config_dir_comes_from_env_then_label(self):
+        home = os.path.dirname(__file__)
+        self.assertEqual(claude_json_path("v", {"CLAUDE_CONFIG_DIR": "/c"}, home), "/c/.claude.json")
+        self.assertEqual(claude_json_path("main", {}, "/h"), "/h/.claude.json")
 
 
 if __name__ == "__main__":

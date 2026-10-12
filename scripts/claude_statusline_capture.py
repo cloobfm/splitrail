@@ -21,6 +21,13 @@ whatever arrived last made the dashboard flicker (weekly 5% -> 24% -> 9% within 
 Snapshots are therefore merged per window: usage within a window only grows, so for the same
 window the higher figure wins, a later reset time means a new window, and an earlier reset time
 is a stale session and is ignored.
+
+One config directory can also be logged in to different Claude accounts over time (`/login`
+switches the whole directory), and each has its own windows. The payload does not say which
+account it is, so the login is read from the directory's `.claude.json` and limits are kept per
+login; the top-level `rate_limits` is the current login's. A session that has not made an API
+call since the switch still reports the previous account's numbers, so a report identical to
+that session's last one carries no new information and is not attributed to anyone.
 """
 
 import fcntl
@@ -123,37 +130,101 @@ def sweep_stale_tmp(directory, now=None):
                 pass
 
 
-def save_snapshot(label, payload):
-    """Merge this payload into the account's snapshot and return the merged rate limits."""
+def claude_json_path(label, environ=os.environ, home=os.path.expanduser("~")):
+    """The `.claude.json` of the config directory this status line runs for."""
+    config_dir = environ.get("CLAUDE_CONFIG_DIR")
+    if config_dir:
+        return os.path.join(os.path.expanduser(config_dir), ".claude.json")
+    if label != "main" and os.path.isdir(os.path.join(home, f".claude-{label}")):
+        return os.path.join(home, f".claude-{label}", ".claude.json")
+    return os.path.join(home, ".claude.json")
+
+
+def current_login(label):
+    """Email of the account the config directory is logged in to, or None if unknown."""
+    try:
+        with open(claude_json_path(label)) as f:
+            account = json.load(f).get("oauthAccount") or {}
+    except (OSError, ValueError, AttributeError):
+        return None
+    return account.get("emailAddress") or account.get("accountUuid")
+
+
+# Sessions not heard from in this long are forgotten.
+SESSION_TTL_SECS = 24 * 3600
+
+
+def update_snapshot(previous, label, payload, login, now):
+    """The new snapshot file contents, from the previous contents and one status line payload."""
+    previous = previous if isinstance(previous, dict) else {}
+    logins = previous.get("logins") if isinstance(previous.get("logins"), dict) else {}
+    sessions = previous.get("sessions") if isinstance(previous.get("sessions"), dict) else {}
+    sessions = {
+        sid: seen
+        for sid, seen in sessions.items()
+        if isinstance(seen, dict) and now - seen.get("seen", 0) < SESSION_TTL_SECS
+    }
+
+    reported = payload.get("rate_limits")
+    fingerprint = json.dumps(reported, sort_keys=True)
+    session_id = payload.get("session_id")
+    last = sessions.get(session_id) if session_id else None
+    fresh = reported is not None and (last is None or last.get("fp") != fingerprint)
+    if session_id:
+        sessions[session_id] = {"fp": fingerprint, "seen": now}
+
+    key = login or "unknown"
+    entry = logins.get(key) if isinstance(logins.get(key), dict) else {}
+    if fresh:
+        entry = {
+            "captured_at": now,
+            "rate_limits": merge_limits(entry.get("rate_limits"), reported),
+        }
+        logins[key] = entry
+    return {
+        "account": label,
+        "login": login,
+        "captured_at": entry.get("captured_at", now),
+        "rate_limits": entry.get("rate_limits"),
+        "logins": logins,
+        "sessions": sessions,
+        # Kept so a payload without rate_limits can be diagnosed from the file alone.
+        "payload_keys": sorted(payload.keys()),
+    }
+
+
+def save_snapshot(label, payload, login=None):
+    """Merge this payload into the account's snapshot and return the snapshot. `login` defaults
+    to the Claude config directory's current login."""
     os.makedirs(LIMITS_DIR, exist_ok=True)
     path = os.path.join(LIMITS_DIR, f"{label}.json")
+    login = login or current_login(label)
     # Sessions refresh concurrently; serialise the read-merge-write so none is lost.
     with open(os.path.join(LIMITS_DIR, f".{label}.lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         sweep_stale_tmp(LIMITS_DIR)
         try:
             with open(path) as f:
-                previous = json.load(f).get("rate_limits")
-        except (OSError, ValueError, AttributeError):
+                previous = json.load(f)
+        except (OSError, ValueError):
             previous = None
-        merged = merge_limits(previous, payload.get("rate_limits"))
-        snapshot = {
-            "account": label,
-            "captured_at": time.time(),
-            "rate_limits": merged,
-            # Kept so a payload without rate_limits can be diagnosed from the file alone.
-            "payload_keys": sorted(payload.keys()),
-        }
+        snapshot = update_snapshot(previous, label, payload, login, time.time())
         # Write-then-rename: the dashboard may read while a status line refresh is writing.
         fd, tmp = tempfile.mkstemp(dir=LIMITS_DIR, prefix=f".{label}.", suffix=".tmp")
         with os.fdopen(fd, "w") as f:
             json.dump(snapshot, f)
         os.replace(tmp, path)
-    return merged
+    return snapshot
 
 
-def summary(label, payload, limits):
-    parts = [label]
+def login_name(login):
+    return login.split("@")[0] if login else None
+
+
+def summary(label, payload, limits, snapshot=None):
+    snapshot = snapshot or {}
+    name = login_name(snapshot.get("login"))
+    parts = [f"{label}:{name}" if name else label]
     model = (payload.get("model") or {}).get("display_name")
     if model:
         parts.append(model)
@@ -171,6 +242,19 @@ def summary(label, payload, limits):
         if reset is not None:
             text += f" ↻{countdown(reset - now)}"
         parts.append(text)
+    # The other logins' weekly usage, to pick which account to switch to.
+    others = []
+    for login, entry in sorted((snapshot.get("logins") or {}).items()):
+        if login == snapshot.get("login") or not isinstance(entry, dict):
+            continue
+        week = (entry.get("rate_limits") or {}).get("seven_day")
+        if not isinstance(week, dict) or used_percent(week) is None:
+            continue
+        reset = parse_reset(week.get("resets_at"))
+        pct = 0 if reset is not None and reset <= now else used_percent(week)
+        others.append(f"{login_name(login)} {pct:.0f}%")
+    if others:
+        parts.append("7d " + ", ".join(others))
     return " · ".join(parts)
 
 
@@ -183,10 +267,12 @@ def main():
         return
     try:
         # Show the merged view, so every session agrees on the account's usage.
-        limits = save_snapshot(label, payload)
+        snapshot = save_snapshot(label, payload)
+        limits = snapshot["rate_limits"]
     except OSError:
+        snapshot = None
         limits = payload.get("rate_limits")  # A read-only or full disk must not break the line.
-    print(summary(label, payload, limits))
+    print(summary(label, payload, limits, snapshot))
 
 
 if __name__ == "__main__":

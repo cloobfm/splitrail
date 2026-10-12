@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.31] - 2026-10-11
+
+Plan limits per login, for a Claude config directory that switches between accounts.
+
+### Fixed
+- Cycling `/login` between accounts in one config directory (e.g. three emails on `Claude (v)`)
+  mixed their windows in one snapshot: whichever account had the later reset stuck, and the
+  others' usage was dropped as "stale". The status line now reads the directory's current login
+  from `.claude.json`, keeps limits per login, and shows the current one's. A session that has
+  not called the API since the switch repeats the previous account's numbers; a report identical
+  to that session's last one is no longer attributed to anyone.
+
+### Added
+- **Login** row on the dashboard: the account the 5h/week limits belong to.
+- The Claude status line names the login (`v:support · …`) and ends with the other logins'
+  weekly usage (`7d a 50%, b 12%`), to pick which account to switch to.
+
 ## [2.0.0-dash-0.30] - 2026-10-01
 
 Ollama tracking that works end to end: a real streaming proxy, the port switch, street-price

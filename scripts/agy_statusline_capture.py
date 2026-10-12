@@ -192,7 +192,9 @@ def main():
         pass
     try:
         # Snapshot fields other than the quota are not kept; the key list aids diagnosis.
-        limits = save_snapshot(LABEL, {**payload, "rate_limits": windows})
+        limits = save_snapshot(
+            LABEL, {**payload, "rate_limits": windows}, login=payload.get("email") or LABEL
+        )["rate_limits"]
     except OSError:
         limits = windows
     print(summary(payload, limits))

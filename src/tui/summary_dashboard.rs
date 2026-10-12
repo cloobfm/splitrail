@@ -230,7 +230,7 @@ pub fn draw_summary_view(
         Constraint::Length(1),  // Space above overview
         Constraint::Length(10), // Overview table (header + 6 rows + border) - reduced by 2 after removing cached/reasoning
         Constraint::Length(1),  // Space between tables
-        Constraint::Length(16), // CLI breakdown table (fixed height)
+        Constraint::Length(17), // CLI breakdown table (fixed height)
         Constraint::Length(1),  // Space before visual panels
         Constraint::Min(0),     // Visual CLI panels (takes remaining space)
     ])
@@ -800,6 +800,24 @@ pub fn draw_summary_view(
             &filtered_stats,
             |limits| limits.seven_day,
         ),
+        // Which account the limits above belong to, for a config directory whose login changes.
+        {
+            let mut cells = vec![Cell::new(
+                Line::from("👤 Login").style(Style::default().fg(Color::LightBlue)),
+            )];
+            for &idx in visible_indices {
+                let login =
+                    crate::plan_limits::login_for_analyzer(&filtered_stats[idx].analyzer_name);
+                cells.push(Cell::new(
+                    match login {
+                        Some(name) => Line::from(name.chars().take(13).collect::<String>()),
+                        None => Line::from("-").style(Style::default().fg(Color::DarkGray)),
+                    }
+                    .right_aligned(),
+                ));
+            }
+            Row::new(cells)
+        },
         // Status row
         {
             let mut cells = vec![Cell::new(
