@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.35] - 2026-10-13
+
+### Fixed
+- **OpenCode usage since January was missing.** OpenCode moved its data from JSON files into
+  `~/.local/share/opencode/opencode.db` (SQLite): 1.x into `message`, 2.x into
+  `session_message`. Splitrail only read the JSON files, which stop at 2026-01-24, so
+  `opencode run` sessions (e.g. 107 turns today) never appeared. The analyzer now reads the
+  database read-only, both tables, deduplicated by message id (2.x copied part of the 1.x
+  history), with project names from `session`/`session_v2` and tool calls counted from 2.x
+  content parts. It watches `opencode.db-wal` so new turns show up live, and reads
+  incrementally: nothing when the database and WAL are unchanged (OpenCode's own log writes in
+  that folder trigger reloads), otherwise only rows whose `time_updated` moved.
+- With the database present the 13,564 legacy JSON files (all of which it already holds) are
+  no longer read, so OpenCode loads in about 2 s instead of reading every file at startup.
+- Messages whose `summary` was a bool or lacked a title were dropped; the field is now
+  ignored.
+
 ## [2.0.0-dash-0.34] - 2026-10-13
 
 ### Added

@@ -114,6 +114,7 @@ async fn poll_once(client: &reqwest::Client, key: &str) -> Result<()> {
 }
 
 /// One poll now, for checking a key. Errors if no key is configured.
+#[allow(dead_code)] // Used by the live test; the binary only runs the loop.
 pub async fn poll_now() -> Result<()> {
     let key = api_key().context("No Factory API key configured")?;
     let client = reqwest::Client::builder()

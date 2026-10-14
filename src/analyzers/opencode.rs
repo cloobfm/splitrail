@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::analyzer::{Analyzer, DataSource};
 use crate::models::calculate_total_cost;
@@ -71,10 +71,12 @@ struct OpenCodeMessageData {
     provider_id: Option<String>,
     mode: Option<String>,
     path: Option<OpenCodePath>,
-    cost: Option<u64>,
+    cost: Option<f64>,
     tokens: Option<OpenCodeTokens>,
     finish: Option<String>,
-    summary: Option<OpenCodeMessageSummary>,
+    /// Unused, and its shape varies (an object, sometimes without a title, or a bare bool);
+    /// typed strictly it dropped the whole message.
+    summary: Option<serde_json::Value>,
     agent: Option<String>,
     model: Option<OpenCodeMessageModel>,
     tools: Option<OpenCodeMessageTools>,
@@ -101,13 +103,6 @@ struct OpenCodeCache {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenCodeMessageSummary {
-    title: String,
-    body: Option<String>, // Full message body text
-    diffs: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OpenCodeMessageModel {
     #[serde(rename = "providerID")]
     provider_id: String,
@@ -122,11 +117,54 @@ struct OpenCodeMessageTools {
     task: Option<bool>,
 }
 
-pub struct OpenCodeAnalyzer;
+pub struct OpenCodeAnalyzer {
+    /// Messages read from `opencode.db`, kept between reloads. OpenCode writes logs and
+    /// snapshots next to the database constantly, and every write there triggers a reload;
+    /// re-reading 13k+ rows each time would pin a core.
+    db_cache: std::sync::Mutex<DbCache>,
+}
+
+#[derive(Default)]
+struct DbCache {
+    /// (len, mtime) of the database and its WAL when last read; unchanged means nothing new.
+    stamp: Option<Vec<(u64, Option<std::time::SystemTime>)>>,
+    /// Newest `time_updated` seen per table; only rows at or after it are read again.
+    watermark_v2: i64,
+    watermark_v1: i64,
+    messages: std::collections::HashMap<String, ConversationMessage>,
+}
 
 impl OpenCodeAnalyzer {
     pub fn new() -> Self {
-        Self
+        Self {
+            db_cache: Default::default(),
+        }
+    }
+
+    /// Messages in the database, reading only rows changed since the last call.
+    fn read_database(&self, path: &Path) -> Result<Vec<ConversationMessage>> {
+        let stamp: Vec<_> = ["", "-wal"]
+            .iter()
+            .map(|suffix| {
+                let file = PathBuf::from(format!("{}{suffix}", path.display()));
+                std::fs::metadata(file)
+                    .map(|m| (m.len(), m.modified().ok()))
+                    .unwrap_or((0, None))
+            })
+            .collect();
+        let mut cache = self.db_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.stamp.as_ref() != Some(&stamp) {
+            let (rows, v2, v1) = parse_database(path, cache.watermark_v2, cache.watermark_v1)?;
+            for (id, msg) in rows {
+                cache.messages.insert(id, msg);
+            }
+            cache.watermark_v2 = cache.watermark_v2.max(v2);
+            cache.watermark_v1 = cache.watermark_v1.max(v1);
+            cache.stamp = Some(stamp);
+        }
+        let mut messages: Vec<_> = cache.messages.values().cloned().collect();
+        messages.sort_by_key(|m| m.date);
+        Ok(messages)
     }
 }
 
@@ -156,6 +194,11 @@ impl Analyzer for OpenCodeAnalyzer {
                 "{home_str}/.local/share/opencode/storage/message/ses_*.json"
             ));
 
+            // OpenCode 1.x+ keeps everything in SQLite; the WAL changes on every write, so watching
+            // it surfaces new turns live.
+            patterns.push(format!("{home_str}/.local/share/opencode/opencode.db"));
+            patterns.push(format!("{home_str}/.local/share/opencode/opencode.db-wal"));
+
             // REMOVED: Part files - these are individual message fragments, text content not needed for stats
             // Part files are only necessary if we need to display actual conversation content
         }
@@ -164,6 +207,14 @@ impl Analyzer for OpenCodeAnalyzer {
     }
 
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
+        // The database holds every message the legacy JSON files do (checked 2026-10-13: all
+        // 13,564 present), so with it the JSON files are not read at all.
+        if let Some(db) = std::env::home_dir()
+            .map(|home| home.join(".local/share/opencode/opencode.db"))
+            .filter(|db| db.is_file())
+        {
+            return Ok(vec![DataSource { path: db }]);
+        }
         let patterns = self.get_data_glob_patterns();
         let mut sources = Vec::new();
 
@@ -185,6 +236,26 @@ impl Analyzer for OpenCodeAnalyzer {
     ) -> Result<Vec<ConversationMessage>> {
         let mut messages = Vec::new();
         let mut seen_hashes = std::collections::HashSet::new();
+
+        // SQLite databases first; their messages share ids with the legacy JSON files.
+        let (databases, sources): (Vec<_>, Vec<_>) = sources
+            .into_iter()
+            .partition(|s| s.path.extension().is_some_and(|e| e == "db"));
+        for db in databases {
+            match self.read_database(&db.path) {
+                Ok(parsed) => {
+                    for msg in parsed {
+                        if seen_hashes.insert(msg.global_hash.clone()) {
+                            messages.push(msg);
+                        }
+                    }
+                }
+                Err(e) => crate::utils::warn_once(format!(
+                    "OpenCode: could not read {}: {e:#}",
+                    db.path.display()
+                )),
+            }
+        }
 
         // Separate message and session files
         let mut message_files = Vec::new();
@@ -565,8 +636,256 @@ impl OpenCodeAnalyzer {
     }
 }
 
+/// Whether `table` exists; the schema depends on the OpenCode version that last ran.
+fn has_table(conn: &rusqlite::Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+/// Messages from `opencode.db`, read-only. OpenCode 1.x stores them in `message` (data holds
+/// the old JSON file's fields minus id/sessionID); 2.x in `session_message` (type
+/// user/assistant/...; assistant data has `model.id`, `tokens`, `cost` and a `content` list of
+/// text/reasoning/tool parts). 2.x copied part of the 1.x history over, so ids repeat across
+/// the two and the caller deduplicates.
+/// Rows whose `time_updated` is at or after the given watermarks, keyed by message id (a 2.x
+/// row wins over its 1.x copy), with the newest `time_updated` seen in each table.
+fn parse_database(
+    path: &Path,
+    since_v2: i64,
+    since_v1: i64,
+) -> Result<(Vec<(String, ConversationMessage)>, i64, i64)> {
+    use anyhow::Context;
+    use rusqlite::OpenFlags;
+    let conn = rusqlite::Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .context("open")?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))?;
+
+    let mut directories = std::collections::HashMap::new();
+    for table in ["session", "session_v2"] {
+        if has_table(&conn, table) {
+            let mut stmt = conn.prepare(&format!("SELECT id, directory FROM {table}"))?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows.flatten() {
+                directories.insert(row.0, row.1);
+            }
+        }
+    }
+    // Project names are the folder name, as messages with a `path.cwd` already get.
+    let directory = |session: &str| {
+        directories
+            .get(session)
+            .map(|dir| {
+                Path::new(dir)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(dir)
+                    .to_string()
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    };
+
+    let analyzer = OpenCodeAnalyzer::new();
+    let mut messages: Vec<(String, ConversationMessage)> = Vec::new();
+    let mut v2_ids = std::collections::HashSet::new();
+    let (mut max_v2, mut max_v1) = (since_v2, since_v1);
+
+    if has_table(&conn, "session_message") {
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, type, time_created, data, time_updated FROM session_message \
+             WHERE type IN ('user', 'assistant') AND time_updated >= ?1",
+        )?;
+        let rows = stmt.query_map([since_v2], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
+            ))
+        })?;
+        for (id, session, role, created, data, updated) in rows.flatten() {
+            max_v2 = max_v2.max(updated);
+            if let Some(msg) = convert_v2_row(&analyzer, &id, &session, &role, created, &data, &directory(&session)) {
+                v2_ids.insert(id.clone());
+                messages.push((id, msg));
+            }
+        }
+    }
+
+    if has_table(&conn, "message") {
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, data, time_updated FROM message WHERE time_updated >= ?1",
+        )?;
+        let rows = stmt.query_map([since_v1], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        for (id, session, data, updated) in rows.flatten() {
+            max_v1 = max_v1.max(updated);
+            if v2_ids.contains(&id) {
+                continue;
+            }
+            let Ok(serde_json::Value::Object(mut fields)) = serde_json::from_str(&data) else {
+                continue;
+            };
+            fields.insert("id".into(), id.clone().into());
+            fields.insert("sessionID".into(), session.clone().into());
+            if let Ok(parsed) = serde_json::from_value::<OpenCodeMessageData>(fields.into()) {
+                if let Some(msg) =
+                    analyzer.convert_opencode_message_data(parsed, &directory(&session), None)
+                {
+                    messages.push((id, msg));
+                }
+            }
+        }
+    }
+    Ok((messages, max_v2, max_v1))
+}
+
+/// One OpenCode 2.x `session_message` row, mapped onto the 1.x message shape.
+fn convert_v2_row(
+    analyzer: &OpenCodeAnalyzer,
+    id: &str,
+    session: &str,
+    role: &str,
+    row_created: i64,
+    data: &str,
+    directory: &str,
+) -> Option<ConversationMessage> {
+    let data: serde_json::Value = serde_json::from_str(data).ok()?;
+    let created = data
+        .pointer("/time/created")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(row_created.max(0) as u64);
+    let parts = data.get("content").and_then(|c| c.as_array());
+    let tool_calls = parts
+        .map(|p| p.iter().filter(|part| part["type"] == "tool").count() as u32)
+        .unwrap_or(0);
+    let text = match role {
+        "user" => data.get("text").and_then(|t| t.as_str()).map(str::to_string),
+        _ => parts.map(|p| {
+            p.iter()
+                .filter(|part| part["type"] == "text")
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        }),
+    }
+    .filter(|t| !t.trim().is_empty());
+    let model = data.get("model");
+    let shaped = serde_json::json!({
+        "id": id,
+        "sessionID": session,
+        "role": role,
+        "time": { "created": created },
+        "modelID": model.and_then(|m| m.get("id")).cloned(),
+        "providerID": model.and_then(|m| m.get("providerID")).cloned(),
+        "tokens": data.get("tokens").cloned(),
+        "cost": data.get("cost").cloned(),
+    });
+    let parsed: OpenCodeMessageData = serde_json::from_value(shaped).ok()?;
+    let mut msg = analyzer.convert_opencode_message_data(parsed, directory, text)?;
+    msg.stats.tool_calls = tool_calls;
+    Some(msg)
+}
+
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn database_rows_from_both_schemas_are_read_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (id text, directory text);
+            CREATE TABLE session_v2 (id text, directory text);
+            CREATE TABLE message (id text, session_id text, time_created integer, time_updated integer, data text);
+            CREATE TABLE session_message (id text, session_id text, type text, seq integer,
+                time_created integer, time_updated integer, data text);
+            INSERT INTO session VALUES ('s1', '/p/old');
+            INSERT INTO session_v2 VALUES ('s2', '/p/new');
+            -- 1.x: an assistant turn, plus one also copied into 2.x, plus one with a bool summary.
+            INSERT INTO message VALUES ('m1', 's1', 0, 1, '{"role":"assistant","time":{"created":1760000000000},"modelID":"glm-4.6","providerID":"zai","tokens":{"input":10,"output":20,"reasoning":0,"cache":{"read":5,"write":0}},"cost":0}');
+            INSERT INTO message VALUES ('m2', 's2', 0, 1, '{"role":"user","time":{"created":1760000001000},"summary":true}');
+            INSERT INTO message VALUES ('m3', 's1', 0, 1, '{"role":"user","time":{"created":1760000002000},"summary":{"diffs":[]}}');
+            -- 2.x
+            INSERT INTO session_message VALUES ('m2', 's2', 'user', 1, 1760000001000, 1760000001000, '{"time":{"created":1760000001000},"text":"hi"}');
+            INSERT INTO session_message VALUES ('m4', 's2', 'assistant', 2, 1760000002000, 1760000002000, '{"time":{"created":1760000002000},"model":{"id":"cat-jam-free","providerID":"opencode"},"tokens":{"input":7,"output":3,"reasoning":1,"cache":{"read":100,"write":0}},"cost":0,"content":[{"type":"text","text":"done"},{"type":"tool","name":"shell"},{"type":"tool","name":"read"}]}');
+            INSERT INTO session_message VALUES ('i1', 's2', 'idle', 3, 1760000003000, 1760000003000, '{}');
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        let analyzer = OpenCodeAnalyzer::new();
+        let messages = analyzer
+            .parse_conversations(vec![DataSource { path: path.clone() }])
+            .await
+            .unwrap();
+        assert_eq!(messages.len(), 4); // m1, m2 once, m3, m4; the idle row is skipped
+        let m4 = messages.iter().find(|m| m.model.as_deref() == Some("cat-jam-free")).unwrap();
+        assert_eq!(m4.stats.output_tokens, 3);
+        assert_eq!(m4.stats.cache_read_tokens, 100);
+        assert_eq!(m4.stats.tool_calls, 2);
+        assert_eq!(m4.project_hash, "new");
+        assert_eq!(m4.content.as_deref(), Some("done"));
+        let m1 = messages.iter().find(|m| m.model.as_deref() == Some("glm-4.6")).unwrap();
+        assert_eq!(m1.project_hash, "old");
+
+        // A turn streamed further: only that row is read again, and it replaces the old one.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute(
+            "UPDATE session_message SET time_updated = 1760000009000, data = json_set(data, '$.tokens.output', 30) WHERE id = 'm4'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let messages = analyzer
+            .parse_conversations(vec![DataSource { path }])
+            .await
+            .unwrap();
+        assert_eq!(messages.len(), 4);
+        let m4 = messages.iter().find(|m| m.model.as_deref() == Some("cat-jam-free")).unwrap();
+        assert_eq!(m4.stats.output_tokens, 30);
+    }
+
+    /// Reads the real database: `cargo test opencode_live -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn opencode_live_database_matches_sqlite() {
+        let analyzer = OpenCodeAnalyzer::new();
+        let stats = analyzer.get_stats().await.unwrap();
+        let assistant = stats
+            .messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Assistant)
+            .count();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let day = stats.daily_stats.get(&today);
+        println!(
+            "messages {} (assistant {assistant}); today output {:?} input {:?} cache read {:?} cost {:?}",
+            stats.messages.len(),
+            day.map(|d| d.stats.output_tokens),
+            day.map(|d| d.stats.input_tokens),
+            day.map(|d| d.stats.cache_read_tokens),
+            day.map(|d| d.stats.cost),
+        );
+        assert!(assistant > 0);
+    }
+
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
