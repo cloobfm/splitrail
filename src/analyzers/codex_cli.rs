@@ -6,7 +6,9 @@ use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use crate::analyzer::{Analyzer, DataSource};
 use crate::models::calculate_total_cost;
@@ -15,11 +17,25 @@ use crate::utils::{deserialize_utc_timestamp, hash_text, warn_once};
 
 const DEFAULT_FALLBACK_MODEL: &str = "gpt-5";
 
-pub struct CodexCliAnalyzer;
+/// A parsed session file, kept until the file's size or modification time changes.
+struct CachedFile {
+    len: u64,
+    modified: Option<SystemTime>,
+    messages: Arc<Vec<ConversationMessage>>,
+}
+
+pub struct CodexCliAnalyzer {
+    /// Codex appends to the live session file continuously, and every append triggers a
+    /// reload; re-parsing every session on disk each time pinned several cores. Only files
+    /// whose size or mtime changed are parsed again.
+    cache: Mutex<HashMap<PathBuf, CachedFile>>,
+}
 
 impl CodexCliAnalyzer {
     pub fn new() -> Self {
-        Self
+        Self {
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -93,27 +109,61 @@ impl Analyzer for CodexCliAnalyzer {
         &self,
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
-        // Parse all data sources in parallel while properly propagating any
-        // error that occurs while processing an individual file.  Rayon’s
-        // `try_reduce` utility allows us to aggregate `Result` values coming
-        // from each parallel worker without having to fall back to
-        // sequential processing.
-
         use rayon::prelude::*;
 
-        let aggregated: Result<Vec<ConversationMessage>> = sources
-            .into_par_iter()
-            .map(|source| parse_codex_source(&source.path))
-            // Start the reduction with an empty vector and extend it with the
-            // entries coming from each successfully-parsed file.
-            .try_reduce(Vec::new, |mut acc, mut entries| {
-                acc.append(&mut entries);
-                Ok(acc)
-            });
+        let stamp = |path: &Path| {
+            std::fs::metadata(path)
+                .map(|meta| (meta.len(), meta.modified().ok()))
+                .ok()
+        };
+        let live: HashSet<PathBuf> = sources.iter().map(|s| s.path.clone()).collect();
+        let mut cached = Vec::with_capacity(sources.len());
+        let mut stale = Vec::new();
+        {
+            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            for source in sources {
+                let current = stamp(&source.path);
+                match (cache.get(&source.path), current) {
+                    (Some(entry), Some((len, modified)))
+                        if entry.len == len && entry.modified == modified =>
+                    {
+                        cached.push(entry.messages.clone());
+                    }
+                    _ => stale.push((source.path, current)),
+                }
+            }
+        }
 
-        // For Codex CLI, we don't need to deduplicate since each session is separate
-        // but we keep the logic encapsulated for future changes.
-        aggregated
+        // Parse changed files in parallel, propagating the first error.
+        let parsed: Vec<(PathBuf, Option<(u64, Option<SystemTime>)>, Vec<ConversationMessage>)> =
+            stale
+                .into_par_iter()
+                .map(|(path, current)| {
+                    let messages = parse_codex_source(&path)?;
+                    Ok((path, current, messages))
+                })
+                .collect::<Result<_>>()?;
+
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.retain(|path, _| live.contains(path)); // Forget deleted sessions.
+        let mut messages: Vec<ConversationMessage> =
+            cached.iter().flat_map(|m| m.iter().cloned()).collect();
+        for (path, current, parsed) in parsed {
+            let parsed = Arc::new(parsed);
+            messages.extend(parsed.iter().cloned());
+            if let Some((len, modified)) = current {
+                cache.insert(
+                    path,
+                    CachedFile {
+                        len,
+                        modified,
+                        messages: parsed,
+                    },
+                );
+            }
+        }
+        // Each session is separate, so there is nothing to deduplicate across files.
+        Ok(messages)
     }
 
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {

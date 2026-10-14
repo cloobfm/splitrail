@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.33] - 2026-10-11
+
+### Fixed
+- **Dashboard pinned 3-4 cores while Codex ran.** Codex appends to its live session file
+  continuously; each append (file events every ~2 s, plus the 5 s poll) re-parsed every Codex
+  session on disk (201 files, 279 MB here). The Codex analyzer now caches each parsed file by
+  size and mtime and only re-parses files that changed. Claude Code already had an incremental
+  cache; the other analyzers are tracked for the same treatment.
+
 ## [2.0.0-dash-0.32] - 2026-10-11
 
 ### Fixed

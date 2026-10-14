@@ -344,3 +344,32 @@ fn test_parse_codex_cli_rate_limits_feed_plan_limits() {
     assert_eq!(limits.five_hour.unwrap().used_percentage, 40.0);
     assert_eq!(limits.seven_day.unwrap().used_percentage, 12.0);
 }
+
+#[tokio::test]
+async fn unchanged_session_files_are_served_from_the_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let session = concat!(
+        r#"{"timestamp":"2025-09-18T00:16:36.676Z","type":"turn_context","payload":{"model":"gpt-5-codex"}}"#,
+        "\n",
+        r#"{"timestamp":"2025-09-18T00:16:38.852Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello!"}]}}"#,
+        "\n",
+    );
+    std::fs::write(&path, session).unwrap();
+    let analyzer = CodexCliAnalyzer::new();
+    let sources = || vec![crate::analyzer::DataSource { path: path.clone() }];
+    let first = analyzer.parse_conversations(sources()).await.unwrap();
+    assert!(!first.is_empty());
+
+    // Same size and mtime but different bytes: a cache hit never reads them.
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    std::fs::write(&path, " ".repeat(session.len())).unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+    let cached = analyzer.parse_conversations(sources()).await.unwrap();
+    assert_eq!(cached.len(), first.len());
+
+    // An appended file is parsed again.
+    std::fs::write(&path, "\n").unwrap();
+    let reparsed = analyzer.parse_conversations(sources()).await.unwrap();
+    assert!(reparsed.is_empty());
+}
