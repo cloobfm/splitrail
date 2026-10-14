@@ -4,6 +4,7 @@
 pub mod analyzer;
 pub mod analyzers;
 pub mod config;
+pub mod droid_limits;
 pub mod incremental;
 pub mod models;
 pub mod plan_limits;

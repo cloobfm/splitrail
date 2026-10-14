@@ -17,6 +17,7 @@ mod models;
 mod notifications;
 mod plan_limits;
 mod price_feed;
+mod droid_limits;
 mod reqwest_simd_json;
 mod tui;
 mod types;
@@ -315,6 +316,10 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
     };
 
     // Create real-time stats manager
+    // Droid's plan limits come only from Factory's API; polls when a Factory key is configured.
+    // Started before the initial parse so the first reading lands while it runs.
+    tokio::spawn(droid_limits::run());
+
     let mut stats_manager = match watcher::RealtimeStatsManager::new(registry).await {
         Ok(manager) => manager,
         Err(e) => {

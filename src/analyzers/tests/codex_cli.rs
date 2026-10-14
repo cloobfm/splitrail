@@ -343,6 +343,10 @@ fn test_parse_codex_cli_rate_limits_feed_plan_limits() {
     let limits = crate::plan_limits::limits_for_analyzer("Codex CLI").unwrap();
     assert_eq!(limits.five_hour.unwrap().used_percentage, 40.0);
     assert_eq!(limits.seven_day.unwrap().used_percentage, 12.0);
+    assert_eq!(
+        crate::plan_limits::login_for_analyzer("Codex CLI").as_deref(),
+        Some("chatgpt·plus")
+    );
 }
 
 #[tokio::test]

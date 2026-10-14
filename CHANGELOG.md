@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.34] - 2026-10-13
+
+### Added
+- **Droid 5h/Week Limit rows.** Droid's status line carries no usage and Droid stores none
+  locally; its `/usage` panel reads Factory's `GET /api/billing/limits`. With a Factory API key
+  in `~/.config/splitrail/factory_api_key` (mode 600) or `FACTORY_API_KEY`, the dashboard polls
+  that endpoint every 5 minutes and writes `limits/droid.json` in the status line snapshot
+  format, so the Droid column's limit rows and health use it. The monthly window and Extra
+  Usage balance are saved too. A 5-hour window with nothing used yet shows 0% with no
+  countdown. No key, no polling.
+- **Login row for every limited column.** Codex shows its ChatGPT plan from the logs'
+  `rate_limits.plan_type` (`chatgpt·plus`; the logs carry no email), Droid shows `factory`
+  (Factory's API returns ids only), and Ollama shows this machine's short hostname.
+
 ## [2.0.0-dash-0.33] - 2026-10-11
 
 ### Fixed

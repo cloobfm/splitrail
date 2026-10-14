@@ -147,6 +147,21 @@ pub fn observe(
     }
 }
 
+static OBSERVED_LOGINS: OnceLock<Mutex<HashMap<String, (DateTime<Utc>, String)>>> = OnceLock::new();
+
+/// Record the account an analyzer's own logs name (e.g. Codex's plan type), keeping the newest.
+pub fn observe_login(analyzer_name: &str, at: DateTime<Utc>, login: String) {
+    let map = OBSERVED_LOGINS.get_or_init(Default::default);
+    if let Ok(mut map) = map.lock() {
+        match map.get(analyzer_name) {
+            Some((seen, _)) if *seen > at => {}
+            _ => {
+                map.insert(analyzer_name.to_string(), (at, login));
+            }
+        }
+    }
+}
+
 fn observed_limits(analyzer_name: &str, now: f64) -> Option<AccountLimits> {
     let observed = *OBSERVED.get()?.lock().ok()?.get(analyzer_name)?;
     let fresh = |slot: Option<(DateTime<Utc>, LimitWindow)>| {
@@ -261,6 +276,9 @@ pub fn account_label(analyzer_name: &str) -> Option<String> {
     if analyzer_name == crate::analyzers::antigravity::DISPLAY_NAME {
         return Some("antigravity".to_string());
     }
+    if analyzer_name == "Droid CLI" {
+        return Some("droid".to_string()); // Polled from Factory by `droid_limits`.
+    }
     if let Some(label) = analyzer_name
         .strip_prefix("Claude (")
         .and_then(|rest| rest.strip_suffix(')'))
@@ -303,12 +321,39 @@ pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
     parse_snapshot(&content, now_secs)
 }
 
-/// The account a status line snapshot was last logged in to, as the email's local part with
+/// The account behind an analyzer's column: what its own logs report (Codex's ChatGPT plan),
+/// `local` for Ollama, or the account a status line snapshot was last logged in to, as the email's local part with
 /// `·team` for a team organization (`support·team` for `support@virti.us` on a team plan). `None` for tools without snapshots or older snapshots.
 pub fn login_for_analyzer(analyzer_name: &str) -> Option<String> {
+    if analyzer_name == "Ollama" {
+        return short_hostname(); // Models on this machine; no account.
+    }
+    if let Some((_, login)) = OBSERVED_LOGINS
+        .get()
+        .and_then(|map| map.lock().ok()?.get(analyzer_name).cloned())
+    {
+        return Some(login);
+    }
     let label = account_label(analyzer_name)?;
     let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
     parse_login(&content)
+}
+
+/// This machine's name without the domain (`Amberts-MacBook-Pro`), like `hostname -s`.
+fn short_hostname() -> Option<String> {
+    static NAME: OnceLock<Option<String>> = OnceLock::new();
+    NAME.get_or_init(|| {
+        let mut buf = [0u8; 256];
+        // SAFETY: the buffer is valid for its length; gethostname NUL-terminates on success.
+        if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+            return None;
+        }
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        let name = String::from_utf8_lossy(&buf[..end]);
+        let short = name.split('.').next().unwrap_or_default().to_string();
+        (!short.is_empty()).then_some(short)
+    })
+    .clone()
 }
 
 fn parse_login(content: &str) -> Option<String> {
@@ -387,6 +432,13 @@ mod tests {
         let no_limits = r#"{"account":"main","captured_at":1790519606,"rate_limits":null}"#;
         assert!(parse_snapshot(no_limits, NOW).is_none());
         assert!(parse_snapshot("not json", NOW).is_none());
+    }
+
+    #[test]
+    fn ollama_and_droid_columns_have_a_login() {
+        let host = login_for_analyzer("Ollama").unwrap();
+        assert!(!host.is_empty() && !host.contains('.'));
+        assert_eq!(account_label("Droid CLI").as_deref(), Some("droid"));
     }
 
     #[test]

@@ -290,6 +290,10 @@ fn observe_rate_limits(rate_limits: &simd_json::OwnedValue, at: DateTime<Utc>) {
     if five_hour.is_some() || seven_day.is_some() {
         crate::plan_limits::observe(CODEX_ANALYZER_NAME, at, five_hour, seven_day);
     }
+    // The logs carry no email, but rate_limits names the ChatGPT plan ("plus", "pro").
+    if let Some(plan) = json.get("plan_type").and_then(|v| v.as_str()) {
+        crate::plan_limits::observe_login(CODEX_ANALYZER_NAME, at, format!("chatgpt·{plan}"));
+    }
 }
 
 /// Codex's analyzer display name; plan limits are keyed by it.
