@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use analyzer::AnalyzerRegistry;
 use analyzers::{
-    AntigravityAnalyzer, ClaudeCodeAnalyzer, ClineAnalyzer, CodexCliAnalyzer, DroidCliAnalyzer,
+    AntigravityAnalyzer, ClaudeCodeAnalyzer, CursorAgentAnalyzer, ClineAnalyzer, CodexCliAnalyzer, DroidCliAnalyzer,
     KiloCodeAnalyzer, KiroCliAnalyzer, OllamaAnalyzer, OpenCodeAnalyzer, QwenCodeAnalyzer,
     WarpDevAnalyzer,
 };
@@ -17,6 +17,7 @@ mod models;
 mod notifications;
 mod plan_limits;
 mod price_feed;
+mod cursor_limits;
 mod droid_limits;
 mod reqwest_simd_json;
 mod tui;
@@ -296,6 +297,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     registry.register(OpenCodeAnalyzer::new()); // Ready when OpenCode adds local data storage
     registry.register(WarpDevAnalyzer::new()); // Now includes GraphQL conversation data
     registry.register(AntigravityAnalyzer::new()); // Fed by scripts/agy_statusline_capture.py
+    registry.register(CursorAgentAnalyzer::new()); // Fed by scripts/cursor_hook_capture.py
     registry.register(OllamaAnalyzer::new()); // Fed by scripts/ollama_usage_proxy.py
     // registry.register(CopilotAnalyzer::new()); // Temporarily disabled
 
@@ -319,6 +321,7 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
     // Droid's plan limits come only from Factory's API; polls when a Factory key is configured.
     // Started before the initial parse so the first reading lands while it runs.
     tokio::spawn(droid_limits::run());
+    tokio::spawn(cursor_limits::run());
 
     let mut stats_manager = match watcher::RealtimeStatsManager::new(registry).await {
         Ok(manager) => manager,

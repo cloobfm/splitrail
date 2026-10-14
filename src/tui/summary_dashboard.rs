@@ -230,7 +230,7 @@ pub fn draw_summary_view(
         Constraint::Length(1),  // Space above overview
         Constraint::Length(10), // Overview table (header + 6 rows + border) - reduced by 2 after removing cached/reasoning
         Constraint::Length(1),  // Space between tables
-        Constraint::Length(17), // CLI breakdown table (fixed height)
+        Constraint::Length(18), // CLI breakdown table (fixed height)
         Constraint::Length(1),  // Space before visual panels
         Constraint::Min(0),     // Visual CLI panels (takes remaining space)
     ])
@@ -800,6 +800,13 @@ pub fn draw_summary_view(
             &filtered_stats,
             |limits| limits.seven_day,
         ),
+        limit_row(
+            "🗓️ Month Limit",
+            Color::Magenta,
+            visible_indices,
+            &filtered_stats,
+            |limits| limits.monthly,
+        ),
         // Which account the limits above belong to, for a config directory whose login changes.
         {
             let mut cells = vec![Cell::new(
@@ -943,6 +950,9 @@ fn limit_row<'a>(
         // Local model servers have no plan, so the row shows capacity instead: how much of what
         // the machine could generate running nonstop it actually generated in the window.
         let capacity = || {
+            if label.contains("Month") {
+                return None; // Capacity covers the 5h and weekly windows only.
+            }
             let (five_hour, seven_day) =
                 crate::plan_limits::capacity_for_analyzer(&filtered_stats[idx].analyzer_name)?;
             Some(if label.contains("5h") {

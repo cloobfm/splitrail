@@ -20,11 +20,14 @@ where
     F: FnMut(usize, usize),
 {
     const CHUNK_SIZE: usize = 4500;
-    // Splitrail Cloud does not know `antigravity` yet and may reject a chunk carrying it.
+    // Splitrail Cloud does not know `antigravity` (or the other local-only tools) yet and may reject a chunk carrying it.
     let messages: Vec<&ConversationMessage> = messages
         .iter()
         .filter(|m| {
-            m.application != Application::Antigravity && m.application != Application::Ollama
+            !matches!(
+                m.application,
+                Application::Antigravity | Application::Ollama | Application::CursorAgent
+            )
         })
         .collect();
     if messages.is_empty() {

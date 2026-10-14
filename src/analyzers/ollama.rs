@@ -105,12 +105,21 @@ pub fn street_names(model: &str, param_size: Option<&str>) -> Vec<String> {
 
 /// Street price for an Ollama model: a `[pricing.overrides]` entry under its Ollama name, else
 /// the median across providers serving its hosted equivalent. Warns once when there is neither.
+/// Models with no per-token hosted equivalent (by their base street name).
+const LOCAL_ONLY_MODELS: &[&str] = &["moondream"];
+
 fn street_price(model: &str, param_size: Option<&str>) -> Option<ModelPrice> {
     if let Some((price, _)) = price_feed::lookup(model) {
         return Some(price);
     }
-    let found = price_feed::median_price(&street_names(model, param_size)).map(|(_, price)| price);
-    if found.is_none() {
+    let names = street_names(model, param_size);
+    let found = price_feed::median_price(&names).map(|(_, price)| price);
+    // No hosted service sells these per token, so there is no street price to find; their cost
+    // is the electricity, which is tracked separately.
+    let local_only = names
+        .first()
+        .is_some_and(|name| LOCAL_ONLY_MODELS.contains(&name.as_str()));
+    if found.is_none() && !local_only {
         crate::utils::warn_once(format!(
             "No street price for Ollama model {model}; costed at $0 (set [pricing.overrides.\"{model}\"])."
         ));

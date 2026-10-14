@@ -86,6 +86,29 @@ class LoginTests(unittest.TestCase):
         state = update_snapshot(state, "main", report("s1", 23), "me (personal)", NOW + 120)
         self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 23)
 
+    def test_a_session_that_just_called_replaces_a_wrong_figure(self):
+        # A wrong 100% for b (another login's, written during a switch) in the current window.
+        state = update_snapshot(None, "v", report("old", 100), "b@x.com", NOW)
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 100)
+        # A repeat does not lower it: sessions repeat whatever they last saw.
+        state = update_snapshot(state, "v", report("s1", 20), "b@x.com", NOW + 30)
+        state = update_snapshot(state, "v", report("old", 100), "b@x.com", NOW + 60)
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 20)
+        # s1's figure changed: it just called the API, so its number is the current one.
+        state = update_snapshot(state, "v", report("s1", 25), "b@x.com", NOW + 90)
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 25)
+        state = update_snapshot(state, "v", report("old", 100), "b@x.com", NOW + 120)
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 25)
+
+    def test_a_new_session_echoing_another_login_is_not_live(self):
+        state = update_snapshot(None, "v", report("a1", 90), "a@x.com", NOW)
+        state = update_snapshot(state, "v", report("b1", 10), "b@x.com", NOW + 30)
+        state = update_snapshot(state, "v", report("b2", 90), "b@x.com", NOW + 60)
+        # b2's first report matches a's numbers exactly: merged, not trusted outright.
+        self.assertEqual(state["logins"]["b@x.com"]["rate_limits"]["seven_day"]["used_percentage"], 90)
+        state = update_snapshot(state, "v", report("b1", 12), "b@x.com", NOW + 90)
+        self.assertEqual(state["rate_limits"]["seven_day"]["used_percentage"], 12)
+
     def test_old_sessions_are_forgotten(self):
         state = update_snapshot(None, "v", report("s1", 5), "a@x.com", NOW)
         state = update_snapshot(state, "v", report("s2", 6), "a@x.com", NOW + 2 * 86400)

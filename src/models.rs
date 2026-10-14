@@ -600,6 +600,16 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
             cache_read_per_1m: 0.5,
         },
     },
+    "claude-sonnet-5-5" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 2.0,
+            output_per_1m: 10.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 2.5,
+            cache_read_per_1m: 0.1,
+        },
+    },
     "claude-sonnet-5" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 2.0,
@@ -1656,6 +1666,8 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "claude-opus-4.6" => "claude-opus-4-6",
     "claude-opus-4-5" => "claude-opus-4-5-20251101",
     "claude-opus-4.5" => "claude-opus-4-5-20251101",
+    "claude-sonnet-5-5" => "claude-sonnet-5-5",
+    "claude-sonnet-5.5" => "claude-sonnet-5-5",
     "claude-sonnet-5" => "claude-sonnet-5",
     "claude-sonnet-5-0" => "claude-sonnet-5",
     "sonnet" => "claude-sonnet-5",
@@ -1853,7 +1865,16 @@ fn live_price(model_name: &str) -> Option<ModelPrice> {
         .map(|(price, _)| price)
 }
 
+/// Free tiers (`cat-jam-free` on OpenCode Zen, `…:free` on OpenRouter) really cost $0.
+fn is_free_tier(model_name: &str) -> bool {
+    let name = model_name.to_ascii_lowercase();
+    name.ends_with("-free") || name.ends_with(":free")
+}
+
 fn warn_unknown(model_name: &str) {
+    if is_free_tier(model_name) {
+        return; // $0 is the right price, not a gap.
+    }
     warn_once(format!(
         "No price for model {model_name}; costed at $0 (set [pricing.overrides.\"{model_name}\"] if it is not free)."
     ));
@@ -2095,6 +2116,15 @@ fn calculate_tiered_cache_cost(tokens: u64, tiers: &[CachingTier]) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn free_tier_names_are_recognised() {
+        assert!(super::is_free_tier("cat-jam-free"));
+        assert!(super::is_free_tier("meta-llama/llama-4:free"));
+        assert!(!super::is_free_tier("gpt-5"));
+        assert!(!super::is_free_tier("freeform-1"));
+    }
+
     use super::*;
 
     #[test]
@@ -2121,6 +2151,8 @@ mod tests {
             "claude-opus-5",
             "claude-opus-4-8",
             "claude-opus-4-6",
+            "claude-sonnet-5-5",
+            "claude-sonnet-5.5",
             "claude-sonnet-5",
             "claude-sonnet-4-6",
             "claude-opus-4-5",

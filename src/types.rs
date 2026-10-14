@@ -21,6 +21,7 @@ pub enum Application {
     DroidCli,
     Antigravity,
     Ollama,
+    CursorAgent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -44,6 +44,9 @@ struct RateLimits {
 struct SnapshotFile {
     captured_at: f64,
     rate_limits: Option<RateLimits>,
+    /// A monthly allowance, for tools billed by the month (Cursor, Droid) rather than windows.
+    #[serde(default)]
+    monthly: Option<LimitWindow>,
     #[serde(default)]
     login: Option<String>,
     /// Short display name, with `·team` for a team organization; older snapshots lack it.
@@ -65,12 +68,17 @@ pub struct WindowStatus {
 pub struct AccountLimits {
     pub five_hour: Option<WindowStatus>,
     pub seven_day: Option<WindowStatus>,
+    pub monthly: Option<WindowStatus>,
 }
 
 impl AccountLimits {
+    fn any(&self) -> bool {
+        self.five_hour.is_some() || self.seven_day.is_some() || self.monthly.is_some()
+    }
+
     /// Health as 0.0-1.0: the room left in whichever window is fuller. `None` without data.
     pub fn health(&self) -> Option<f64> {
-        let fullest = [self.five_hour, self.seven_day]
+        let fullest = [self.five_hour, self.seven_day, self.monthly]
             .into_iter()
             .flatten()
             .map(|w| w.used_percentage)
@@ -99,12 +107,13 @@ pub fn parse_snapshot(content: &str, now: f64) -> Option<AccountLimits> {
     if now - file.captured_at > MAX_SNAPSHOT_AGE_SECS {
         return None;
     }
-    let limits = file.rate_limits?;
+    let limits = file.rate_limits.unwrap_or_default();
     let status = AccountLimits {
         five_hour: limits.five_hour.and_then(|w| window_status(w, now)),
         seven_day: limits.seven_day.and_then(|w| window_status(w, now)),
+        monthly: file.monthly.and_then(|w| window_status(w, now)),
     };
-    (status.five_hour.is_some() || status.seven_day.is_some()).then_some(status)
+    status.any().then_some(status)
 }
 
 /// Limits an analyzer read from its own logs rather than a status line snapshot. Codex writes
@@ -171,8 +180,9 @@ fn observed_limits(analyzer_name: &str, now: f64) -> Option<AccountLimits> {
     let status = AccountLimits {
         five_hour: fresh(observed.five_hour),
         seven_day: fresh(observed.seven_day),
+        monthly: None,
     };
-    (status.five_hour.is_some() || status.seven_day.is_some()).then_some(status)
+    status.any().then_some(status)
 }
 
 /// Capacity of a local model server, for tools with no plan limits (Ollama): how much of what
@@ -278,6 +288,9 @@ pub fn account_label(analyzer_name: &str) -> Option<String> {
     }
     if analyzer_name == "Droid CLI" {
         return Some("droid".to_string()); // Polled from Factory by `droid_limits`.
+    }
+    if analyzer_name == crate::analyzers::cursor_agent::DISPLAY_NAME {
+        return Some(crate::cursor_limits::SNAPSHOT_LABEL.to_string());
     }
     if let Some(label) = analyzer_name
         .strip_prefix("Claude (")

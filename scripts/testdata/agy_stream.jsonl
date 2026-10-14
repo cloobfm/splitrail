@@ -1,0 +1,5 @@
+{"event": "init", "conversation_id": "conv-1", "init": {"cwd": "/Users/x/proj", "tools": ["view_file"], "permission_mode": "proceed-in-sandbox"}}
+{"event": "step_update", "step_update": {"conversation_id": "conv-1", "step_index": 0, "state": "DONE", "step_type": "user_input"}}
+{"event": "step_update", "step_update": {"conversation_id": "conv-1", "step_index": 1, "state": "ACTIVE", "step_type": "agent_response", "text_delta": "ok"}}
+{"event": "step_update", "step_update": {"conversation_id": "conv-1", "step_index": 1, "state": "DONE", "step_type": "agent_response", "text_delta": "\n", "duration_seconds": 2.963016, "usage": {"input_tokens": 12808, "output_tokens": 28, "thinking_tokens": 27, "cache_read_tokens": 0, "total_tokens": 12836}}}
+{"event": "result", "result": {"conversation_id": "conv-1", "status": "SUCCESS", "response": "ok\n", "duration_seconds": 2.997391, "num_turns": 1, "usage": {"input_tokens": 12808, "output_tokens": 28, "thinking_tokens": 27, "cache_read_tokens": 0, "total_tokens": 12836}}}

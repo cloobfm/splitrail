@@ -38,7 +38,7 @@ Splitrail is a comprehensive agentic AI coding tool usage analyzer written in Ru
 8. **Roo Code Analyzer** (`src/analyzers/roo_code.rs`): Analysis engine for Roo Code data
 9. **Kilo Code Analyzer** (`src/analyzers/kilo_code.rs`): Analysis engine for Kilo Code data
 10. **Qwen Code Analyzer** (`src/analyzers/qwen_code.rs`): Analysis engine for Qwen Code data
-11. **Antigravity Analyzer** (`src/analyzers/antigravity.rs`): Antigravity CLI (`agy`) usage, fed by `scripts/agy_statusline_capture.py` running as its status line
+11. **Antigravity Analyzer** (`src/analyzers/antigravity.rs`): Antigravity CLI (`agy`) conversations read from `~/.gemini/antigravity-cli/conversations/*.db` (decoded by `src/analyzers/antigravity_store.rs`); `scripts/agy_statusline_capture.py` (its status line) supplies the weekly quota and a fallback usage log
 12. **WARP Analyzer** (`src/analyzers/warp_dev.rs`): Analysis engine for WARP terminal telemetry and GraphQL conversation data
 13. **TUI Module** (`src/tui.rs`): Rich terminal user interface using ratatui
 14. **Upload Module** (`src/upload.rs`): HTTP client for Splitrail Cloud integration

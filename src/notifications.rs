@@ -347,6 +347,7 @@ fn format_application(app: &Application) -> &'static str {
         Application::DroidCli => "Droid",
         Application::Antigravity => "Antigravity",
         Application::Ollama => "Ollama",
+        Application::CursorAgent => "Cursor Agent",
     }
 }
 

@@ -5,6 +5,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.36] - 2026-10-13
+
+### Added
+- **Antigravity transcripts, from agy's own conversation store.** `agy` keeps every
+  conversation in `~/.gemini/antigravity-cli/conversations/<id>.db` (SQLite, protobuf rows).
+  The new `antigravity_store` decodes it: prompts and replies for the transcript view, tool
+  calls, and each model call's exact usage (input, output, cache read, thinking) with the model
+  that made it (`gemini-3.8-flash-high` → `gemini-3.8-flash`). Field numbers were checked
+  against `agy`'s own JSON usage: equal to the token over a 128-call run. Interactive and
+  headless runs are covered alike, so the column no longer depends on the status line or
+  `agy-run` for tokens; the status line log remains the fallback for conversations without a
+  database, and the source of the weekly quota. Databases are read from a temporary copy (agy
+  keeps them open in WAL mode) and re-read only when they or their WAL change. Project names
+  are now the folder name, as in the other columns.
+- **Cursor Agent CLI column (BZL-75).** `cursor-agent` keeps no readable usage on disk
+  (transcripts are text only, the chat store is encrypted), but its `afterAgentResponse` and
+  `stop` hooks receive the turn's model and input/output/cache token totals (undocumented).
+  `scripts/cursor_hook_capture.py`, registered in `~/.cursor/hooks.json`, appends them to
+  `~/.config/splitrail/cursor/usage.jsonl` (never the response text); the new analyzer turns
+  each generation into one assistant message, so the two hooks of a turn are not double
+  counted. A `beforeSubmitPrompt` hook adds the prompt, and `afterAgentResponse` the reply, as
+  500-character previews for the activity feed (as the Ollama proxy does). Cost comes from the
+  price table; turns where Cursor chose the model (`default` /
+  `auto`) are counted at $0 as `cursor-auto`. Login shows the hook's `user_email`.
+- **Cursor monthly usage and a 🗓️ Month Limit row.** Cursor bills by the month (no 5h or weekly
+  windows). With a Cursor user API key in `~/.config/splitrail/cursor_api_key`, `cursor_limits`
+  exchanges it for an access token as `cursor-agent` does (`/auth/exchange_user_api_key`) and
+  polls `DashboardService/GetCurrentPeriodUsage` every 5 minutes into `limits/cursor.json`. The
+  new Month Limit row shows the total % used and time to the billing-cycle reset; it also shows
+  Droid's monthly window, which `droid_limits` already captured.
+- **Real Cursor cost per turn.** The same poller saves Cursor's billed usage events
+  (`DashboardService/GetFilteredUsageEvents`, 60 days, then incrementally) to
+  `cursor/charges.jsonl`. Each CLI turn takes its conversation's events billed since the
+  previous turn: their charged cents become the turn's cost (Auto turns were $0), and their
+  summed tokens replace the hook/print counts, which leave out billed summarization and subagent
+  requests (up to 24× lower on long turns). Events from conversations with no CLI turn (IDE,
+  bots) stay out of the column.
+- Free-tier model names (`…-free`, `…:free`, e.g. OpenCode Zen's `cat-jam-free`) are $0 without
+  a "No price" warning, and Ollama's `moondream` (no hosted per-token equivalent; its cost is the
+  measured electricity) no longer warns about a missing street price.
+- **Headless runs: `cursor-run` and `agy-run`.** Cursor's token hooks and agy's status line
+  only run interactively, so `cursor-agent -p` / `agy -p` (how other agents call them) leave no
+  usage. Both report exact usage in the `result` of `--output-format json|stream-json`.
+  `scripts/headless_run.py`, installed as `~/.local/bin/cursor-run` and `~/.local/bin/agy-run`
+  (links to a copy in `~/.config/splitrail/bin/`), runs the stock binary in print mode (adding
+  `-p`; for agy bound to the trailing prompt, since agy's `-p` takes it as its value), passes
+  `json` / `stream-json` output through byte for byte, prints the final result for plain text
+  exactly as text mode does, and appends usage to the file each analyzer already reads
+  (`cursor/usage.jsonl`, `antigravity/usage.jsonl` with `source: "print"`) plus the raw stream
+  to `<tool>/runs/<conversation id>.jsonl`. Recording never changes output or exit code. The
+  stock `cursor-agent` / `agy` are untouched, so tool upgrades need nothing. agy's print output
+  names no model: `--model` if given, else the model of the latest interactive agy session.
+- Cursor's `Auto` / `default` model is matched case-insensitively.
+
+### Fixed
+- **"No price for model claude-sonnet-5.5".** agy names it `Claude Sonnet 5.5`, which normalizes
+  to the dotted `claude-sonnet-5.5`; neither the built-in table nor the feed's hyphenated
+  `claude-sonnet-5-5` matched. Added `claude-sonnet-5-5` ($2 / $10, cache write $2.50, read
+  $0.10 per 1M, as the feed lists it) with the dotted alias, like Opus 5.5.
+- **Antigravity headless runs counted twice, and their cache reads dropped.** agy's status line
+  also fires during `agy-run`, so a run's status line deltas and its exact `print` line were
+  both counted. Status line lines of a conversation up to its print line (after the previous
+  one) are now dropped, and print lines' `cache_read_tokens` are counted and priced (Oct 13:
+  17.7M cache-read tokens that were missing; output 191K → 97K without the double count).
+- **A Claude login's 5h limit stuck at another login's 100%.** After `/login` switched `v`
+  from the team to the personal `a@virti.us`, a session still holding the team's numbers wrote
+  them under the personal login; "same window, keep the higher" then kept 100% for the rest
+  of the window although live sessions reported 25%. The status line capture now lets a
+  session's report replace the stored windows when its numbers just changed (it made an API
+  call) or on its first report, unless that first report matches another login's sessions
+  exactly. Repeats only fill windows nothing has reported.
+
 ## [2.0.0-dash-0.35] - 2026-10-13
 
 ### Fixed

@@ -109,6 +109,20 @@ def merge_limits(old, new):
     return merged or None
 
 
+def replace_limits(old, new):
+    """`old` with each window `new` reports replaced by the new figure."""
+    merged = dict(old) if isinstance(old, dict) else {}
+    for key, window in (new if isinstance(new, dict) else {}).items():
+        if isinstance(window, dict) and used_percent(window) is not None:
+            merged[key] = window
+    return merged or None
+
+
+def fill_limits(old, new):
+    """`old` plus any window only `new` reports."""
+    return replace_limits(new, old)
+
+
 # Temp files older than this were left by a status line process killed mid-write (agy kills
 # the previous run when the agent state changes quickly).
 STALE_TMP_SECS = 60
@@ -198,6 +212,23 @@ def update_snapshot(previous, label, payload, login, now, login_name=None):
     # unchanged usage. Sessions recorded before logins were tracked count as the same login.
     switched = last is not None and last.get("login", login) != login
     fresh = reported is not None and not (switched and last.get("fp") == fingerprint)
+    # A session whose numbers just changed made an API call under this login, so they are the
+    # account's current state and replace what is stored. Merging them instead ("same window,
+    # keep the higher") would let a wrong figure stick for the rest of the window, e.g. another
+    # login's 100% written by a session that switched before it was ever seen. A session's first
+    # report counts too, unless another login's sessions report exactly the same numbers; that
+    # one is merged. A repeat carries nothing new (it was applied when it changed), so it only
+    # fills windows nothing else has reported.
+    other_logins_fps = {
+        seen.get("fp")
+        for sid, seen in sessions.items()
+        if sid != session_id and seen.get("login", login) != login
+    }
+    repeat = last is not None and last.get("fp") == fingerprint
+    if last is None:
+        mode = "merge" if fingerprint in other_logins_fps else "replace"
+    else:
+        mode = "fill" if repeat else "replace"
     if session_id:
         sessions[session_id] = {"fp": fingerprint, "seen": now, "login": login}
 
@@ -207,7 +238,13 @@ def update_snapshot(previous, label, payload, login, now, login_name=None):
         entry = {
             "captured_at": now,
             "name": login_name or login_name_of(key),
-            "rate_limits": merge_limits(entry.get("rate_limits"), reported),
+            "rate_limits": (
+                replace_limits(entry.get("rate_limits"), reported)
+                if mode == "replace"
+                else fill_limits(entry.get("rate_limits"), reported)
+                if mode == "fill"
+                else merge_limits(entry.get("rate_limits"), reported)
+            ),
         }
         logins[key] = entry
     return {
