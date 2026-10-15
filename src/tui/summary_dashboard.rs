@@ -77,8 +77,29 @@ pub fn build_activity_sparkline_cache_with_prev(
         max_cache.insert(stats.analyzer_name.clone(), stable_max);
         buffer_cache.insert(stats.analyzer_name.clone(), state);
     }
+
+    // All tools together, for the Activity title: the per-tool buckets summed, so no extra pass
+    // over messages. Its scale only grows (a quiet start would otherwise pin it at 1).
+    let mut overall = vec![0u64; SPARKLINE_SLOTS];
+    for state in buffer_cache.values() {
+        for (sum, bucket) in overall.iter_mut().zip(&state.buckets) {
+            *sum += bucket;
+        }
+    }
+    let raw_max = overall.iter().copied().max().unwrap_or(0).max(1);
+    let overall_max = prev_max
+        .and_then(|m| m.get(OVERALL_SPARKLINE))
+        .map_or(raw_max, |&prev| prev.max(raw_max));
+    sparkline_cache.insert(OVERALL_SPARKLINE.to_string(), sparkline_spans(&overall, overall_max));
+    max_cache.insert(OVERALL_SPARKLINE.to_string(), overall_max);
     (sparkline_cache, max_cache, buffer_cache)
 }
+
+/// Key of the all-tools sparkline in the sparkline caches (no analyzer has this name).
+pub const OVERALL_SPARKLINE: &str = "\u{0}overall";
+const SPARKLINE_SLOTS: usize = 120;
+/// The most recent slots drawn (30s each: 40 minutes).
+const SPARKLINE_SHOWN: usize = 80;
 
 impl AggregatedStats {
     pub fn add_day(&mut self, day_stats: &crate::types::DailyStats) {
@@ -1113,12 +1134,18 @@ pub fn create_activity_sparkline_with_prev(
     let raw_max = *state.buckets.iter().max().unwrap_or(&1).max(&1);
     let stable_max = prev_max.unwrap_or(raw_max).max(1);
 
-    // Create sparkline with braille ramps (truncate to 80 most recent)
+    let spans = sparkline_spans(&state.buckets, stable_max);
+
+    (spans, stable_max, state)
+}
+
+/// Braille bars for the most recent `SPARKLINE_SHOWN` buckets, scaled to `stable_max` and
+/// colored green / yellow / red by height.
+fn sparkline_spans(buckets: &[u64], stable_max: u64) -> Vec<Span<'static>> {
     let chars = [' ', '⡀', '⡄', '⡆', '⡇', '⣇', '⣧', '⣷', '⣿'];
-    let spans = state
-        .buckets
+    buckets
         .iter()
-        .skip(state.buckets.len().saturating_sub(80)) // Show the most recent 80 buckets (40 minutes)
+        .skip(buckets.len().saturating_sub(SPARKLINE_SHOWN))
         .map(|&count| {
             if count == 0 {
                 Span::raw(" ")
@@ -1140,9 +1167,7 @@ pub fn create_activity_sparkline_with_prev(
                 Span::styled(ch.to_string(), Style::default().fg(color))
             }
         })
-        .collect();
-
-    (spans, stable_max, state)
+        .collect()
 }
 
 /// Calculate 15-minute moving average of output tokens per second for a single CLI
@@ -1754,17 +1779,24 @@ pub fn draw_visual_cli_panels(
 
     let left_text = format!("📊 Activity: {} | {}", clock_text, tks_display);
 
-    // Spacer: 27 spaces normal, 46 spaces in verbose mode
-    let spacer = if tui_state.summary_verbose_mode {
-        "                                              " // 46 spaces for verbose mode
+    // Between tk/s and the countdown: all tools' activity, newest on the right, padded by a
+    // space each side to the gap's fixed width (27, or 46 in verbose mode).
+    let gap = if tui_state.summary_verbose_mode { 46 } else { 27 };
+    let bars = gap - 2;
+    let mut activity_spans = vec![Span::raw(" ")];
+    if let Some(overall) = summary_data.sparkline_cache.get(OVERALL_SPARKLINE) {
+        let shown = &overall[overall.len().saturating_sub(bars)..];
+        activity_spans.push(Span::raw(" ".repeat(bars - shown.len())));
+        activity_spans.extend(shown.iter().cloned());
     } else {
-        "                           " // 27 spaces for normal mode
-    };
+        activity_spans.push(Span::raw(" ".repeat(bars)));
+    }
+    activity_spans.push(Span::raw(" "));
 
     // Build title line with fixed positioning - no dynamic width calculations
-    let title_spans = vec![
-        Span::raw(left_text),
-        Span::raw(spacer), // Dynamic spacing between tk/s and countdown
+    let mut title_spans = vec![Span::raw(left_text)];
+    title_spans.extend(activity_spans);
+    title_spans.extend([
         Span::styled(next_section, Style::default().fg(countdown_color)), // Countdown with color
         Span::raw(" | "), // Fixed separator
         Span::raw(last_section), // Fixed width last section
@@ -1777,7 +1809,7 @@ pub fn draw_visual_cli_panels(
         Span::raw("   "),
         Span::styled(mqtt_icon, Style::default().fg(mqtt_color)),
         Span::raw(" MQTT"),
-    ];
+    ]);
 
     let title_line = Line::from(title_spans);
 
@@ -2271,5 +2303,58 @@ mod streak_tests {
         ]);
 
         assert_eq!(days_with_activity_in_last_30(&stats, today), 2);
+    }
+}
+
+#[cfg(test)]
+mod overall_sparkline_tests {
+    use super::*;
+    use crate::types::{Application, ConversationMessage, MessageRole, Stats};
+
+    fn tool(name: &str, ages_secs: &[i64], now: chrono::DateTime<chrono::Utc>) -> AgenticCodingToolStats {
+        AgenticCodingToolStats {
+            daily_stats: Default::default(),
+            num_conversations: 1,
+            analyzer_name: name.into(),
+            messages: ages_secs
+                .iter()
+                .map(|&age| ConversationMessage {
+                    application: Application::ClaudeCode,
+                    date: now - chrono::Duration::seconds(age),
+                    project_hash: String::new(),
+                    conversation_hash: "c".into(),
+                    local_hash: None,
+                    global_hash: format!("{name}{age}"),
+                    model: None,
+                    stats: Stats { output_tokens: 100, ..Default::default() },
+                    role: MessageRole::Assistant,
+                    content: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn heights(spans: &[Span<'static>]) -> String {
+        spans.iter().map(|s| s.content.to_string()).collect()
+    }
+
+    #[test]
+    fn sums_every_tool_and_keeps_a_growing_scale() {
+        let now = chrono::Utc::now();
+        let a = tool("A", &[5], now);
+        let b = tool("B", &[5, 65], now);
+        let (cache, max, _) = build_activity_sparkline_cache(&[&a, &b], now);
+        // Newest slot: 100 + 100 = the peak (full bar); two slots back: 100 (half).
+        let overall = heights(&cache[OVERALL_SPARKLINE]);
+        assert_eq!(overall.chars().last(), Some('⣿'));
+        assert_eq!(overall.chars().rev().nth(2), Some('⡇'));
+        assert_eq!(max[OVERALL_SPARKLINE], 200);
+
+        // A quieter refresh keeps the earlier scale instead of re-stretching to its own peak.
+        let quiet = tool("A", &[5], now);
+        let (cache, max, _) =
+            build_activity_sparkline_cache_with_prev(&[&quiet], now, Some(&max), None);
+        assert_eq!(max[OVERALL_SPARKLINE], 200);
+        assert_eq!(heights(&cache[OVERALL_SPARKLINE]).chars().last(), Some('⡇'));
     }
 }

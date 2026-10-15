@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.40] - 2026-10-15
+
+### Added
+- **All-tools activity histogram in the Activity title**, between tk/s and the notification
+  countdown: the last 12½ minutes (21 in verbose mode) of every tool's tokens, in 30-second
+  bars, newest on the right. It is the per-tool sparkline buckets summed, so it costs no extra
+  pass over messages; its scale only grows, so a quiet start does not pin every later bar at
+  full height.
+
 ## [2.0.0-dash-0.39] - 2026-10-15
 
 ### Fixed
