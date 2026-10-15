@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use glob::Pattern;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::types::{AgenticCodingToolStats, ConversationMessage};
 
@@ -80,6 +80,14 @@ pub trait Analyzer: Send + Sync {
 /// `match_dir` represents the most specific path prefix before any wildcard.
 /// `watch_dir` is the closest existing ancestor that `notify` can watch.
 /// This allows us to watch parent directories even before the exact directory exists.
+/// The home directory, an ancestor of it (`/`, `/home`), or a folder directly in it.
+fn too_broad_to_watch(dir: &Path) -> bool {
+    let Some(home) = std::env::home_dir() else {
+        return false;
+    };
+    home.starts_with(dir) || dir.parent() == Some(home.as_path())
+}
+
 fn extract_watch_and_match_dirs(pattern: &str) -> Option<(PathBuf, PathBuf)> {
     fn trimmed_path(segment: &str) -> Option<PathBuf> {
         let trimmed = segment.trim_end_matches(['/', '\\']);
@@ -94,9 +102,18 @@ fn extract_watch_and_match_dirs(pattern: &str) -> Option<(PathBuf, PathBuf)> {
         if path.as_os_str().is_empty() {
             return None;
         }
+        let requested = path.clone();
 
         loop {
             if path.exists() && path.is_dir() {
+                // A missing tool directory falls back to the nearest existing ancestor, so the
+                // tool is noticed when installed; but never to the home directory or a folder
+                // directly in it (`~/.config`, `~/Library`): watching those recursively means a
+                // watch per directory under them on Linux, every node_modules included, and the
+                // watcher never finishes starting.
+                if path != requested && too_broad_to_watch(&path) {
+                    return None;
+                }
                 return Some(path);
             }
             if !path.pop() {
@@ -295,5 +312,28 @@ mod fingerprint_tests {
     #[test]
     fn fingerprint_of_no_sources_is_stable() {
         assert_eq!(sources_fingerprint(&[]), sources_fingerprint(&[]));
+    }
+}
+
+#[cfg(test)]
+mod watch_dir_tests {
+    use super::extract_watch_and_match_dirs;
+
+    #[test]
+    fn a_missing_tool_directory_never_falls_back_to_home() {
+        let home = std::env::home_dir().unwrap();
+        let missing = home.join(".splitrail-test-missing-tool/conversations/*.db");
+        assert_eq!(extract_watch_and_match_dirs(missing.to_str().unwrap()), None);
+    }
+
+    #[test]
+    fn a_missing_leaf_still_falls_back_to_a_specific_ancestor() {
+        let root = std::env::temp_dir().join(format!("splitrail-watch-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("tool")).unwrap();
+        let pattern = root.join("tool/sessions/**/*.jsonl");
+        let (match_dir, watch_dir) = extract_watch_and_match_dirs(pattern.to_str().unwrap()).unwrap();
+        assert_eq!(match_dir, root.join("tool/sessions"));
+        assert_eq!(watch_dir, root.join("tool"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

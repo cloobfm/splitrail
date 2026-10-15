@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.44] - 2026-10-15
+
+### Fixed
+- **The file watcher watched the whole home directory.** A tool whose data directory does not
+  exist (Antigravity, Cline and Kilo on a box without them) fell back to its nearest existing
+  ancestor, which could be `~` or `~/.config`, watched recursively. On Linux that is an inotify
+  watch per directory under home, every `node_modules` included, so `splitrail-dashboard mqtt`
+  on a devbox never finished starting; on macOS every file change in home reached the
+  dashboard. The fallback now stops short of home and the folders directly in it; a tool
+  installed later is picked up on the next start.
+- `scripts/install_mqtt_publisher.sh` left the broker unset when `config init` had already
+  written an empty `[mqtt]` section.
+
 ## [2.0.0-dash-0.43] - 2026-10-15
 
 ### Added

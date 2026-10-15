@@ -38,8 +38,11 @@ MemoryMax=1G
 WantedBy=default.target
 UNIT
 
+# `config init` writes an empty [mqtt] section, so look for the broker line, not the section.
 ssh "$host" "test -f ~/.splitrail.toml || ~/.local/bin/splitrail-dashboard config init >/dev/null
-grep -q '^\[mqtt\]' ~/.splitrail.toml || printf '\n[mqtt]\nhost = \"$broker\"\nusername = \"$user\"\n' >> ~/.splitrail.toml"
+grep -q '^\[mqtt\]' ~/.splitrail.toml || printf '\n[mqtt]\n' >> ~/.splitrail.toml
+awk '/^\[/{s=(\$0==\"[mqtt]\")} s&&/^host *=/{f=1} END{exit !f}' ~/.splitrail.toml ||
+  sed -i 's|^\[mqtt\]\$|[mqtt]\nhost = \"$broker\"\nusername = \"$user\"|' ~/.splitrail.toml"
 
 if ! ssh "$host" 'test -s ~/.config/splitrail/mqtt_password'; then
     printf 'MQTT password for %s: ' "$user"
