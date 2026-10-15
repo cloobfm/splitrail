@@ -20,7 +20,7 @@ use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -34,6 +34,32 @@ const RATE_WINDOW_SECS: i64 = 15 * 60;
 const ACTIVE_DAYS: i64 = 30;
 
 static CLIENT: OnceLock<(AsyncClient, String)> = OnceLock::new();
+static LINK: AtomicU8 = AtomicU8::new(Link::Off as u8);
+
+/// The broker connection, for the dashboard's indicator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Link {
+    /// No broker configured.
+    Off = 0,
+    Connecting = 1,
+    Connected = 2,
+    /// Configured but the last attempt failed (unreachable, or login refused).
+    Failing = 3,
+}
+
+pub fn link() -> Link {
+    match LINK.load(Ordering::Relaxed) {
+        1 => Link::Connecting,
+        2 => Link::Connected,
+        3 => Link::Failing,
+        _ => Link::Off,
+    }
+}
+
+fn set_link(link: Link) {
+    LINK.store(link as u8, Ordering::Relaxed);
+}
 
 /// One tool's numbers.
 #[derive(Debug, Clone, PartialEq)]
@@ -302,6 +328,7 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
         options.set_credentials(username, password(&config).unwrap_or_default());
     }
     let (client, mut eventloop) = AsyncClient::new(options, 256);
+    set_link(Link::Connecting);
     let _ = CLIENT.set((client.clone(), topics.status()));
 
     // Set on every (re)connect: the broker may have lost retained messages, and the session
@@ -313,10 +340,12 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
             match eventloop.poll().await {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
                     failing = false;
+                    set_link(Link::Connected);
                     CONNECTED_AFRESH.store(true, Ordering::SeqCst);
                 }
                 Ok(_) => {}
                 Err(e) => {
+                    set_link(Link::Failing);
                     if !failing {
                         crate::utils::log_error(format!("MQTT: {e}"));
                         failing = true;

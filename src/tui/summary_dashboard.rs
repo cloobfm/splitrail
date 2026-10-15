@@ -1653,6 +1653,14 @@ pub fn draw_visual_cli_panels(
     };
 
     let slack_icon = if notifications_enabled { "✅" } else { "⬜" };
+    // Same box for the MQTT publisher: ✅ connected, ⏳ connecting, ❌ broker unreachable or
+    // login refused, ⬜ no broker configured.
+    let (mqtt_icon, mqtt_color) = match crate::mqtt::link() {
+        crate::mqtt::Link::Connected => ("✅", Color::Green),
+        crate::mqtt::Link::Connecting => ("⏳", Color::Yellow),
+        crate::mqtt::Link::Failing => ("❌", Color::Red),
+        crate::mqtt::Link::Off => ("⬜", Color::DarkGray),
+    };
     
     // Create braille countdown indicator like the health bar
     let (countdown_bar, countdown_color, remaining_display) = if let Some(remaining) = eta {
@@ -1766,6 +1774,9 @@ pub fn draw_visual_cli_panels(
             Style::default().fg(if notifications_enabled { Color::Green } else { Color::DarkGray })
         ), // Colored checkmark only
         Span::raw(" Slack"), // Normal white text for "Slack"
+        Span::raw("   "),
+        Span::styled(mqtt_icon, Style::default().fg(mqtt_color)),
+        Span::raw(" MQTT"),
     ];
 
     let title_line = Line::from(title_spans);
