@@ -78,26 +78,34 @@ pub fn build_activity_sparkline_cache_with_prev(
         buffer_cache.insert(stats.analyzer_name.clone(), state);
     }
 
-    // All tools together, for the Activity title: the per-tool buckets summed, so no extra pass
-    // over messages. Its scale only grows (a quiet start would otherwise pin it at 1).
+    // All tools together, for the Activity title: output tokens (what tk/s counts) summed from
+    // the per-tool buckets, so no extra pass over messages. Scaled to the tallest bar the title
+    // can show, so it reads at a glance; the floor keeps a trickle from looking like a burst.
     let mut overall = vec![0u64; SPARKLINE_SLOTS];
     for state in buffer_cache.values() {
-        for (sum, bucket) in overall.iter_mut().zip(&state.buckets) {
+        for (sum, bucket) in overall.iter_mut().zip(&state.output) {
             *sum += bucket;
         }
     }
-    let raw_max = overall.iter().copied().max().unwrap_or(0).max(1);
-    let overall_max = prev_max
-        .and_then(|m| m.get(OVERALL_SPARKLINE))
-        .map_or(raw_max, |&prev| prev.max(raw_max));
+    let visible_max = overall
+        .iter()
+        .rev()
+        .take(OVERALL_SLOTS_SHOWN_MAX)
+        .copied()
+        .max()
+        .unwrap_or(0);
+    let overall_max = visible_max.max(OVERALL_FLOOR_TOKENS);
     sparkline_cache.insert(OVERALL_SPARKLINE.to_string(), sparkline_spans(&overall, overall_max));
-    max_cache.insert(OVERALL_SPARKLINE.to_string(), overall_max);
     (sparkline_cache, max_cache, buffer_cache)
 }
 
 /// Key of the all-tools sparkline in the sparkline caches (no analyzer has this name).
 pub const OVERALL_SPARKLINE: &str = "\u{0}overall";
 const SPARKLINE_SLOTS: usize = 120;
+/// The widest the all-tools histogram is drawn (verbose mode).
+const OVERALL_SLOTS_SHOWN_MAX: usize = 44;
+/// 20 tk/s over a 30-second slot: a full bar needs at least this much output.
+const OVERALL_FLOOR_TOKENS: u64 = 600;
 /// The most recent slots drawn (30s each: 40 minutes).
 const SPARKLINE_SHOWN: usize = 80;
 
@@ -1069,6 +1077,8 @@ pub fn create_activity_sparkline(
 #[derive(Clone)]
 pub struct SparklineState {
     pub buckets: Vec<u64>, // fixed-length ring buffer (120 slots)
+    /// Output tokens alone, per slot (the all-tools histogram, which sits beside tk/s).
+    pub output: Vec<u64>,
     pub last_slot_start: chrono::DateTime<chrono::Utc>,
 }
 
@@ -1096,6 +1106,7 @@ pub fn create_activity_sparkline_with_prev(
     } else {
         SparklineState {
             buckets: vec![0u64; 120],
+            output: vec![0u64; 120],
             last_slot_start: now - chrono::Duration::seconds(30 * 120), // align in the past
         }
     };
@@ -1104,6 +1115,7 @@ pub fn create_activity_sparkline_with_prev(
     for b in state.buckets.iter_mut() {
         *b = 0;
     }
+    state.output = vec![0u64; state.buckets.len()];
 
     // Only add messages that fall into the currently covered window
     let window_start = now - chrono::Duration::seconds(30 * 120);
@@ -1121,6 +1133,7 @@ pub fn create_activity_sparkline_with_prev(
                 .len()
                 .saturating_sub(1)
                 .saturating_sub(bucket_idx);
+            state.output[target_idx] += msg.stats.output_tokens;
             if total_tokens > 0 {
                 state.buckets[target_idx] += total_tokens;
             } else {
@@ -1152,7 +1165,8 @@ fn sparkline_spans(buckets: &[u64], stable_max: u64) -> Vec<Span<'static>> {
             } else {
                 let capped = count.min(stable_max);
                 let ratio = capped as f64 / stable_max as f64;
-                let idx = (ratio * (chars.len() - 1) as f64) as usize;
+                // Any activity gets at least the lowest dot.
+                let idx = ((ratio * (chars.len() - 1) as f64) as usize).max(1);
                 let ch = chars[idx.min(chars.len() - 1)];
 
                 // Gradient colors: green (low) -> yellow (medium) -> red (high)
@@ -2311,7 +2325,7 @@ mod overall_sparkline_tests {
     use super::*;
     use crate::types::{Application, ConversationMessage, MessageRole, Stats};
 
-    fn tool(name: &str, ages_secs: &[i64], now: chrono::DateTime<chrono::Utc>) -> AgenticCodingToolStats {
+    fn tool(name: &str, ages_secs: &[i64], output: u64, now: chrono::DateTime<chrono::Utc>) -> AgenticCodingToolStats {
         AgenticCodingToolStats {
             daily_stats: Default::default(),
             num_conversations: 1,
@@ -2326,7 +2340,7 @@ mod overall_sparkline_tests {
                     local_hash: None,
                     global_hash: format!("{name}{age}"),
                     model: None,
-                    stats: Stats { output_tokens: 100, ..Default::default() },
+                    stats: Stats { output_tokens: output, input_tokens: 50_000, ..Default::default() },
                     role: MessageRole::Assistant,
                     content: None,
                 })
@@ -2339,22 +2353,25 @@ mod overall_sparkline_tests {
     }
 
     #[test]
-    fn sums_every_tool_and_keeps_a_growing_scale() {
+    fn sums_every_tool_scaled_to_the_visible_peak() {
         let now = chrono::Utc::now();
-        let a = tool("A", &[5], now);
-        let b = tool("B", &[5, 65], now);
-        let (cache, max, _) = build_activity_sparkline_cache(&[&a, &b], now);
-        // Newest slot: 100 + 100 = the peak (full bar); two slots back: 100 (half).
+        // Newest slot 2000 + 2000, two slots back 2000: a full bar and a half one.
+        let a = tool("A", &[5], 2000, now);
+        let b = tool("B", &[5, 65], 2000, now);
+        let (cache, _, _) = build_activity_sparkline_cache(&[&a, &b], now);
         let overall = heights(&cache[OVERALL_SPARKLINE]);
         assert_eq!(overall.chars().last(), Some('⣿'));
         assert_eq!(overall.chars().rev().nth(2), Some('⡇'));
-        assert_eq!(max[OVERALL_SPARKLINE], 200);
 
-        // A quieter refresh keeps the earlier scale instead of re-stretching to its own peak.
-        let quiet = tool("A", &[5], now);
-        let (cache, max, _) =
-            build_activity_sparkline_cache_with_prev(&[&quiet], now, Some(&max), None);
-        assert_eq!(max[OVERALL_SPARKLINE], 200);
-        assert_eq!(heights(&cache[OVERALL_SPARKLINE]).chars().last(), Some('⡇'));
+        // A burst that has scrolled out of view no longer flattens what is on screen.
+        let c = tool("C", &[5, 30 * 60], 2000, now);
+        let burst = tool("D", &[30 * 60], 1_000_000, now);
+        let (cache, _, _) = build_activity_sparkline_cache(&[&c, &burst], now);
+        assert_eq!(heights(&cache[OVERALL_SPARKLINE]).chars().last(), Some('⣿'));
+
+        // A trickle stays low.
+        let trickle = tool("E", &[5], 60, now);
+        let (cache, _, _) = build_activity_sparkline_cache(&[&trickle], now);
+        assert_eq!(heights(&cache[OVERALL_SPARKLINE]).chars().last(), Some('⡀'));
     }
 }

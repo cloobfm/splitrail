@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.41] - 2026-10-15
+
+### Fixed
+- **Activity histogram nearly empty at a steady 35 tk/s.** It counted input tokens too (a
+  single large context dwarfed every reply) and its scale only grew, so one burst flattened
+  everything after it. It now counts output tokens, like the tk/s beside it, scaled to the
+  tallest bar on screen with a 20 tk/s floor. Any activity in a slot now shows at least the
+  lowest dot, in the per-tool sparklines too (a small slot used to round down to blank).
+
 ## [2.0.0-dash-0.40] - 2026-10-15
 
 ### Added
