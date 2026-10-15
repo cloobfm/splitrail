@@ -14,6 +14,7 @@ mod analyzers;
 mod config;
 mod incremental;
 mod models;
+mod mqtt;
 mod notifications;
 mod plan_limits;
 mod price_feed;
@@ -65,6 +66,9 @@ enum Commands {
     /// Refresh or inspect model pricing
     #[command(about = "Refresh or inspect model pricing from the live price feed")]
     Pricing(PricingArgs),
+    /// Publish live stats to the MQTT broker in `[mqtt]`, without the dashboard (for launchd)
+    #[command(about = "Publish live stats to MQTT / Home Assistant without the dashboard")]
+    Mqtt,
 }
 
 #[derive(Args)]
@@ -157,6 +161,7 @@ async fn main() {
             // No subcommand - run default behavior
             run_default(format_options, config).await;
         }
+        Some(Commands::Mqtt) => run_mqtt(config).await,
         Some(Commands::Upload) => match run_upload().await.context("Failed to run upload") {
             Ok(_) => {}
             Err(e) => {
@@ -356,6 +361,8 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
         });
     }
 
+    tokio::spawn(mqtt::run(config.mqtt.clone(), stats_manager.get_stats_receiver()));
+
     // Check if auto-upload is enabled and start background upload
     if config.upload.auto_upload {
         if config.is_configured() {
@@ -395,6 +402,55 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
     ) {
         eprintln!("Error displaying TUI: {e}");
     }
+    mqtt::shutdown().await;
+}
+
+/// `splitrail mqtt`: keep stats current from the file watcher and publish them, until Ctrl-C.
+async fn run_mqtt(config: config::Config) {
+    let Some(host) = config.mqtt.host.clone() else {
+        eprintln!("No MQTT broker configured. Add to ~/.splitrail.toml:\n\n[mqtt]\nhost = \"<broker>\"\nusername = \"<user>\"\n\nwith the password in ~/.config/splitrail/mqtt_password");
+        std::process::exit(1);
+    };
+    prepare_prices(config.pricing.feed_enabled).await;
+    let registry = create_analyzer_registry();
+    let file_watcher = match watcher::FileWatcher::new(&registry) {
+        Ok(watcher) => watcher,
+        Err(e) => {
+            eprintln!("Error setting up file watcher: {e}");
+            std::process::exit(1);
+        }
+    };
+    tokio::spawn(droid_limits::run());
+    tokio::spawn(cursor_limits::run());
+    let mut stats_manager = match watcher::RealtimeStatsManager::new(registry).await {
+        Ok(manager) => manager,
+        Err(e) => {
+            eprintln!("Error loading analyzer stats: {e}");
+            std::process::exit(1);
+        }
+    };
+    tokio::spawn(mqtt::run(config.mqtt.clone(), stats_manager.get_stats_receiver()));
+    println!("Publishing to {host} (Ctrl-C to stop)");
+
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = tick.tick() => {}
+        }
+        while let Some(event) = file_watcher.try_recv() {
+            if let Err(e) = stats_manager.handle_watcher_event(event).await {
+                utils::log_error(format!("Error handling watcher event: {e:#}"));
+            }
+        }
+        if let Err(e) = stats_manager.process_pending_batches().await {
+            utils::log_error(format!("Error processing batched events: {e:#}"));
+        }
+        if let Err(e) = stats_manager.poll_codex_if_needed().await {
+            utils::log_error(format!("Error polling Codex CLI: {e:#}"));
+        }
+    }
+    mqtt::shutdown().await;
 }
 
 async fn run_upload() -> Result<()> {

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.37] - 2026-10-14
+
+### Added
+- **Live stats over MQTT, with Home Assistant discovery.** Set `[mqtt] host` and `username`
+  in `~/.splitrail.toml` (password in `~/.config/splitrail/mqtt_password`) and the dashboard
+  publishes every 15 seconds and on every change: retained JSON on
+  `splitrail/<host>/state` (output tk/s over the last 15 minutes, today's cost and output
+  tokens, overall and per tool, and each tool's 5h / weekly / monthly limit used %), and
+  `online` / `offline` on `splitrail/<host>/status` (`offline` is also the last will, so a
+  machine that sleeps shows as unavailable). Home Assistant gets one device per machine with
+  sensors for the totals and for every tool used in the last 30 days or with limits. Any other
+  MQTT client can read the same topics. `splitrail-dashboard mqtt` publishes without the
+  dashboard, for running under launchd. Publishing never blocks: while the broker is
+  unreachable messages are dropped, and discovery is resent on reconnect.
+
 ## [2.0.0-dash-0.36] - 2026-10-13
 
 ### Added

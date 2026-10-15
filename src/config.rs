@@ -18,6 +18,29 @@ pub struct Config {
     pub claude_code: ClaudeCodeConfig,
     #[serde(default)]
     pub ollama: OllamaConfig,
+    #[serde(default)]
+    pub mqtt: MqttConfig,
+}
+
+/// Live stats published to an MQTT broker, with Home Assistant discovery. Off until `host` is
+/// set. The password is read from `password_file` so it stays out of this file.
+///
+/// ```toml
+/// [mqtt]
+/// host = "192.168.163.163"
+/// username = "splitrail"
+/// ```
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MqttConfig {
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Defaults to `~/.config/splitrail/mqtt_password`.
+    #[serde(default)]
+    pub password_file: Option<String>,
 }
 
 /// Local inference is costed as the electricity it uses, at the household rate. The proxy
@@ -268,6 +291,7 @@ impl Default for Config {
             pricing: PricingConfig::default(),
             claude_code: ClaudeCodeConfig::default(),
             ollama: OllamaConfig::default(),
+            mqtt: MqttConfig::default(),
         }
     }
 }
