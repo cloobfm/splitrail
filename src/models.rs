@@ -1865,10 +1865,11 @@ fn live_price(model_name: &str) -> Option<ModelPrice> {
         .map(|(price, _)| price)
 }
 
-/// Free tiers (`cat-jam-free` on OpenCode Zen, `…:free` on OpenRouter) really cost $0.
+/// Free tiers (`cat-jam-free` on OpenCode Zen, `…:free` on OpenRouter, `kilo-auto/free` on
+/// Kilo Code) really cost $0.
 fn is_free_tier(model_name: &str) -> bool {
     let name = model_name.to_ascii_lowercase();
-    name.ends_with("-free") || name.ends_with(":free")
+    name.ends_with("-free") || name.ends_with(":free") || name.ends_with("/free")
 }
 
 fn warn_unknown(model_name: &str) {
@@ -2121,6 +2122,7 @@ mod tests {
     fn free_tier_names_are_recognised() {
         assert!(super::is_free_tier("cat-jam-free"));
         assert!(super::is_free_tier("meta-llama/llama-4:free"));
+        assert!(super::is_free_tier("kilo-auto/free"));
         assert!(!super::is_free_tier("gpt-5"));
         assert!(!super::is_free_tier("freeform-1"));
     }
