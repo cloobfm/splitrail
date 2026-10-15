@@ -365,8 +365,10 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
         }
         if CONNECTED_AFRESH.swap(false, Ordering::SeqCst) {
             discovered.clear();
-            let _ = client.try_publish(topics.status(), QoS::AtLeastOnce, true, "online");
         }
+        // Every time, not just on connect: another instance on this machine (the dashboard
+        // beside `splitrail mqtt`) shares the topic, and its exit marks the machine offline.
+        let _ = client.try_publish(topics.status(), QoS::AtLeastOnce, true, "online");
         let now = Utc::now();
         let stats = stats_rx.borrow().clone();
         let tools = tool_states(&stats, now, plan_limits::limits_for_analyzer);
