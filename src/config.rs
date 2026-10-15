@@ -41,6 +41,13 @@ pub struct MqttConfig {
     /// Defaults to `~/.config/splitrail/mqtt_password`.
     #[serde(default)]
     pub password_file: Option<String>,
+    /// Publish each tool's newest message text (one line, truncated, secrets redacted) so
+    /// other machines' dashboards can show it. Off by default.
+    #[serde(default)]
+    pub share_previews: bool,
+    /// Show other machines on the broker as extra columns in the dashboard. On by default.
+    #[serde(default)]
+    pub roll_up: Option<bool>,
 }
 
 /// Local inference is costed as the electricity it uses, at the household rate. The proxy

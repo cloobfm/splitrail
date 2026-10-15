@@ -18,7 +18,8 @@ use crate::types::{MessageRole, MultiAnalyzerStats};
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS};
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use crate::rollup;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
@@ -28,6 +29,8 @@ const DEFAULT_PORT: u16 = 1883;
 const TOPIC_ROOT: &str = "splitrail";
 const DISCOVERY_ROOT: &str = "homeassistant";
 const PUBLISH_INTERVAL: Duration = Duration::from_secs(15);
+const ROLLUP_REFRESH: Duration = Duration::from_secs(300);
+const ROLLUP_MIN_GAP: Duration = Duration::from_secs(60);
 /// The window the dashboard's tk/s averages over.
 const RATE_WINDOW_SECS: i64 = 15 * 60;
 /// Tools used within this long get their own sensors.
@@ -246,6 +249,10 @@ impl Topics {
     pub fn status(&self) -> String {
         format!("{TOPIC_ROOT}/{}/status", self.host_slug)
     }
+    /// `daily`, `recent` or `limits` (see `rollup`).
+    pub fn rollup(&self, kind: &str) -> String {
+        format!("{TOPIC_ROOT}/{}/{kind}", self.host_slug)
+    }
     pub fn discovery(&self, sensor: &Sensor) -> String {
         format!("{DISCOVERY_ROOT}/sensor/splitrail_{}_{}/config", self.host_slug, sensor.key)
     }
@@ -287,6 +294,11 @@ impl Topics {
     }
 }
 
+/// This machine's id in topics.
+pub fn host_slug() -> String {
+    Topics::new(&short_hostname()).host_slug
+}
+
 fn short_hostname() -> String {
     std::process::Command::new("hostname")
         .arg("-s")
@@ -298,7 +310,7 @@ fn short_hostname() -> String {
         .unwrap_or_else(|| "splitrail".to_string())
 }
 
-fn password(config: &MqttConfig) -> Option<String> {
+pub fn password(config: &MqttConfig) -> Option<String> {
     let path = match &config.password_file {
         Some(path) => match path.strip_prefix("~/") {
             Some(rest) => std::env::home_dir()?.join(rest),
@@ -323,6 +335,8 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
         config.port.unwrap_or(DEFAULT_PORT),
     );
     options.set_keep_alive(Duration::from_secs(30));
+    // The roll-up's daily totals run to tens of KB; rumqttc's default cap is 10 KB.
+    options.set_max_packet_size(4 * 1024 * 1024, 4 * 1024 * 1024);
     options.set_last_will(LastWill::new(topics.status(), "offline", QoS::AtLeastOnce, true));
     if let Some(username) = &config.username {
         options.set_credentials(username, password(&config).unwrap_or_default());
@@ -357,6 +371,9 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
     });
 
     let mut discovered: HashSet<String> = HashSet::new();
+    // Roll-up payloads are sent only when they change (they are retained, so a dashboard that
+    // starts later still gets them), and at least every ROLLUP_REFRESH in case one was lost.
+    let mut last_sent: HashMap<&str, (String, std::time::Instant)> = HashMap::new();
     let mut ticker = tokio::time::interval(PUBLISH_INTERVAL);
     loop {
         tokio::select! {
@@ -365,6 +382,7 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
         }
         if CONNECTED_AFRESH.swap(false, Ordering::SeqCst) {
             discovered.clear();
+            last_sent.clear();
         }
         // Every time, not just on connect: another instance on this machine (the dashboard
         // beside `splitrail mqtt`) shares the topic, and its exit marks the machine offline.
@@ -383,6 +401,35 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
         }
         let state = state_payload(&tools, now).to_string();
         let _ = client.try_publish(topics.state(), QoS::AtLeastOnce, true, state);
+
+        let rollups = [
+            ("daily", serde_json::to_string(&rollup::daily_payload(&topics.host, &stats, now))),
+            (
+                "recent",
+                serde_json::to_string(&rollup::recent_payload(
+                    &topics.host,
+                    &stats,
+                    now,
+                    config.share_previews,
+                )),
+            ),
+            ("limits", serde_json::to_string(&rollup::limits_payload(now.timestamp() as f64))),
+        ];
+        for (kind, payload) in rollups {
+            let Ok(payload) = payload else { continue };
+            // Daily totals change with every message but are large: at most once a minute.
+            let min_gap = if kind == "recent" { Duration::ZERO } else { ROLLUP_MIN_GAP };
+            let stale = last_sent.get(kind).is_none_or(|(sent, at)| {
+                (*sent != payload && at.elapsed() >= min_gap) || at.elapsed() >= ROLLUP_REFRESH
+            });
+            if stale
+                && client
+                    .try_publish(topics.rollup(kind), QoS::AtLeastOnce, true, payload.clone())
+                    .is_ok()
+            {
+                last_sent.insert(kind, (payload, std::time::Instant::now()));
+            }
+        }
     }
 }
 

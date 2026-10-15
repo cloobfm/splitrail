@@ -320,6 +320,31 @@ pub fn account_label(analyzer_name: &str) -> Option<String> {
     None
 }
 
+/// Limit snapshots other machines published (see `rollup`), by host.
+static REMOTE_SNAPSHOTS: OnceLock<Mutex<HashMap<String, Vec<serde_json::Value>>>> = OnceLock::new();
+
+pub fn set_remote_snapshots(host: &str, snapshots: Vec<serde_json::Value>) {
+    if let Ok(mut all) = REMOTE_SNAPSHOTS.get_or_init(Default::default).lock() {
+        all.insert(host.to_string(), snapshots);
+    }
+}
+
+/// A snapshot from another machine for the same login, captured after `local` was: the account
+/// is shared, so whichever machine saw it last knows its limits best.
+fn newer_remote_snapshot(local: &str) -> Option<String> {
+    let local: serde_json::Value = serde_json::from_str(local).ok()?;
+    let local_at = local.get("captured_at")?.as_f64()?;
+    let hash = crate::rollup::login_hash(local.get("login")?.as_str()?);
+    let all = REMOTE_SNAPSHOTS.get()?.lock().ok()?;
+    all.values()
+        .flatten()
+        .filter(|s| s.get("login_hash").and_then(|h| h.as_str()) == Some(hash.as_str()))
+        .filter_map(|s| Some((s.get("captured_at")?.as_f64()?, s)))
+        .filter(|(at, _)| *at > local_at)
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, s)| s.to_string())
+}
+
 /// Current plan limits for an analyzer, from its own logs or a status line snapshot.
 pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
     let now_secs = std::time::SystemTime::now()
@@ -331,6 +356,7 @@ pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
     }
     let label = account_label(analyzer_name)?;
     let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
+    let content = newer_remote_snapshot(&content).unwrap_or(content);
     parse_snapshot(&content, now_secs)
 }
 
@@ -518,5 +544,24 @@ mod tests {
         assert_eq!(format_countdown(2 * 3600 + 13 * 60), "2h13m");
         assert_eq!(format_countdown(3 * 86_400 + 4 * 3600), "3d4h");
         assert_eq!(format_countdown(-5), "now");
+    }
+
+    #[test]
+    fn a_newer_snapshot_from_another_machine_wins_for_the_same_login() {
+        let local = r#"{"captured_at": 1000.0, "login": "me@x.com",
+            "rate_limits": {"five_hour": {"used_percentage": 100.0, "resets_at": 9000.0}}}"#;
+        assert_eq!(newer_remote_snapshot(local), None);
+        let remote = |at: f64, login: &str, pct: f64| {
+            serde_json::json!({"captured_at": at, "login_hash": crate::rollup::login_hash(login),
+                "rate_limits": {"five_hour": {"used_percentage": pct, "resets_at": 9000.0}}})
+        };
+        set_remote_snapshots(
+            "test-devbox",
+            vec![remote(900.0, "me@x.com", 1.0), remote(2000.0, "other@x.com", 2.0), remote(1500.0, "ME@x.com", 25.0)],
+        );
+        let chosen = newer_remote_snapshot(local).unwrap();
+        let limits = parse_snapshot(&chosen, 1600.0).unwrap();
+        assert_eq!(limits.five_hour.unwrap().used_percentage, 25.0);
+        set_remote_snapshots("test-devbox", vec![]);
     }
 }

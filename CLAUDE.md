@@ -43,6 +43,7 @@ Splitrail is a comprehensive agentic AI coding tool usage analyzer written in Ru
 13. **TUI Module** (`src/tui.rs`): Rich terminal user interface using ratatui
 14. **Upload Module** (`src/upload.rs`): HTTP client for Splitrail Cloud integration
     - **MQTT Module** (`src/mqtt.rs`): live stats to an MQTT broker with Home Assistant discovery (`[mqtt]` config; `splitrail-dashboard mqtt` runs it headless)
+    - **Roll-up Module** (`src/rollup.rs`): other machines' usage from the same broker as extra `Tool@host` columns; `scripts/install_mqtt_publisher.sh` sets up a Linux publisher
 15. **Config Module** (`src/config.rs`): Configuration file management
 16. **Types Module** (`src/types.rs`): Core data structures and enums
 17. **Models Module** (`src/models.rs`): Model pricing definitions

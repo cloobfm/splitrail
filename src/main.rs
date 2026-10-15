@@ -15,6 +15,7 @@ mod config;
 mod incremental;
 mod models;
 mod mqtt;
+mod rollup;
 mod notifications;
 mod plan_limits;
 mod price_feed;
@@ -392,9 +393,16 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
         }
     }
 
+    // Other machines on the MQTT broker, as extra columns (the publisher and notifications
+    // above see only this machine's stats).
+    let tui_stats = match rollup::start(&config.mqtt, mqtt::host_slug()) {
+        Some(remote) => rollup::merged_channel(stats_manager.get_stats_receiver(), remote),
+        None => stats_manager.get_stats_receiver(),
+    };
+
     // Start real-time TUI with file watcher
     if let Err(e) = tui::run_tui(
-        stats_manager.get_stats_receiver(),
+        tui_stats,
         &format_options,
         upload_status.clone(),
         file_watcher,

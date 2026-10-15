@@ -9,6 +9,7 @@ pub mod droid_limits;
 pub mod incremental;
 pub mod models;
 pub mod mqtt;
+pub mod rollup;
 pub mod plan_limits;
 pub mod price_feed;
 pub mod types;

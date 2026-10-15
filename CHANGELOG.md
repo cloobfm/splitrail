@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.43] - 2026-10-15
+
+### Added
+- **Other machines roll up into the dashboard, over MQTT.** Every publisher (a dashboard, or
+  `splitrail-dashboard mqtt` on a devbox) now also sends, retained: `splitrail/<host>/daily`
+  (each tool's last 30 days of daily totals, at most once a minute), `splitrail/<host>/recent`
+  (the last hour of messages, numbers only, merged into 30-second slots past the last two
+  minutes, so a busy hour stays around 10 KB) and `splitrail/<host>/limits` (plan limit
+  snapshots, with the login replaced by a hash). The dashboard subscribes to every other host
+  and adds a column per remote tool (`Claude@devbox-a`): its daily totals count in the summary,
+  and its recent messages drive tk/s, the sparklines and active/idle state. For an account used
+  on several machines, the newest limit snapshot from any of them wins. `[mqtt] roll_up = false`
+  turns the subscription off.
+- **Optional transcript previews across machines**: `[mqtt] share_previews = true` sends each
+  tool's newest message as one line of at most 120 characters, with key-like tokens (`sk-…`,
+  `ghp_…`, JWTs, long hex) and values after `Bearer` or `token=` redacted. Off by default.
+- `scripts/install_mqtt_publisher.sh <ssh-host> <broker> <user>`: installs the publisher on a
+  Linux box as a systemd user service (nice 10, idle I/O, 25% CPU and 1 GB memory caps), from a
+  static binary cross-built here.
+
+### Fixed
+- **MQTT payloads over 10 KB were refused** by the client library's default packet limit, which
+  also dropped the connection; the limit is now 4 MB.
+
 ## [2.0.0-dash-0.42] - 2026-10-15
 
 ### Fixed
