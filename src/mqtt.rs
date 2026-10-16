@@ -141,6 +141,9 @@ fn window_used(window: Option<plan_limits::WindowStatus>) -> Value {
     window.map_or(Value::Null, |w| json!(round(w.used_percentage, 1)))
 }
 
+/// Fingerprint of the publishing code this binary was built from (see `build.rs`).
+pub const PUBLISHER_REV: &str = env!("PUBLISHER_REV");
+
 pub fn state_payload(tools: &[ToolState], now: DateTime<Utc>) -> Value {
     let mut by_tool = serde_json::Map::new();
     for tool in tools {
@@ -159,6 +162,9 @@ pub fn state_payload(tools: &[ToolState], now: DateTime<Utc>) -> Value {
         );
     }
     json!({
+        // Which build is publishing, so the dashboard can show and update out-of-date machines.
+        "version": env!("CARGO_PKG_VERSION"),
+        "publisher_rev": PUBLISHER_REV,
         "tks": round(tools.iter().map(|t| t.tks).sum(), 1),
         "cost_today": round(tools.iter().map(|t| t.cost_today).sum(), 2),
         "output_tokens_today": tools.iter().map(|t| t.output_tokens_today).sum::<u64>(),
@@ -541,5 +547,12 @@ mod tests {
         assert_eq!(payload["value_template"], "{{ value_json.tks }}");
         assert_eq!(payload["availability_topic"], "splitrail/amberts_macbook_pro/status");
         assert_eq!(payload["unit_of_measurement"], "tk/s");
+    }
+
+    #[test]
+    fn publisher_rev_is_a_fingerprint() {
+        println!("PUBLISHER_REV {PUBLISHER_REV}");
+        assert_eq!(PUBLISHER_REV.len(), 16);
+        assert!(PUBLISHER_REV.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

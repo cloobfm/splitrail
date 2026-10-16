@@ -101,11 +101,15 @@ fn log_path() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join(".config/splitrail/update.log"))
 }
 
-/// Build the available version in the background (`U`). Its output goes to
-/// `~/.config/splitrail/update.log`.
+/// `U`: update this dashboard if the source has a newer version, otherwise every other machine
+/// whose publisher is behind this build. Output goes to `~/.config/splitrail/update.log`.
 pub fn start() {
     let version = match state() {
         State::Available(version) | State::Failed(version) => version,
+        State::Current => {
+            start_publishers();
+            return;
+        }
         _ => return,
     };
     set(State::Building(version.clone()));
@@ -131,6 +135,57 @@ pub fn start() {
                 crate::utils::log_error(format!("Update: could not run cargo: {e}"));
                 set(State::Failed(version));
             }
+        }
+    });
+}
+
+/// Publishers that are behind and online, not already being updated.
+pub fn publishers_to_update() -> Vec<crate::rollup::Publisher> {
+    crate::rollup::publishers()
+        .into_iter()
+        .filter(|p| p.online && p.behind() && p.update != crate::rollup::PublisherUpdate::Updating)
+        .collect()
+}
+
+/// Reinstall each out-of-date publisher with `scripts/install_mqtt_publisher.sh`, one machine at
+/// a time (the first builds the Linux binary; the rest reuse it). Each reports its new build over
+/// MQTT once its service restarts, which clears it from the title.
+fn start_publishers() {
+    let targets = publishers_to_update();
+    if targets.is_empty() {
+        return;
+    }
+    let config = crate::config::Config::load().ok().flatten().unwrap_or_default().mqtt;
+    let (Some(broker), Some(user)) = (config.host, config.username) else {
+        crate::utils::log_error("Update: no MQTT broker configured to install publishers against");
+        return;
+    };
+    for target in &targets {
+        crate::rollup::set_publisher_update(&target.slug, crate::rollup::PublisherUpdate::Updating);
+    }
+    std::thread::spawn(move || {
+        let log = log_path().and_then(|p| {
+            std::fs::OpenOptions::new().create(true).append(true).open(p).ok()
+        });
+        for target in targets {
+            let mut command = std::process::Command::new(source_dir().join("scripts/install_mqtt_publisher.sh"));
+            command
+                .args([&target.host, &broker, &user])
+                .current_dir(source_dir())
+                .stdin(std::process::Stdio::null());
+            if let Some(out) = log.as_ref().and_then(|l| l.try_clone().ok())
+                && let Ok(err) = out.try_clone()
+            {
+                command.stdout(out).stderr(err);
+            }
+            let ok = command.status().is_ok_and(|s| s.success());
+            if !ok {
+                crate::utils::log_error(format!("Update: installing on {} failed; see ~/.config/splitrail/update.log", target.host));
+            }
+            crate::rollup::set_publisher_update(
+                &target.slug,
+                if ok { crate::rollup::PublisherUpdate::Idle } else { crate::rollup::PublisherUpdate::Failed },
+            );
         }
     });
 }

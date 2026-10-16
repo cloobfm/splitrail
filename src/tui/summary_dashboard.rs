@@ -1842,9 +1842,29 @@ pub fn draw_visual_cli_panels(
         Span::styled(mqtt_icon, Style::default().fg(mqtt_color)),
         Span::raw(" MQTT"),
     ]);
-    // A newer version in the source tree, and the state of updating to it (`U`).
+    // The other machines publishing to the broker: their build, and whether `U` would update
+    // them (yellow ⬆), is updating them (⏳), or failed to (❌); grey when offline.
     let short = |v: &str| v.rsplit('-').next().unwrap_or(v).to_string();
+    for publisher in crate::rollup::publishers() {
+        use crate::rollup::PublisherUpdate;
+        let version = publisher.version.as_deref().map(short).unwrap_or_else(|| "old".into());
+        let (text, color) = match publisher.update {
+            PublisherUpdate::Updating => (format!("{version}⏳"), Color::Yellow),
+            PublisherUpdate::Failed => (format!("{version}❌"), Color::Red),
+            PublisherUpdate::Idle if !publisher.online => ("off".to_string(), Color::DarkGray),
+            PublisherUpdate::Idle if publisher.behind() => (format!("{version}⬆"), Color::Yellow),
+            PublisherUpdate::Idle => (version, Color::Green),
+        };
+        title_spans.push(Span::raw(format!("  {} ", crate::rollup::short_host(&publisher.host))));
+        title_spans.push(Span::styled(text, Style::default().fg(color)));
+    }
+    let publishers_behind = !crate::self_update::publishers_to_update().is_empty();
+
+    // A newer version in the source tree, and the state of updating to it (`U`).
     let update = match crate::self_update::state() {
+        crate::self_update::State::Current if publishers_behind => {
+            Some(("U to update".to_string(), Color::Yellow))
+        }
         crate::self_update::State::Current => None,
         crate::self_update::State::Available(v) => {
             Some((format!("⬆ {} · U to update", short(&v)), Color::Yellow))

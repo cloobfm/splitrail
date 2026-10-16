@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.53] - 2026-10-15
+
+### Added
+- **Other machines' publishers in the Activity title**, after MQTT: `dev-a 0.53` green when it
+  runs this build's publishing code, `0.45⬆` yellow when behind, `off` grey when offline. Each
+  publisher now reports its version and `publisher_rev`, a fingerprint of the publishing code
+  (`build.rs`: everything under `src/` but the TUI and self-update, plus `Cargo.lock` without the
+  package's own version), so a dashboard-only change or a version bump does not flag them.
+- **`U` updates them too.** With this dashboard current and a publisher behind, `U` reinstalls
+  each out-of-date machine with `scripts/install_mqtt_publisher.sh` over SSH (`⏳` while it runs,
+  `❌` if it fails, output in `~/.config/splitrail/update.log`).
+
 ## [2.0.0-dash-0.52] - 2026-10-15
 
 ### Added

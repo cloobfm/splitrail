@@ -533,8 +533,95 @@ fn apply(topic: &str, payload: &[u8], own_slug: &str) -> bool {
             }
             true
         }
+        "state" => {
+            let state: Value = serde_json::from_slice(payload).unwrap_or_default();
+            let text = |key: &str| state.get(key).and_then(Value::as_str).map(str::to_string);
+            update_publisher(slug, |p| {
+                p.version = text("version");
+                p.rev = text("publisher_rev");
+            });
+            false
+        }
+        "status" => {
+            update_publisher(slug, |p| p.online = payload == b"online");
+            false
+        }
         _ => false,
     }
+}
+
+// --- Publishers ------------------------------------------------------------------------------
+
+/// Where updating a machine's publisher from here stands.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum PublisherUpdate {
+    #[default]
+    Idle,
+    Updating,
+    Failed,
+}
+
+/// Another machine publishing to the broker, as its state and status topics describe it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Publisher {
+    pub slug: String,
+    /// Its host name (`devbox-a`), which is also how it is reached over SSH.
+    pub host: String,
+    pub version: Option<String>,
+    /// Fingerprint of its publishing code; `None` from builds before it was reported.
+    pub rev: Option<String>,
+    pub online: bool,
+    pub update: PublisherUpdate,
+}
+
+impl Publisher {
+    /// Running different publishing code from this build's.
+    pub fn behind(&self) -> bool {
+        self.rev.as_deref() != Some(crate::mqtt::PUBLISHER_REV)
+    }
+}
+
+fn publishers_map() -> &'static Mutex<BTreeMap<String, Publisher>> {
+    static PUBLISHERS: OnceLock<Mutex<BTreeMap<String, Publisher>>> = OnceLock::new();
+    PUBLISHERS.get_or_init(Default::default)
+}
+
+fn update_publisher(slug: &str, change: impl FnOnce(&mut Publisher)) {
+    if let Ok(mut map) = publishers_map().lock() {
+        let entry = map.entry(slug.to_string()).or_insert_with(|| Publisher {
+            slug: slug.to_string(),
+            ..Default::default()
+        });
+        change(entry);
+    }
+}
+
+pub fn set_publisher_update(slug: &str, update: PublisherUpdate) {
+    update_publisher(slug, |p| p.update = update);
+}
+
+/// Every other machine seen on the broker, by slug, with its host name filled in from its
+/// roll-up payloads (or the slug with `-` for `_`, before one arrives).
+pub fn publishers() -> Vec<Publisher> {
+    let mut list: Vec<Publisher> = publishers_map()
+        .lock()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default();
+    let remotes = remotes().lock().ok();
+    for publisher in &mut list {
+        publisher.host = remotes
+            .as_ref()
+            .and_then(|r| r.get(&publisher.slug))
+            .map(|r| if r.daily.host.is_empty() { r.recent.host.clone() } else { r.daily.host.clone() })
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| publisher.slug.replace('_', "-"));
+    }
+    list
+}
+
+/// A machine name as the title shows it (`devbox-a` → `dev-a`).
+pub fn short_host(host: &str) -> String {
+    shorten_host(host)
 }
 
 /// Subscribe to the other machines on the broker. `None` without a broker or with `roll_up`
@@ -562,7 +649,7 @@ pub fn start(config: &MqttConfig, own_slug: String) -> Option<watch::Receiver<u6
             match eventloop.poll().await {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
                     failing = false;
-                    for kind in ["daily", "recent", "limits"] {
+                    for kind in ["daily", "recent", "limits", "state", "status"] {
                         let _ = client.try_subscribe(format!("splitrail/+/{kind}"), QoS::AtMostOnce);
                     }
                 }
@@ -759,6 +846,22 @@ mod tests {
         ] {
             assert!(name.chars().count() <= COLUMN_CHARS, "{name}");
         }
+    }
+
+    #[test]
+    fn publishers_report_version_rev_and_status() {
+        let state = format!(r#"{{"version": "2.0.0-dash-0.53", "publisher_rev": "{}", "tks": 1.0}}"#, crate::mqtt::PUBLISHER_REV);
+        apply("splitrail/pub_test/state", state.as_bytes(), "me");
+        apply("splitrail/pub_test/status", b"online", "me");
+        apply("splitrail/pub_old/state", br#"{"tks": 0.0}"#, "me");
+        let all = publishers();
+        let current = all.iter().find(|p| p.slug == "pub_test").unwrap();
+        assert_eq!((current.host.as_str(), current.version.as_deref(), current.online), ("pub-test", Some("2.0.0-dash-0.53"), true));
+        assert!(!current.behind());
+        let old = all.iter().find(|p| p.slug == "pub_old").unwrap();
+        assert!(old.behind() && !old.online, "no fingerprint: an older build");
+        apply("splitrail/pub_test/status", b"offline", "me");
+        assert!(!publishers().iter().find(|p| p.slug == "pub_test").unwrap().online);
     }
 
     #[test]
