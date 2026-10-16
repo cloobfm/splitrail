@@ -6,8 +6,10 @@
 // The colour follows the menu bar, not Dark Mode (a light wallpaper gives dark menu bar text even
 // in Dark Mode): a zero-width status item of our own reports the menu bar's appearance.
 //
-// Long-running, so AppKit starts once: each stdin line `label<TAB>value<TAB>alpha` gets one line
-// back, the base64 PNG (empty if it could not be drawn). Images are cached, so asking every
+// Beside the label, an optional pace dot: `dot` is a hex colour, filled or a ring.
+//
+// Long-running, so AppKit starts once: each stdin line `label<TAB>value<TAB>alpha<TAB>dot<TAB>filled`
+// (the last two optional, `filled` 1 or 0) gets one line back, the base64 PNG (empty if it could not be drawn). Images are cached, so asking every
 // second costs only the pipe.
 import AppKit
 
@@ -21,7 +23,14 @@ let widest = ["888", "88.8", "8.8k"]
     .map { ($0 as NSString).size(withAttributes: [.font: valueFont]).width }
     .max() ?? 30
 
-func render(label: NSString, value: NSString, alpha: CGFloat, dark: Bool) -> String? {
+/// `#rrggbb` as a colour.
+func hexColor(_ hex: String) -> NSColor? {
+    guard hex.hasPrefix("#"), hex.count == 7, let v = UInt32(hex.dropFirst(), radix: 16) else { return nil }
+    return NSColor(srgbRed: CGFloat(v >> 16 & 0xff) / 255, green: CGFloat(v >> 8 & 0xff) / 255,
+                   blue: CGFloat(v & 0xff) / 255, alpha: 1)
+}
+
+func render(label: NSString, value: NSString, alpha: CGFloat, dark: Bool, dot: NSColor?, filled: Bool) -> String? {
     // The menu bar's own text: near-black on a light bar, white on a dark one.
     let color = (dark ? NSColor.white : NSColor.black).withAlphaComponent(alpha * (dark ? 0.95 : 0.85))
     let labelAttrs: [NSAttributedString.Key: Any] = [.font: labelFont, .foregroundColor: color]
@@ -37,6 +46,22 @@ func render(label: NSString, value: NSString, alpha: CGFloat, dark: Bool) -> Str
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
     label.draw(at: NSPoint(x: 0, y: 12), withAttributes: labelAttrs)
     value.draw(at: NSPoint(x: 0, y: -2), withAttributes: valueAttrs)
+    if let dot = dot {
+        // Centred on the label's lowercase letters, a little past its end.
+        let size: CGFloat = 5.5
+        let x = ceil(label.size(withAttributes: labelAttrs).width) + 2.5
+        let circle = NSBezierPath(ovalIn: NSRect(x: x, y: 13.5, width: size, height: size)
+            .insetBy(dx: filled ? 0 : 0.6, dy: filled ? 0 : 0.6))
+        let ink = dot.withAlphaComponent(alpha)
+        if filled {
+            ink.setFill()
+            circle.fill()
+        } else {
+            ink.setStroke()
+            circle.lineWidth = 1.2
+            circle.stroke()
+        }
+    }
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])?.base64EncodedString()
 }
@@ -62,7 +87,10 @@ Thread.detachNewThread {
             let dark = menuBarIsDark()
             let key = "\(line)\t\(dark)"
             if let hit = cache[key] { return hit }
-            let drawn = render(label: parts[0] as NSString, value: parts[1] as NSString, alpha: alpha, dark: dark) ?? ""
+            let dot = parts.count > 3 ? hexColor(parts[3]) : nil
+            let filled = parts.count > 4 && parts[4] == "1"
+            let drawn = render(label: parts[0] as NSString, value: parts[1] as NSString, alpha: alpha, dark: dark,
+                               dot: dot, filled: filled) ?? ""
             if cache.count > 500 { cache.removeAll() }
             cache[key] = drawn
             return drawn

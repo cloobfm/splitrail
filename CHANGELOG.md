@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.61] - 2026-10-16
+
+### Added
+- **Monthly tk/s goal and a pace dot in the menu bar.** `[goal] monthly_tks` (default 150) is
+  the output rate to average over the calendar month, every machine together. `status.json`
+  gains `month`: the average since the 1st and the rate the rest of the month needs to finish
+  on the goal. Beside `tk/s` a dot shows both: its colour is the current speed against that
+  needed rate (green at or above, amber at half or more, red below), and it is filled while the
+  month's average is at or above the goal, a ring while behind. The menu explains it and lists
+  the month's average, the rate needed and the tokens so far.
+
 ## [2.0.0-dash-0.60] - 2026-10-16
 
 ### Fixed

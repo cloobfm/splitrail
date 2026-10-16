@@ -403,7 +403,7 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
     };
 
     // The menu bar's numbers (SwiftBar), from the same merged stats the TUI shows.
-    tokio::spawn(status_file::run(tui_stats.clone()));
+    tokio::spawn(status_file::run(tui_stats.clone(), config.goal.monthly_tks));
 
     // Start real-time TUI with file watcher
     if let Err(e) = tui::run_tui(
@@ -456,7 +456,7 @@ async fn run_mqtt(config: config::Config) {
             Some(remote) => rollup::merged_channel(stats_manager.get_stats_receiver(), remote),
             None => stats_manager.get_stats_receiver(),
         };
-        tokio::spawn(status_file::run(stats));
+        tokio::spawn(status_file::run(stats, config.goal.monthly_tks));
     }
     println!("Publishing to {host} (Ctrl-C to stop)");
 

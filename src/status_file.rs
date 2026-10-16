@@ -7,10 +7,15 @@
 //! {"updated": 1792130000.0, "tks": 213.4, "cost_today": 41.2,
 //!  "tools": [{"name": "Claude (main)", "tks": 137.4, "cost_today": 30.1,
 //!             "limits": {"five_hour": {"used": 23.0, "resets_in": 5400}, ...}}],
-//!  "publishers": [{"host": "devbox-a", "version": "2.0.0-dash-0.53", "online": true, "behind": false}]}
+//!  "publishers": [{"host": "devbox-a", "version": "2.0.0-dash-0.53", "online": true, "behind": false}],
+//!  "month": {"goal_tks": 150.0, "avg_tks": 132.4, "needed_tks": 171.0, "output_tokens": 171584000,
+//!            "remaining_secs": 1340000}}
 //! ```
+//!
+//! `month` is the pace against `[goal] monthly_tks`: output tokens since the 1st (local time)
+//! over the seconds since then, and the rate the rest of the month needs to finish on the goal.
 
-use chrono::Utc;
+use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Utc};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -39,8 +44,41 @@ fn window(window: Option<WindowStatus>) -> Value {
     })
 }
 
+/// Local midnight on `date`, or `None` in a gap (a DST change at midnight).
+fn local_midnight(date: NaiveDate) -> Option<DateTime<Local>> {
+    Local.from_local_datetime(&date.and_hms_opt(0, 0, 0)?).earliest()
+}
+
+/// The month's pace against `goal_tks`: output tokens since the 1st, from the daily totals (which
+/// cover other machines too), averaged over the time elapsed, and what the rest needs.
+pub fn month_pace(stats: &MultiAnalyzerStats, now: DateTime<Local>, goal_tks: f64) -> Value {
+    let first = now.date_naive().with_day(1).unwrap_or(now.date_naive());
+    let next = first.checked_add_months(chrono::Months::new(1)).unwrap_or(first);
+    let (Some(start), Some(end)) = (local_midnight(first), local_midnight(next)) else {
+        return Value::Null;
+    };
+    let from = first.format("%Y-%m-%d").to_string();
+    let output_tokens: u64 = stats
+        .analyzer_stats
+        .iter()
+        .flat_map(|tool| tool.daily_stats.range(from.clone()..))
+        .map(|(_, day)| day.stats.output_tokens)
+        .sum();
+    let elapsed = (now - start).num_seconds().max(1) as f64;
+    let remaining = (end - now).num_seconds().max(0) as f64;
+    let target = goal_tks * (end - start).num_seconds() as f64;
+    let needed = if remaining > 0.0 { ((target - output_tokens as f64) / remaining).max(0.0) } else { 0.0 };
+    json!({
+        "goal_tks": goal_tks,
+        "avg_tks": round(output_tokens as f64 / elapsed, 1),
+        "needed_tks": round(needed, 1),
+        "output_tokens": output_tokens,
+        "remaining_secs": remaining as i64,
+    })
+}
+
 /// The file's contents for `stats` as of now. Tools idle today with no limits are left out.
-pub fn payload(stats: &MultiAnalyzerStats) -> Value {
+pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
     let now = Utc::now();
     let mut tools: Vec<_> = crate::mqtt::tool_states(stats, now, crate::plan_limits::limits_for_analyzer)
         .into_iter()
@@ -67,6 +105,7 @@ pub fn payload(stats: &MultiAnalyzerStats) -> Value {
             },
         })).collect::<Vec<_>>(),
         "publishers": publishers,
+        "month": month_pace(stats, now.with_timezone(&Local), goal_tks),
     })
 }
 
@@ -83,7 +122,7 @@ fn write(payload: &Value) -> std::io::Result<()> {
 
 /// Rewrite the file about every second (tk/s decays between messages, so on a timer as well as
 /// on change) for as long as the stats channel lives.
-pub async fn run(mut stats_rx: watch::Receiver<MultiAnalyzerStats>) {
+pub async fn run(mut stats_rx: watch::Receiver<MultiAnalyzerStats>, goal_tks: f64) {
     let mut wait = INTERVAL;
     loop {
         tokio::select! {
@@ -91,7 +130,7 @@ pub async fn run(mut stats_rx: watch::Receiver<MultiAnalyzerStats>) {
             _ = tokio::time::sleep(wait) => {}
         }
         let started = std::time::Instant::now();
-        let payload = payload(&stats_rx.borrow_and_update());
+        let payload = payload(&stats_rx.borrow_and_update(), goal_tks);
         wait = INTERVAL.max(started.elapsed() * MAX_SHARE);
         if let Err(e) = tokio::task::spawn_blocking(move || write(&payload)).await.unwrap_or(Ok(())) {
             crate::utils::log_error(format!("Status file: {e}"));
@@ -134,10 +173,30 @@ mod tests {
                 tool("Status Test Idle", 0, 0.0, 10 * 86_400).into(),
             ],
         };
-        let payload = payload(&stats);
+        let payload = payload(&stats, 150.0);
         let names: Vec<&str> = payload["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["Status Test Busy", "Status Test Quiet"]);
         assert_eq!(payload["tks"], 11.0); // 9,900 output tokens over the 15-minute window.
         assert_eq!(payload["cost_today"], 2.5);
+    }
+
+    #[test]
+    fn month_pace_averages_since_the_first_and_spreads_the_rest() {
+        let mut claude = tool("Status Test Month", 0, 0.0, 60);
+        for (date, output) in [("2026-09-30", 999_999_999), ("2026-10-01", 50_000_000), ("2026-10-02", 50_000_000)] {
+            let mut day = crate::types::DailyStats::default();
+            day.stats.output_tokens = output;
+            claude.daily_stats.insert(date.into(), day);
+        }
+        let stats = MultiAnalyzerStats { analyzer_stats: vec![claude.into()] };
+        // Noon on Oct 3: 2.5 days in, 28.5 days left of 31.
+        let now = Local.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap();
+        let month = month_pace(&stats, now, 150.0);
+        let elapsed = (now - local_midnight(NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()).unwrap()).num_seconds() as f64;
+        assert_eq!(month["output_tokens"], 100_000_000);
+        assert_eq!(month["avg_tks"], round(100_000_000.0 / elapsed, 1));
+        let remaining = month["remaining_secs"].as_f64().unwrap();
+        let needed = (150.0 * (elapsed + remaining) - 100_000_000.0) / remaining;
+        assert!((month["needed_tks"].as_f64().unwrap() - needed).abs() < 0.1);
     }
 }

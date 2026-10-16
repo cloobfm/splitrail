@@ -60,14 +60,35 @@ def renderer():
     return _renderer
 
 
-def title(value, stale):
+GREEN, AMBER, RED = "#30c552", "#ff9f0a", "#ff453a"
+
+
+def pace_dot(status):
+    """The dot beside `tk/s`: (colour, filled), or None without a monthly goal.
+
+    Colour: the current speed against what the rest of the month needs to finish on the goal
+    (green at or above it, amber at half or more, red below). Filled when the month's average so
+    far is at or above the goal, a ring while it is behind.
+    """
+    month = status.get("month") or {}
+    goal = month.get("goal_tks") or 0
+    if goal <= 0:
+        return None
+    needed = month.get("needed_tks", goal)
+    tks = status.get("tks", 0)
+    colour = GREEN if tks >= needed else AMBER if tks >= needed / 2 else RED
+    return colour, month.get("avg_tks", 0) >= goal
+
+
+def title(value, stale, dot=None):
     """The menu bar line: the drawn label-over-number, or plain text if it cannot be drawn."""
     # Asked every time (the helper caches): its colour follows the menu bar, which can change.
     image = ""
     proc = renderer()
     if proc:
         try:
-            proc.stdin.write(f"tk/s\t{value}\t{0.5 if stale else 1}\n")
+            extra = f"\t{dot[0]}\t{1 if dot[1] else 0}" if dot else ""
+            proc.stdin.write(f"tk/s\t{value}\t{0.5 if stale else 1}{extra}\n")
             proc.stdin.flush()
             image = proc.stdout.readline().strip()
         except OSError:
@@ -114,9 +135,20 @@ def menu():
         print("---")
         print(f"Not updated for {countdown(int(age))} (dashboard stopped?) | color=gray")
     else:
-        print(title(short_rate(status.get('tks', 0)), False))
+        print(title(short_rate(status.get('tks', 0)), False, pace_dot(status)))
         print("---")
     print(f"Today ${status.get('cost_today', 0):,.2f} · {rate(status.get('tks', 0))} tk/s | {MONO}")
+    month = status.get("month") or {}
+    dot = pace_dot(status)
+    if dot:
+        goal, avg, needed = month["goal_tks"], month.get("avg_tks", 0), month.get("needed_tks", 0)
+        mark = "●" if dot[1] else "○"
+        state = "on track" if dot[1] else f"{avg / goal:.0%} of goal"
+        print(f"{mark} Month avg {rate(avg)} tk/s of {rate(goal)} · {state} | color={dot[0]} {MONO}")
+        print(f"--Rest of month needs {rate(needed)} tk/s (now {rate(status.get('tks', 0))}) | {MONO}")
+        print(f"--{month.get('output_tokens', 0) / 1e6:,.1f}M output tokens this month | {MONO}")
+        print(f"--Dot colour: now vs needed · green ≥ needed, amber ≥ half, red below | {MONO}")
+        print(f"--Filled: month average at or above goal · ring: behind | {MONO}")
     print("---")
     for tool in status.get("tools", []):
         name = tool["name"]

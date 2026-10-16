@@ -20,6 +20,31 @@ pub struct Config {
     pub ollama: OllamaConfig,
     #[serde(default)]
     pub mqtt: MqttConfig,
+    #[serde(default)]
+    pub goal: GoalConfig,
+}
+
+/// The output rate to average over each calendar month, every machine together; the menu bar's
+/// dot shows whether the month is on track and whether the current speed keeps it there.
+///
+/// ```toml
+/// [goal]
+/// monthly_tks = 150
+/// ```
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GoalConfig {
+    #[serde(default = "default_monthly_tks")]
+    pub monthly_tks: f64,
+}
+
+impl Default for GoalConfig {
+    fn default() -> Self {
+        Self { monthly_tks: default_monthly_tks() }
+    }
+}
+
+fn default_monthly_tks() -> f64 {
+    150.0
 }
 
 /// Live stats published to an MQTT broker, with Home Assistant discovery. Off until `host` is
@@ -299,6 +324,7 @@ impl Default for Config {
             claude_code: ClaudeCodeConfig::default(),
             ollama: OllamaConfig::default(),
             mqtt: MqttConfig::default(),
+            goal: GoalConfig::default(),
         }
     }
 }
