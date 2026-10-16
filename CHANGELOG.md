@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.47] - 2026-10-15
+
+### Fixed
+- **The Activity histogram showed one dot at 200+ tk/s.** It was scaled to the tallest of 44
+  slots while the normal title draws 25, so a burst 21 minutes back, off screen, set the scale,
+  and a single burst on screen pressed every other bar down to `⡀`. Each width is now scaled to
+  the bars it draws, to the 90th percentile of its active slots; a burst above that clips at full.
+
 ## [2.0.0-dash-0.46] - 2026-10-15
 
 ### Changed

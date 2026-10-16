@@ -79,33 +79,43 @@ pub fn build_activity_sparkline_cache_with_prev(
     }
 
     // All tools together, for the Activity title: output tokens (what tk/s counts) summed from
-    // the per-tool buckets, so no extra pass over messages. Scaled to the tallest bar the title
-    // can show, so it reads at a glance; the floor keeps a trickle from looking like a burst.
+    // the per-tool buckets, so no extra pass over messages. Each width the title can draw is
+    // scaled to its own bars, so a burst just off screen does not flatten what is on it.
     let mut overall = vec![0u64; SPARKLINE_SLOTS];
     for state in buffer_cache.values() {
         for (sum, bucket) in overall.iter_mut().zip(&state.output) {
             *sum += bucket;
         }
     }
-    let visible_max = overall
-        .iter()
-        .rev()
-        .take(OVERALL_SLOTS_SHOWN_MAX)
-        .copied()
-        .max()
-        .unwrap_or(0);
-    let overall_max = visible_max.max(OVERALL_FLOOR_TOKENS);
-    sparkline_cache.insert(OVERALL_SPARKLINE.to_string(), sparkline_spans(&overall, overall_max));
+    for (key, bars) in [
+        (OVERALL_SPARKLINE, OVERALL_BARS),
+        (OVERALL_SPARKLINE_VERBOSE, OVERALL_BARS_VERBOSE),
+    ] {
+        let shown = &overall[overall.len() - bars..];
+        sparkline_cache.insert(key.to_string(), sparkline_spans(shown, overall_scale(shown)));
+    }
     (sparkline_cache, max_cache, buffer_cache)
 }
 
-/// Key of the all-tools sparkline in the sparkline caches (no analyzer has this name).
+/// Keys of the all-tools sparkline in the sparkline caches (no analyzer has these names), as
+/// drawn in the Activity title normally and in verbose mode.
 pub const OVERALL_SPARKLINE: &str = "\u{0}overall";
+pub const OVERALL_SPARKLINE_VERBOSE: &str = "\u{0}overall-verbose";
 const SPARKLINE_SLOTS: usize = 120;
-/// The widest the all-tools histogram is drawn (verbose mode).
-const OVERALL_SLOTS_SHOWN_MAX: usize = 44;
+/// Bars the Activity title draws: its 27- or 46-character gap less a space each side.
+pub const OVERALL_BARS: usize = 25;
+pub const OVERALL_BARS_VERBOSE: usize = 44;
 /// 20 tk/s over a 30-second slot: a full bar needs at least this much output.
 const OVERALL_FLOOR_TOKENS: u64 = 600;
+
+/// What fills a bar: the 90th percentile of the active slots on screen rather than the tallest,
+/// so one burst (a fan-out of subagents finishing together) clips at full height instead of
+/// pressing every other bar down to a single dot. Never below the floor, so a trickle stays low.
+fn overall_scale(shown: &[u64]) -> u64 {
+    let mut active: Vec<u64> = shown.iter().copied().filter(|&n| n > 0).collect();
+    active.sort_unstable_by(|a, b| b.cmp(a));
+    active.get(active.len() / 10).copied().unwrap_or(0).max(OVERALL_FLOOR_TOKENS)
+}
 /// The most recent slots drawn (30s each: 40 minutes).
 const SPARKLINE_SHOWN: usize = 80;
 
@@ -1795,10 +1805,13 @@ pub fn draw_visual_cli_panels(
 
     // Between tk/s and the countdown: all tools' activity, newest on the right, padded by a
     // space each side to the gap's fixed width (27, or 46 in verbose mode).
-    let gap = if tui_state.summary_verbose_mode { 46 } else { 27 };
-    let bars = gap - 2;
+    let (bars, key) = if tui_state.summary_verbose_mode {
+        (OVERALL_BARS_VERBOSE, OVERALL_SPARKLINE_VERBOSE)
+    } else {
+        (OVERALL_BARS, OVERALL_SPARKLINE)
+    };
     let mut activity_spans = vec![Span::raw(" ")];
-    if let Some(overall) = summary_data.sparkline_cache.get(OVERALL_SPARKLINE) {
+    if let Some(overall) = summary_data.sparkline_cache.get(key) {
         let shown = &overall[overall.len().saturating_sub(bars)..];
         activity_spans.push(Span::raw(" ".repeat(bars - shown.len())));
         activity_spans.extend(shown.iter().cloned());
@@ -2369,8 +2382,25 @@ mod overall_sparkline_tests {
         let (cache, _, _) = build_activity_sparkline_cache(&[&c, &burst], now);
         assert_eq!(heights(&cache[OVERALL_SPARKLINE]).chars().last(), Some('⣿'));
 
+        // One burst on screen clips at full height instead of flattening the rest.
+        let steady: Vec<i64> = (0..20).map(|i| 5 + 30 * i).collect();
+        let e = tool("E", &steady, 3000, now);
+        let spike = tool("F", &[5], 100_000, now);
+        let (cache, _, _) = build_activity_sparkline_cache(&[&e, &spike], now);
+        let bars = heights(&cache[OVERALL_SPARKLINE]);
+        assert_eq!(bars.chars().last(), Some('⣿'));
+        assert_eq!(bars.chars().rev().nth(1), Some('⣿'), "steady slots stay tall: {bars}");
+
+        // Each mode is scaled to the bars it draws: a burst only verbose mode shows.
+        let g = tool("G", &[5], 2000, now);
+        let hidden = tool("H", &[30 * 40], 50_000, now);
+        let (cache, _, _) = build_activity_sparkline_cache(&[&g, &hidden], now);
+        assert_eq!(heights(&cache[OVERALL_SPARKLINE]).chars().last(), Some('⣿'));
+        assert_eq!(cache[OVERALL_SPARKLINE].len(), OVERALL_BARS);
+        assert_eq!(cache[OVERALL_SPARKLINE_VERBOSE].len(), OVERALL_BARS_VERBOSE);
+
         // A trickle stays low.
-        let trickle = tool("E", &[5], 60, now);
+        let trickle = tool("T", &[5], 60, now);
         let (cache, _, _) = build_activity_sparkline_cache(&[&trickle], now);
         assert_eq!(heights(&cache[OVERALL_SPARKLINE]).chars().last(), Some('⡀'));
     }
