@@ -1842,6 +1842,23 @@ pub fn draw_visual_cli_panels(
         Span::styled(mqtt_icon, Style::default().fg(mqtt_color)),
         Span::raw(" MQTT"),
     ]);
+    // A newer version in the source tree, and the state of updating to it (`U`).
+    let short = |v: &str| v.rsplit('-').next().unwrap_or(v).to_string();
+    let update = match crate::self_update::state() {
+        crate::self_update::State::Current => None,
+        crate::self_update::State::Available(v) => {
+            Some((format!("⬆ {} · U to update", short(&v)), Color::Yellow))
+        }
+        crate::self_update::State::Building(v) => Some((format!("⏳ building {}", short(&v)), Color::Yellow)),
+        crate::self_update::State::Ready(v) => Some((format!("🔄 restarting into {}", short(&v)), Color::Green)),
+        crate::self_update::State::Failed(_) => {
+            Some(("❌ update failed: ~/.config/splitrail/update.log".to_string(), Color::Red))
+        }
+    };
+    if let Some((text, color)) = update {
+        title_spans.push(Span::raw("   "));
+        title_spans.push(Span::styled(text, Style::default().fg(color).bold()));
+    }
 
     let title_line = Line::from(title_spans);
 

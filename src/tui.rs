@@ -440,6 +440,10 @@ async fn run_app(
 
     loop {
         // A signal (SIGTERM/SIGHUP/SIGINT) asked us to stop.
+        // A finished update: quit so main can restart into the new binary.
+        if crate::self_update::restart_pending() {
+            break;
+        }
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
@@ -671,6 +675,13 @@ async fn run_app(
                         && key.modifiers.contains(KeyModifiers::CONTROL);
                     if ctrl_c || matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
                         break;
+                    }
+
+                    // U: build the newer version in the source tree, then restart into it.
+                    if matches!(key.code, KeyCode::Char('U') | KeyCode::Char('u')) {
+                        crate::self_update::start();
+                        needs_redraw = true;
+                        continue;
                     }
 
                     // Ctrl-L repaints every cell, the usual terminal convention, for anything that
@@ -1247,13 +1258,13 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, U: update, q/Esc: quit",
                 mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, U: update, q/Esc: quit",
                 mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))

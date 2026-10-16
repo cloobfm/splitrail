@@ -22,6 +22,7 @@ mod price_feed;
 mod cursor_limits;
 mod droid_limits;
 mod warp_limits;
+mod self_update;
 mod reqwest_simd_json;
 mod tui;
 mod types;
@@ -389,6 +390,8 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
         }
     }
 
+    tokio::spawn(self_update::watch());
+
     // Other machines on the MQTT broker, as extra columns (the publisher and notifications
     // above see only this machine's stats).
     let tui_stats = match rollup::start(&config.mqtt, mqtt::host_slug()) {
@@ -407,6 +410,10 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
         eprintln!("Error displaying TUI: {e}");
     }
     mqtt::shutdown().await;
+    if self_update::restart_pending() {
+        let error = self_update::exec_new_binary();
+        eprintln!("Could not restart into the new version: {error}");
+    }
 }
 
 /// `splitrail mqtt`: keep stats current from the file watcher and publish them, until Ctrl-C.
