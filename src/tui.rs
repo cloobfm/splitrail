@@ -5,7 +5,7 @@ use crate::utils::{
 };
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
 use anyhow::{bail, Result};
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -278,7 +278,7 @@ pub fn run_tui(
     let mut tui_state = TuiState::default();
     // Enable mouse mode by default for consistent scrolling
     tui_state.mouse_mode_enabled = true;
-    terminal.backend_mut().execute(EnableMouseCapture)?;
+    set_mouse(true)?;
 
     // Start with perf overlay disabled; user can toggle via verbose mode
     tui_state.perf_overlay = PerfOverlayState::new(false);
@@ -308,16 +308,33 @@ pub fn run_tui(
 /// than once is harmless.
 struct TerminalGuard;
 
+/// Mouse reporting for clicks and the wheel only (1000, in SGR form 1006). Crossterm's
+/// `EnableMouseCapture` also turns on 1003, every movement, which the TUI never uses: it floods
+/// input with `35;x;yM` reports while the pointer moves, and any still in flight when the
+/// dashboard exits are typed into the shell.
+const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
+/// Every mode either this or crossterm's capture may have turned on.
+const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+
+fn set_mouse(on: bool) -> std::io::Result<()> {
+    let mut out = stdout();
+    out.write_all(if on { MOUSE_ON } else { MOUSE_OFF }.as_bytes())?;
+    out.flush()
+}
+
 impl TerminalGuard {
+    /// Mouse reporting goes off while still in raw mode, and reports already on their way are
+    /// discarded before the shell gets the terminal back, so none of them reach the prompt.
     fn restore() {
         crate::utils::set_tui_active(false);
+        let _ = set_mouse(false);
+        std::thread::sleep(Duration::from_millis(30));
+        // SAFETY: tcflush only discards the terminal's pending input; stdin is fd 0.
+        unsafe {
+            libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
+        }
+        let _ = execute!(stdout(), LeaveAlternateScreen, crossterm::cursor::Show);
         let _ = disable_raw_mode();
-        let _ = execute!(
-            stdout(),
-            DisableMouseCapture,
-            LeaveAlternateScreen,
-            crossterm::cursor::Show
-        );
     }
 }
 
@@ -670,10 +687,10 @@ async fn run_app(
                     if matches!(key.code, KeyCode::Char('m')) {
                         tui_state.mouse_mode_enabled = !tui_state.mouse_mode_enabled;
                         if tui_state.mouse_mode_enabled {
-                            terminal.backend_mut().execute(EnableMouseCapture)?;
+                            set_mouse(true)?;
                         } else {
                             // Disable mouse capture and flush any pending events
-                            terminal.backend_mut().execute(DisableMouseCapture)?;
+                            set_mouse(false)?;
                             // Consume any queued mouse events
                             while event::poll(Duration::from_millis(0))? {
                                 if let Event::Mouse(_) = event::read()? {

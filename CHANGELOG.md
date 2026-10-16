@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.50] - 2026-10-15
+
+### Fixed
+- **Quitting still typed mouse reports into the shell** (`35;66;90M35;...`). Raw mode was left
+  before mouse reporting was turned off, and crossterm's capture reports every pointer movement,
+  which the TUI never uses. Mouse reporting is now clicks and wheel only, and on exit it is
+  turned off first and pending input discarded before the shell gets the terminal back.
+
 ## [2.0.0-dash-0.49] - 2026-10-15
 
 ### Fixed
