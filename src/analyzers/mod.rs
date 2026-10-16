@@ -11,6 +11,7 @@ pub mod droid_cli;
 pub mod gemini_cli;
 pub mod kilo_code;
 pub mod kiro_cli;
+pub mod kiro_sessions;
 pub mod ollama;
 pub mod opencode;
 pub mod qwen_code;

@@ -467,44 +467,63 @@ impl Analyzer for KiroCliAnalyzer {
             );
         }
 
+        // The new TUI's sessions.
+        if let Some(dir) = super::kiro_sessions::sessions_dir() {
+            for pattern in ["*.json", "*.jsonl"] {
+                patterns.push(dir.join(pattern).to_string_lossy().into_owned());
+            }
+        }
+
         patterns
     }
 
+    /// The classic chat's database, and the new TUI's session files (`kiro_sessions`).
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
-        if let Some(db_path) = Self::get_database_path() {
-            Ok(vec![DataSource { path: db_path }])
-        } else {
-            Ok(vec![])
-        }
+        let mut sources: Vec<DataSource> = Self::get_database_path()
+            .into_iter()
+            .map(|path| DataSource { path })
+            .collect();
+        sources.extend(
+            super::kiro_sessions::session_files()
+                .into_iter()
+                .map(|path| DataSource { path }),
+        );
+        Ok(sources)
     }
 
     async fn parse_conversations(
         &self,
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
-        if sources.is_empty() {
-            return Ok(vec![]);
+        // The new TUI's sessions: any `.json` source.
+        let mut session_messages = Vec::new();
+        for source in sources.iter().filter(|s| s.path.extension().is_some_and(|e| e == "json")) {
+            if let Ok(meta) = std::fs::read_to_string(&source.path) {
+                let events = std::fs::read_to_string(source.path.with_extension("jsonl")).unwrap_or_default();
+                session_messages.extend(super::kiro_sessions::parse_session(&meta, &events));
+            }
         }
-
-        // We expect only one source (the SQLite database)
-        let db_path = &sources[0].path;
+        let Some(db_path) = sources
+            .iter()
+            .map(|s| &s.path)
+            .find(|p| p.extension().is_some_and(|e| e == "sqlite3"))
+        else {
+            return Ok(session_messages);
+        };
 
         // Open SQLite connection using rusqlite
         let conn =
             rusqlite::Connection::open(db_path).context("Failed to open Kiro CLI database")?;
 
-        // Query all conversations - uses identical schema to Amazon Q
-        let mut stmt = conn
-            .prepare("SELECT key, value FROM conversations")
-            .context("Failed to prepare query")?;
-
-        let conversations: Vec<(String, String)> = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .context("Failed to query conversations")?
-            .filter_map(|r| r.ok())
-            .collect();
+        // Conversations, in the original table and in `conversations_v2`, which newer classic
+        // chats write to instead (keyed by project path too, with the conversation id beside it).
+        let mut conversations: Vec<(String, String)> = Vec::new();
+        for query in ["SELECT key, value FROM conversations", "SELECT key, value FROM conversations_v2"] {
+            let Ok(mut stmt) = conn.prepare(query) else { continue };
+            if let Ok(rows) = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+                conversations.extend(rows.flatten());
+            }
+        }
 
         // Parse conversations in parallel using the Kiro CLI parser
         let all_entries: Vec<ConversationMessage> = conversations
@@ -526,6 +545,7 @@ impl Analyzer for KiroCliAnalyzer {
         let mut seen_hashes = HashSet::new();
         let deduplicated: Vec<ConversationMessage> = all_entries
             .into_iter()
+            .chain(session_messages)
             .filter(|msg| seen_hashes.insert(msg.global_hash.clone()))
             .collect();
 
@@ -554,7 +574,7 @@ impl Analyzer for KiroCliAnalyzer {
     }
 
     fn is_available(&self) -> bool {
-        Self::get_database_path().is_some()
+        Self::get_database_path().is_some() || !super::kiro_sessions::session_files().is_empty()
     }
 }
 
@@ -593,5 +613,19 @@ mod tests {
             assert!(tables.contains(&"auth_kv".to_string()));
             assert!(tables.contains(&"migrations".to_string()));
         }
+    }
+}
+
+#[cfg(test)]
+mod live {
+    /// Reads the real data: `cargo test kiro_live -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn kiro_live_reads_every_source() {
+        use crate::analyzer::Analyzer;
+        let stats = super::KiroCliAnalyzer::new().get_stats().await.unwrap();
+        let cost: f64 = stats.daily_stats.values().map(|d| d.stats.cost).sum();
+        let latest = stats.messages.iter().map(|m| m.date).max();
+        println!("messages {} conversations {} cost ${cost:.4} latest {latest:?}", stats.messages.len(), stats.num_conversations);
     }
 }

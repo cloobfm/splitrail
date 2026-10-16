@@ -1,5 +1,5 @@
 //! `~/.config/splitrail/status.json`: the live numbers for the menu bar (SwiftBar,
-//! `scripts/swiftbar/splitrail.5s.sh`), rewritten every few seconds while the dashboard or
+//! `scripts/swiftbar/splitrail.5s.sh`), rewritten about every second while the dashboard or
 //! `splitrail-dashboard mqtt` runs. Other machines' columns are included, so the total covers
 //! every machine on the broker.
 //!
@@ -19,7 +19,10 @@ use tokio::sync::watch;
 use crate::plan_limits::WindowStatus;
 use crate::types::MultiAnalyzerStats;
 
-const INTERVAL: Duration = Duration::from_secs(5);
+/// How often the file is rewritten, unless working it out takes long enough that this would cost
+/// more than `MAX_SHARE` of a core; then proportionally less often.
+const INTERVAL: Duration = Duration::from_secs(1);
+const MAX_SHARE: u32 = 20; // At most 1/20 of the time: 5%.
 
 fn path() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join(".config/splitrail/status.json"))
@@ -78,16 +81,18 @@ fn write(payload: &Value) -> std::io::Result<()> {
     std::fs::rename(tmp, path)
 }
 
-/// Rewrite the file every few seconds (tk/s decays between messages, so on a timer as well as
+/// Rewrite the file about every second (tk/s decays between messages, so on a timer as well as
 /// on change) for as long as the stats channel lives.
 pub async fn run(mut stats_rx: watch::Receiver<MultiAnalyzerStats>) {
-    let mut ticker = tokio::time::interval(INTERVAL);
+    let mut wait = INTERVAL;
     loop {
         tokio::select! {
             changed = stats_rx.changed() => if changed.is_err() { break },
-            _ = ticker.tick() => {}
+            _ = tokio::time::sleep(wait) => {}
         }
+        let started = std::time::Instant::now();
         let payload = payload(&stats_rx.borrow_and_update());
+        wait = INTERVAL.max(started.elapsed() * MAX_SHARE);
         if let Err(e) = tokio::task::spawn_blocking(move || write(&payload)).await.unwrap_or(Ok(())) {
             crate::utils::log_error(format!("Status file: {e}"));
         }

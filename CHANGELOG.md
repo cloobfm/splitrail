@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.58] - 2026-10-15
+
+### Added
+- **Kiro CLI's new TUI is counted.** Kiro 2.x keeps sessions in `~/.kiro/sessions/cli/`
+  (`<id>.json` with per-turn credits, tool uses and replies; `<id>.jsonl` with prompts) instead of
+  `data.sqlite3`; `kiro_sessions` reads them, costing credits at $0.02 (Pro's rate).
+- Classic Kiro chats in `conversations_v2` (29 here) are read alongside `conversations` (10).
+
+### Changed
+- **Menu bar item: a `tk/s` label over a fixed-width number**, like the other meters, instead of
+  `⚡ 136 tk/s`, half the width beside the notch and steady as the number changes. It is drawn by
+  `scripts/swiftbar/render_title.swift`, compiled once into `~/Library/Caches/splitrail/` and kept
+  running (about 7 ms a redraw, only when the number changes).
+- **The plugin streams** (`splitrail.py`, SwiftBar `streamable`): one process rereading the status
+  file every second, rather than SwiftBar starting Python for each refresh. The dashboard writes
+  the file every second, backing off if working it out would cost over 5% of a core.
+
 ## [2.0.0-dash-0.57] - 2026-10-15
 
 ### Added
