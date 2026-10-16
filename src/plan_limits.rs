@@ -292,6 +292,9 @@ pub fn account_label(analyzer_name: &str) -> Option<String> {
     if analyzer_name == crate::analyzers::cursor_agent::DISPLAY_NAME {
         return Some(crate::cursor_limits::SNAPSHOT_LABEL.to_string());
     }
+    if analyzer_name == "Kiro CLI" {
+        return Some(crate::kiro_limits::SNAPSHOT_LABEL.to_string()); // From Kiro's `/usage`.
+    }
     if analyzer_name == crate::analyzers::warp_dev::DISPLAY_NAME {
         return Some(crate::warp_limits::SNAPSHOT_LABEL.to_string()); // From Warp's preferences.
     }

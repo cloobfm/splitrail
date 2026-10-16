@@ -7,6 +7,7 @@ pub mod config;
 pub mod cursor_limits;
 pub mod droid_limits;
 pub mod warp_limits;
+pub mod kiro_limits;
 pub mod self_update;
 pub mod status_file;
 pub mod incremental;

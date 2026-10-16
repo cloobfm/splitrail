@@ -22,6 +22,7 @@ mod price_feed;
 mod cursor_limits;
 mod droid_limits;
 mod warp_limits;
+mod kiro_limits;
 mod self_update;
 mod status_file;
 mod reqwest_simd_json;
@@ -332,6 +333,7 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
     tokio::spawn(droid_limits::run());
     tokio::spawn(cursor_limits::run());
     tokio::spawn(warp_limits::run());
+    tokio::spawn(kiro_limits::run());
 
     let mut stats_manager = match watcher::RealtimeStatsManager::new(registry).await {
         Ok(manager) => manager,
@@ -438,6 +440,7 @@ async fn run_mqtt(config: config::Config) {
     tokio::spawn(droid_limits::run());
     tokio::spawn(cursor_limits::run());
     tokio::spawn(warp_limits::run());
+    tokio::spawn(kiro_limits::run());
     let mut stats_manager = match watcher::RealtimeStatsManager::new(registry).await {
         Ok(manager) => manager,
         Err(e) => {
