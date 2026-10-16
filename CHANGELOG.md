@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.45] - 2026-10-15
+
+### Fixed
+- **Remote columns were cut off.** `Claude@devbox-a` needs 15 characters and columns are 13, so
+  a remote name that does not fit abbreviates the tool (`CC@devbox-a`, `OC@devbox-a`,
+  `Cdx@devbox-a`), and only past that shortens the machine name in the middle.
+- **Remote Claude columns had no login or limits.** Published limit snapshots now carry the short
+  login name (`support·team`, never the address), and a remote Claude column shows its machine's
+  login and plan limits, or a newer snapshot of the same account from any machine.
+- `scripts/install_mqtt_publisher.sh` installs the Claude status line capture on the box (only if
+  no `statusLine` is set) and takes `--share-previews` to send redacted last-message previews.
+
 ## [2.0.0-dash-0.44] - 2026-10-15
 
 ### Fixed

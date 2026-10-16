@@ -9,7 +9,7 @@
 //! * `splitrail/<host>/limits`: plan limit snapshots, with the login replaced by a hash.
 //!
 //! The dashboard subscribes to every other host's topics and appends a column per remote tool
-//! (`Claude@devbox-a`), built from those: daily totals feed the summary, recent messages
+//! (`CC@devbox-a`), built from those: daily totals feed the summary, recent messages
 //! feed tk/s, the sparklines and activity state. Remote limit snapshots for an account this
 //! machine also uses replace the local one when they are newer (`plan_limits`), since a limit
 //! belongs to the account, not to the machine that last saw it.
@@ -271,6 +271,15 @@ pub fn reduce_snapshot(raw: &Value, now: f64) -> Option<Value> {
     if let Some(login) = raw.get("login").and_then(Value::as_str) {
         out.insert("login_hash".into(), login_hash(login).into());
     }
+    // The short name the dashboard shows (`support·team`), never the full address.
+    let name = raw
+        .get("login_name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty())
+        .or_else(|| raw.get("login")?.as_str()?.split('@').next());
+    if let Some(name) = name.filter(|n| !n.is_empty()) {
+        out.insert("login_name".into(), name.into());
+    }
     Some(Value::Object(out))
 }
 
@@ -308,7 +317,8 @@ fn application_for(tool: &str) -> Application {
     }
 }
 
-fn remote_tools(host: &str, daily: &DailyPayload, recent: &RecentPayload) -> Vec<AgenticCodingToolStats> {
+/// `slug`'s tools as columns, each registered so its limits and login can be found.
+fn remote_tools(slug: &str, host: &str, daily: &DailyPayload, recent: &RecentPayload) -> Vec<AgenticCodingToolStats> {
     let mut names: Vec<&String> = daily.tools.keys().chain(recent.tools.keys()).collect();
     names.sort();
     names.dedup();
@@ -320,11 +330,8 @@ fn remote_tools(host: &str, daily: &DailyPayload, recent: &RecentPayload) -> Vec
     let columns: Vec<(&String, String)> = names
         .iter()
         .map(|tool| {
-            let column = if shared_first_word(tool) {
-                format!("{tool}@{host}")
-            } else {
-                remote_name(tool, host)
-            };
+            let column = remote_name(tool, host, shared_first_word(tool));
+            register_remote_column(&column, slug, tool);
             (*tool, column)
         })
         .collect();
@@ -373,11 +380,69 @@ fn remote_tools(host: &str, daily: &DailyPayload, recent: &RecentPayload) -> Vec
         .collect()
 }
 
-/// A remote tool's column: its first word and the machine (`Claude Code`, `devbox-a` →
-/// `Claude@devbox-a`), short enough for the summary's column headers.
-pub fn remote_name(tool: &str, host: &str) -> String {
-    let short = tool.split_whitespace().next().unwrap_or(tool);
-    format!("{short}@{host}")
+/// Width of a summary column; remote column names are fitted to it.
+const COLUMN_CHARS: usize = 13;
+
+/// A remote tool's column, fitted to the summary's 13-character headers: its first word and the
+/// machine (`Claude@nas`), else the tool abbreviated (`Claude Code` → `CC@devbox-a`), else the
+/// tool's initial with the machine shortened in the middle. `keep_label` keeps an account label
+/// (`Claude (v)` → `C(v)@devbox-a`) for a tool with two accounts.
+pub fn remote_name(tool: &str, host: &str, keep_label: bool) -> String {
+    let (base, label) = match tool.find('(').filter(|_| keep_label) {
+        Some(i) => (tool[..i].trim(), tool[i..].replace(' ', "")),
+        None => (tool, String::new()),
+    };
+    let first = base.split_whitespace().next().unwrap_or(base);
+    let initial: String = base.chars().take(1).collect();
+    let forms = [
+        format!("{first}{label}"),
+        format!("{}{label}", abbreviate(base)),
+        format!("{initial}{label}"),
+    ];
+    for form in &forms {
+        let name = format!("{form}@{host}");
+        if name.chars().count() <= COLUMN_CHARS {
+            return name;
+        }
+    }
+    let form = &forms[2];
+    let room = COLUMN_CHARS.saturating_sub(form.chars().count() + 1);
+    format!("{form}@{}", squeeze(host, room))
+}
+
+/// Initials of a tool's words and inner capitals (`Claude Code` → `CC`, `OpenCode` → `OC`), or
+/// for a one-word name its first letter and next consonants (`Codex` → `Cdx`).
+fn abbreviate(tool: &str) -> String {
+    let mut initials = String::new();
+    for word in tool.split_whitespace() {
+        let mut chars = word.chars();
+        initials.extend(chars.next());
+        initials.extend(chars.filter(|c| c.is_uppercase()));
+    }
+    if initials.chars().count() > 1 {
+        return initials;
+    }
+    let mut chars = tool.chars();
+    chars
+        .next()
+        .into_iter()
+        .chain(chars.filter(|c| c.is_alphabetic() && !"aeiouAEIOU".contains(*c)))
+        .take(3)
+        .collect()
+}
+
+/// `text` cut to `room` characters by dropping its middle (`devbox-a`, 5 → `de…-a`).
+fn squeeze(text: &str, room: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= room {
+        return text.to_string();
+    }
+    if room < 3 {
+        return chars[..room].iter().collect();
+    }
+    let tail = (room - 1) / 2;
+    let head = room - 1 - tail;
+    chars[..head].iter().chain(['…'].iter()).chain(chars[chars.len() - tail..].iter()).collect()
 }
 
 /// `local` with a column appended for every remote tool.
@@ -394,11 +459,28 @@ pub fn merged(local: &MultiAnalyzerStats) -> MultiAnalyzerStats {
             .find(|h| !h.is_empty())
             .cloned()
             .unwrap_or_else(|| slug.clone());
-        out.analyzer_stats.extend(
-            remote_tools(&host, &remote.daily, &remote.recent).into_iter().map(Arc::new),
-        );
+        let tools = remote_tools(slug, &host, &remote.daily, &remote.recent);
+        out.analyzer_stats.extend(tools.into_iter().map(Arc::new));
     }
     out
+}
+
+/// Remote column name -> the publishing machine's slug and the tool's own name there.
+fn remote_columns() -> &'static Mutex<HashMap<String, (String, String)>> {
+    static COLUMNS: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
+    COLUMNS.get_or_init(Default::default)
+}
+
+pub(crate) fn register_remote_column(column: &str, slug: &str, tool: &str) {
+    if let Ok(mut columns) = remote_columns().lock() {
+        columns.insert(column.to_string(), (slug.to_string(), tool.to_string()));
+    }
+}
+
+/// Where a remote column (`CC@devbox-a`) comes from: the machine's slug and the tool's name
+/// there (`Claude Code`); `None` for a local column.
+pub fn remote_source(column: &str) -> Option<(String, String)> {
+    remote_columns().lock().ok()?.get(column).cloned()
 }
 
 /// Apply one message from the broker; `true` if the dashboard needs a refresh.
@@ -635,14 +717,27 @@ mod tests {
         // Over the wire and back.
         let daily: DailyPayload = serde_json::from_str(&serde_json::to_string(&daily).unwrap()).unwrap();
         let recent: RecentPayload = serde_json::from_str(&serde_json::to_string(&recent).unwrap()).unwrap();
-        let tools = remote_tools("devbox-a", &daily, &recent);
-        let claude = tools.iter().find(|t| t.analyzer_name == "Claude@devbox-a").unwrap();
+        let tools = remote_tools("devbox_a", "devbox-a", &daily, &recent);
+        let claude = tools.iter().find(|t| t.analyzer_name == "CC@devbox-a").unwrap();
         assert_eq!(claude.daily_stats.len(), 1);
         assert_eq!(claude.messages.len(), 2);
         assert_eq!(claude.messages[1].stats.output_tokens, 900);
         assert_eq!(claude.messages[1].content.as_deref(), Some("Done, key [redacted] rotated"));
         assert_eq!(claude.messages[0].content, None);
-        assert!(tools.iter().any(|t| t.analyzer_name == "OpenCode@devbox-a"));
+        assert!(tools.iter().any(|t| t.analyzer_name == "OC@devbox-a"));
+    }
+
+    #[test]
+    fn remote_names_fit_a_column() {
+        assert_eq!(remote_name("Codex", "devbox-a", false), "Cdx@devbox-a");
+        assert_eq!(remote_name("Claude Code", "devbox-a", false), "CC@devbox-a");
+        assert_eq!(remote_name("OpenCode", "devbox-a", false), "OC@devbox-a");
+        assert_eq!(remote_name("Claude Code", "nas", false), "Claude@nas");
+        assert_eq!(remote_name("Claude (v)", "devbox-a", true), "C(v)@devbox-a");
+        assert_eq!(remote_name("Claude (main)", "devbox-a", true), "C(main)@de…-a");
+        for name in [remote_name("Claude Code", "a-very-long-hostname", false), remote_name("Claude (main)", "devbox-a", true)] {
+            assert!(name.chars().count() <= COLUMN_CHARS, "{name}");
+        }
     }
 
     #[test]
@@ -653,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshots_lose_the_login() {
+    fn snapshots_keep_only_the_short_login_name() {
         let raw = serde_json::json!({
             "captured_at": 1000.0, "login": "Me@X.com", "login_name": "me",
             "rate_limits": {"five_hour": {"used_percentage": 25.0, "resets_at": 5000.0}},
@@ -662,6 +757,9 @@ mod tests {
         let reduced = reduce_snapshot(&raw, 2000.0).unwrap();
         assert_eq!(reduced["login_hash"], login_hash("me@x.com"));
         assert!(reduced.get("login").is_none() && reduced.get("sessions").is_none());
+        assert_eq!(reduced["login_name"], "me");
+        let unnamed = serde_json::json!({"captured_at": 1000.0, "login": "someone@x.com"});
+        assert_eq!(reduce_snapshot(&unnamed, 2000.0).unwrap()["login_name"], "someone");
         assert!(reduce_snapshot(&raw, 1000.0 + LIMITS_MAX_AGE_SECS + 1.0).is_none());
     }
 }

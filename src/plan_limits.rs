@@ -345,12 +345,63 @@ fn newer_remote_snapshot(local: &str) -> Option<String> {
         .map(|(_, s)| s.to_string())
 }
 
+/// The snapshot behind a remote Claude column (`CC@devbox-a`): that machine's newest, or a
+/// newer one for the same login from anywhere, this machine included.
+fn remote_column_snapshot(column: &str) -> Option<String> {
+    let (slug, tool) = crate::rollup::remote_source(column)?;
+    if !tool.starts_with("Claude") {
+        return None;
+    }
+    let captured = |s: &serde_json::Value| s.get("captured_at").and_then(|a| a.as_f64());
+    let hash_of = |s: &serde_json::Value| {
+        s.get("login_hash").and_then(|h| h.as_str()).map(str::to_string)
+    };
+    let mut candidates: Vec<serde_json::Value> = Vec::new();
+    {
+        let all = REMOTE_SNAPSHOTS.get()?.lock().ok()?;
+        let own = all
+            .get(&slug)?
+            .iter()
+            .filter_map(|s| Some((captured(s)?, s)))
+            .max_by(|a, b| a.0.total_cmp(&b.0))?
+            .1
+            .clone();
+        if let Some(hash) = hash_of(&own) {
+            candidates.extend(all.values().flatten().filter(|s| hash_of(s).as_ref() == Some(&hash)).cloned());
+        }
+        candidates.push(own);
+    }
+    let hash = candidates.last().and_then(hash_of);
+    if let (Some(hash), Some(dir)) = (hash, limits_dir())
+        && let Ok(entries) = std::fs::read_dir(dir)
+    {
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.extension().is_some_and(|e| e == "json")
+                && let Ok(content) = std::fs::read_to_string(&path)
+                && let Ok(local) = serde_json::from_str::<serde_json::Value>(&content)
+                && local.get("login").and_then(|l| l.as_str()).map(crate::rollup::login_hash).as_ref()
+                    == Some(&hash)
+            {
+                candidates.push(local);
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter_map(|s| Some((captured(&s)?, s)))
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, s)| s.to_string())
+}
+
 /// Current plan limits for an analyzer, from its own logs or a status line snapshot.
 pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs_f64();
+    if let Some(content) = remote_column_snapshot(analyzer_name) {
+        return parse_snapshot(&content, now_secs);
+    }
     if let Some(limits) = observed_limits(analyzer_name, now_secs) {
         return Some(limits);
     }
@@ -366,6 +417,9 @@ pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
 pub fn login_for_analyzer(analyzer_name: &str) -> Option<String> {
     if analyzer_name == "Ollama" {
         return short_hostname(); // Models on this machine; no account.
+    }
+    if let Some(content) = remote_column_snapshot(analyzer_name) {
+        return parse_login(&content);
     }
     if let Some((_, login)) = OBSERVED_LOGINS
         .get()
@@ -563,5 +617,22 @@ mod tests {
         let limits = parse_snapshot(&chosen, 1600.0).unwrap();
         assert_eq!(limits.five_hour.unwrap().used_percentage, 25.0);
         set_remote_snapshots("test-devbox", vec![]);
+    }
+
+    #[test]
+    fn a_remote_claude_column_shows_its_machines_login_and_limits() {
+        assert_eq!(remote_column_snapshot("CC@test-box"), None);
+        crate::rollup::register_remote_column("CC@test-box", "test_box", "Claude Code");
+        crate::rollup::register_remote_column("Codex@test-box", "test_box", "Codex");
+        set_remote_snapshots(
+            "test_box",
+            vec![serde_json::json!({"captured_at": 1000.0, "login_hash": crate::rollup::login_hash("dev@x.com"),
+                "login_name": "dev", "rate_limits": {"five_hour": {"used_percentage": 40.0, "resets_at": 9000.0}}})],
+        );
+        let snapshot = remote_column_snapshot("CC@test-box").unwrap();
+        assert_eq!(parse_login(&snapshot).as_deref(), Some("dev"));
+        assert_eq!(parse_snapshot(&snapshot, 1500.0).unwrap().five_hour.unwrap().used_percentage, 40.0);
+        assert_eq!(remote_column_snapshot("Codex@test-box"), None, "only Claude has snapshots");
+        set_remote_snapshots("test_box", vec![]);
     }
 }
