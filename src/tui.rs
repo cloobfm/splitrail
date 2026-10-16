@@ -254,9 +254,17 @@ pub fn run_tui(
     // Restore the terminal on a panic too, before the default hook prints the message.
     // Otherwise the panic output lands on the alternate screen and the user's shell is
     // left with raw mode and mouse tracking still enabled.
+    // The message is also written to ~/.splitrail.log: once the TUI is gone, the terminal's
+    // copy is easily lost (a restart in the same window clears it).
     let default_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         TerminalGuard::restore();
+        let thread = std::thread::current();
+        crate::utils::log_error(format!(
+            "panic in thread '{}': {info}\n{}",
+            thread.name().unwrap_or("unnamed"),
+            std::backtrace::Backtrace::force_capture()
+        ));
         default_panic_hook(info);
     }));
 

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.49] - 2026-10-15
+
+### Fixed
+- **A crash left no trace.** A panic's message went only to the terminal, where restarting the
+  dashboard in the same window cleared it. It is now also written to `~/.splitrail.log` with the
+  thread and a backtrace.
+
 ## [2.0.0-dash-0.48] - 2026-10-15
 
 ### Changed
