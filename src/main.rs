@@ -21,6 +21,7 @@ mod plan_limits;
 mod price_feed;
 mod cursor_limits;
 mod droid_limits;
+mod warp_limits;
 mod reqwest_simd_json;
 mod tui;
 mod types;
@@ -301,7 +302,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     // registry.register(AmazonQAnalyzer::new()); // Replaced by Kiro CLI
     registry.register(KiroCliAnalyzer::new());
     registry.register(OpenCodeAnalyzer::new()); // Ready when OpenCode adds local data storage
-    registry.register(WarpDevAnalyzer::new()); // Now includes GraphQL conversation data
+    registry.register(WarpDevAnalyzer::new());
     registry.register(AntigravityAnalyzer::new()); // Fed by scripts/agy_statusline_capture.py
     registry.register(CursorAgentAnalyzer::new()); // Fed by scripts/cursor_hook_capture.py
     registry.register(OllamaAnalyzer::new()); // Fed by scripts/ollama_usage_proxy.py
@@ -328,6 +329,7 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
     // Started before the initial parse so the first reading lands while it runs.
     tokio::spawn(droid_limits::run());
     tokio::spawn(cursor_limits::run());
+    tokio::spawn(warp_limits::run());
 
     let mut stats_manager = match watcher::RealtimeStatsManager::new(registry).await {
         Ok(manager) => manager,
@@ -345,12 +347,6 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
 
     // Set upload status on stats manager for real-time upload tracking
     stats_manager.set_upload_status(upload_status.clone());
-
-    // Check WARP token health (once per day)
-    if warp::health::should_check_warp_token() {
-        let status = warp::health::check_warp_token_health().await;
-        warp::health::display_warp_status(&status);
-    }
 
     // Start notification manager if enabled
     if let Some(manager) = notifications::NotificationManager::from_config(&config) {
@@ -430,6 +426,7 @@ async fn run_mqtt(config: config::Config) {
     };
     tokio::spawn(droid_limits::run());
     tokio::spawn(cursor_limits::run());
+    tokio::spawn(warp_limits::run());
     let mut stats_manager = match watcher::RealtimeStatsManager::new(registry).await {
         Ok(manager) => manager,
         Err(e) => {

@@ -39,7 +39,7 @@ Splitrail is a comprehensive agentic AI coding tool usage analyzer written in Ru
 9. **Kilo Code Analyzer** (`src/analyzers/kilo_code.rs`): Analysis engine for Kilo Code data
 10. **Qwen Code Analyzer** (`src/analyzers/qwen_code.rs`): Analysis engine for Qwen Code data
 11. **Antigravity Analyzer** (`src/analyzers/antigravity.rs`): Antigravity CLI (`agy`) conversations read from `~/.gemini/antigravity-cli/conversations/*.db` (decoded by `src/analyzers/antigravity_store.rs`); `scripts/agy_statusline_capture.py` (its status line) supplies the weekly quota and a fallback usage log
-12. **WARP Analyzer** (`src/analyzers/warp_dev.rs`): Analysis engine for WARP terminal telemetry and GraphQL conversation data
+12. **WARP Analyzer** (`src/analyzers/warp_dev.rs`): Warp's agent conversations from its own `warp.sqlite` (credits, tokens per model, prompts), read-only in place; `src/warp_limits.rs` supplies the monthly credits from Warp's cached `AIRequestLimitInfo` preference. The GraphQL/mitmproxy notes below are historical
 13. **TUI Module** (`src/tui.rs`): Rich terminal user interface using ratatui
 14. **Upload Module** (`src/upload.rs`): HTTP client for Splitrail Cloud integration
     - **MQTT Module** (`src/mqtt.rs`): live stats to an MQTT broker with Home Assistant discovery (`[mqtt]` config; `splitrail-dashboard mqtt` runs it headless)

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.51] - 2026-10-15
+
+### Added
+- **Warp's monthly credits** in the Month Limit and Login rows, from what the Warp app caches
+  in its preferences (`AIRequestLimitInfo`): credits used of the month's allowance and the reset
+  time, refreshed every 5 minutes into `~/.config/splitrail/limits/warp.json`. No token needed.
+
+### Changed
+- **The Warp column reads Warp's own database** (`warp.sqlite` in its group container) instead
+  of `warp_network.log`, which Warp stopped writing in May, and mitmproxy captures: credits,
+  tokens per model and tool activity per conversation, prompts with their folder. Cost is the
+  credits at the plan's price per credit. It is opened read-only in place (it is several hundred
+  MB) and fully re-read only when its AI tables change.
+- The daily startup check of the old captured Warp token is gone.
+
 ## [2.0.0-dash-0.50] - 2026-10-15
 
 ### Fixed

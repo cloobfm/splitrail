@@ -1,764 +1,466 @@
+//! Warp's AI agent, read from the Warp app's own database:
+//! `~/Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support/
+//! dev.warp.Warp-Stable/warp.sqlite`.
+//!
+//! * `agent_conversations`: one row per conversation, `conversation_data` JSON whose
+//!   `conversation_usage_metadata` holds the credits spent, tokens per model
+//!   (`token_usage[].warp_tokens`, with BYOK and custom-endpoint tokens beside them), and tool
+//!   counts (commands run, files read, diffs applied with lines added and removed).
+//!   `last_modified_at` is UTC.
+//! * `ai_queries`: one row per prompt, `input` a JSON list whose `Query.text` is the prompt, with
+//!   `start_ts` (UTC) and `working_directory`.
+//!
+//! Warp records totals per conversation, not per reply, and does not split input from output, so
+//! each conversation becomes one assistant message per model, dated when the conversation last
+//! changed, with every token counted as input. Cost is the credits spent at what a credit costs
+//! on the plan (`warp_limits::cents_per_credit`), split across models by tokens.
+//!
+//! The database is several hundred MB with a busy WAL (it also holds terminal history), so it is
+//! read in place, read-only, rather than copied; Warp's `-wal` and `-shm` already exist beside
+//! it, so opening it creates nothing. With no WAL (Warp not running) it is opened immutable.
+
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use chrono::{DateTime, NaiveDateTime, Utc};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
+
 use crate::analyzer::{Analyzer, DataSource};
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
 use crate::utils::hash_text;
-use anyhow::Result;
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use glob::glob;
-use rayon::prelude::*;
-use serde::Deserialize;
-use simd_json;
-use simd_json::prelude::*;
-use std::collections::HashSet;
-use std::path::Path;
 
-pub struct WarpDevAnalyzer;
+pub const DISPLAY_NAME: &str = "Warp";
+
+fn database_path() -> Option<PathBuf> {
+    Some(std::env::home_dir()?.join(
+        "Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support/dev.warp.Warp-Stable/warp.sqlite",
+    ))
+}
+
+fn wal_path(db: &Path) -> PathBuf {
+    let mut name = db.as_os_str().to_owned();
+    name.push("-wal");
+    PathBuf::from(name)
+}
+
+/// Open Warp's database without writing anything beside it.
+fn open(db: &Path) -> Result<rusqlite::Connection> {
+    use rusqlite::OpenFlags;
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX
+        | OpenFlags::SQLITE_OPEN_URI;
+    let mode = if wal_path(db).is_file() { "ro" } else { "ro&immutable=1" };
+    let uri = format!("file:{}?mode={mode}", db.to_string_lossy().replace(' ', "%20"));
+    let conn = rusqlite::Connection::open_with_flags(uri, flags).context("open Warp database")?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))?;
+    Ok(conn)
+}
+
+/// The account Warp is signed in to, if any.
+pub fn signed_in_email() -> Option<String> {
+    let conn = open(&database_path()?).ok()?;
+    conn.query_row("SELECT email FROM current_user_information LIMIT 1", [], |r| r.get(0))
+        .ok()
+}
+
+fn utc(text: &str) -> Option<DateTime<Utc>> {
+    NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.f")
+        .ok()
+        .map(|t| t.and_utc())
+}
+
+/// The folder name of a working directory, as the other columns show projects.
+fn project_name(dir: Option<&str>) -> String {
+    dir.filter(|d| !d.is_empty())
+        .map(|d| Path::new(d).file_name().and_then(|n| n.to_str()).unwrap_or(d).to_string())
+        .unwrap_or_default()
+}
+
+/// One prompt from `ai_queries`.
+pub struct Query {
+    pub conversation_id: String,
+    pub exchange_id: String,
+    pub at: DateTime<Utc>,
+    pub input: String,
+    pub working_directory: Option<String>,
+}
+
+/// One row of `agent_conversations`.
+pub struct Conversation {
+    pub conversation_id: String,
+    pub last_modified_at: DateTime<Utc>,
+    pub data: String,
+    pub summary: Option<String>,
+}
+
+/// The prompt text from an `ai_queries.input` list.
+fn prompt_text(input: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(input).ok()?;
+    value
+        .as_array()?
+        .iter()
+        .find_map(|item| item.get("Query")?.get("text")?.as_str())
+        .map(str::to_string)
+        .filter(|t| !t.trim().is_empty())
+}
+
+fn count(stats: &Value, key: &str, field: &str) -> u64 {
+    stats.get(key).and_then(|s| s.get(field)).and_then(Value::as_u64).unwrap_or(0)
+}
+
+/// Messages for Warp's conversations and prompts. `cents_per_credit` prices the credits.
+pub fn messages_from(
+    conversations: &[Conversation],
+    queries: &[Query],
+    cents_per_credit: f64,
+) -> Vec<ConversationMessage> {
+    let mut messages = Vec::new();
+    let mut last_dir: HashMap<&str, &str> = HashMap::new();
+    for query in queries {
+        if let Some(dir) = query.working_directory.as_deref().filter(|d| !d.is_empty()) {
+            last_dir.insert(&query.conversation_id, dir);
+        }
+        messages.push(ConversationMessage {
+            application: Application::Warp,
+            date: query.at,
+            project_hash: project_name(query.working_directory.as_deref()),
+            conversation_hash: hash_text(&query.conversation_id),
+            local_hash: None,
+            global_hash: hash_text(&format!("warp:query:{}", query.exchange_id)),
+            model: None,
+            stats: Stats::default(),
+            role: MessageRole::User,
+            content: prompt_text(&query.input),
+        });
+    }
+    for conversation in conversations {
+        let Ok(data) = serde_json::from_str::<Value>(&conversation.data) else {
+            continue;
+        };
+        let Some(usage) = data.get("conversation_usage_metadata") else {
+            continue;
+        };
+        let credits = usage.get("credits_spent").and_then(Value::as_f64).unwrap_or(0.0);
+        let models: Vec<(String, u64)> = usage
+            .get("token_usage")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                let model = entry.get("model_id")?.as_str()?;
+                let tokens = ["warp_tokens", "byok_tokens", "custom_endpoint_tokens"]
+                    .iter()
+                    .filter_map(|k| entry.get(*k).and_then(Value::as_u64))
+                    .sum();
+                Some((crate::analyzers::antigravity::normalize_model(model), tokens))
+            })
+            .filter(|(model, _)| !model.is_empty())
+            .collect();
+        if models.is_empty() && credits <= 0.0 {
+            continue;
+        }
+        let models = if models.is_empty() { vec![("warp".to_string(), 0)] } else { models };
+        let total_tokens: u64 = models.iter().map(|(_, t)| t).sum();
+        let tools = usage.get("tool_usage_metadata").cloned().unwrap_or(Value::Null);
+        let tool_calls: u64 = tools
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, s)| s.get("count").and_then(Value::as_u64))
+            .sum();
+        let project = project_name(last_dir.get(conversation.conversation_id.as_str()).copied());
+        let cost = credits * cents_per_credit / 100.0;
+        for (i, (model, tokens)) in models.iter().enumerate() {
+            let share = if total_tokens > 0 {
+                *tokens as f64 / total_tokens as f64
+            } else {
+                1.0 / models.len() as f64
+            };
+            let mut stats = Stats {
+                input_tokens: *tokens,
+                cost: cost * share,
+                ..Default::default()
+            };
+            // Tool activity is per conversation; it goes on the first model's message.
+            if i == 0 {
+                stats.tool_calls = u32::try_from(tool_calls).unwrap_or(u32::MAX);
+                stats.terminal_commands = count(&tools, "run_command_stats", "commands_executed");
+                stats.files_read = count(&tools, "read_files_stats", "count");
+                stats.file_content_searches = count(&tools, "grep_stats", "count");
+                stats.file_searches = count(&tools, "file_glob_stats", "count")
+                    + count(&tools, "search_codebase_stats", "count");
+                stats.files_edited = count(&tools, "apply_file_diff_stats", "files_changed");
+                stats.lines_added = count(&tools, "apply_file_diff_stats", "lines_added");
+                stats.lines_deleted = count(&tools, "apply_file_diff_stats", "lines_removed");
+            }
+            messages.push(ConversationMessage {
+                application: Application::Warp,
+                date: conversation.last_modified_at,
+                project_hash: project.clone(),
+                conversation_hash: hash_text(&conversation.conversation_id),
+                local_hash: None,
+                global_hash: hash_text(&format!("warp:{}:{model}", conversation.conversation_id)),
+                model: Some(model.clone()),
+                stats,
+                role: MessageRole::Assistant,
+                content: if i == 0 { conversation.summary.clone() } else { None },
+            });
+        }
+    }
+    messages
+}
+
+fn read_database(db: &Path) -> Result<(Vec<Conversation>, Vec<Query>)> {
+    let conn = open(db)?;
+    let mut stmt = conn.prepare(
+        "SELECT conversation_id, last_modified_at, \
+         json_object('conversation_usage_metadata', json(json_extract(conversation_data, '$.conversation_usage_metadata'))), \
+         summary FROM agent_conversations",
+    )?;
+    let conversations = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
+        })?
+        .flatten()
+        .filter_map(|(conversation_id, modified, data, summary)| {
+            Some(Conversation { conversation_id, last_modified_at: utc(&modified)?, data, summary })
+        })
+        .collect();
+    let mut stmt = conn.prepare(
+        // `input` also carries the prompt's whole context; only its text is needed.
+        "SELECT conversation_id, exchange_id, start_ts, \
+         json_array(json_object('Query', json_object('text', json_extract(input, '$[0].Query.text')))), \
+         working_directory FROM ai_queries ORDER BY start_ts",
+    )?;
+    let queries = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })?
+        .flatten()
+        .filter_map(|(conversation_id, exchange_id, start, input, working_directory)| {
+            Some(Query { conversation_id, exchange_id, at: utc(&start)?, input, working_directory })
+        })
+        .collect();
+    Ok((conversations, queries))
+}
+
+/// Changes when the AI tables do. Warp writes terminal history to the same database all the
+/// time; this one-row query is what keeps those writes from re-reading every conversation.
+fn fingerprint(db: &Path) -> Result<String> {
+    Ok(open(db)?.query_row(
+        "SELECT (SELECT count(*) || ':' || ifnull(max(last_modified_at), '') FROM agent_conversations) \
+         || '|' || (SELECT count(*) || ':' || ifnull(max(id), '') FROM ai_queries)",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
+type Stamp = [(u64, Option<SystemTime>); 2];
+
+fn stamp(db: &Path) -> Stamp {
+    let of = |path: &Path| std::fs::metadata(path).map_or((0, None), |m| (m.len(), m.modified().ok()));
+    [of(db), of(&wal_path(db))]
+}
+
+pub struct WarpDevAnalyzer {
+    database: Option<PathBuf>,
+    /// The last read, kept until the database or its WAL changes. Warp writes terminal history
+    /// to the same database constantly, so most changes leave the AI tables as they were; the
+    /// read is two small queries.
+    cache: Mutex<Option<(Stamp, String, Arc<Vec<ConversationMessage>>)>>,
+}
 
 impl WarpDevAnalyzer {
     pub fn new() -> Self {
-        Self
+        Self { database: database_path(), cache: Mutex::new(None) }
+    }
+
+    fn messages(&self, db: &Path) -> Result<Arc<Vec<ConversationMessage>>> {
+        let current = stamp(db);
+        let mut cache = self.cache.lock().map_err(|_| anyhow::anyhow!("Warp cache poisoned"))?;
+        if let Some((seen, _, messages)) = cache.as_ref()
+            && *seen == current
+        {
+            return Ok(messages.clone());
+        }
+        let print = fingerprint(db);
+        if let (Ok(print), Some((seen, seen_print, messages))) = (&print, cache.as_mut())
+            && print == seen_print
+        {
+            *seen = current;
+            return Ok(messages.clone());
+        }
+        match read_database(db) {
+            Ok((conversations, queries)) => {
+                let messages = Arc::new(messages_from(
+                    &conversations,
+                    &queries,
+                    crate::warp_limits::cents_per_credit(),
+                ));
+                *cache = Some((current, print.unwrap_or_default(), messages.clone()));
+                Ok(messages)
+            }
+            // Busy mid-write: keep the previous read.
+            Err(e) => cache.as_ref().map(|(_, _, m)| m.clone()).ok_or(e),
+        }
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct WarpLogEntry {
-    // For batch telemetry events
-    batch: Option<Vec<WarpBatchItem>>,
-    // For direct command execution logs
-    command: Option<String>,
-    output: Option<String>,
-    #[allow(dead_code)]
-    exit_code: Option<i32>,
-    // For AI context messages
-    #[allow(dead_code)]
-    context_messages: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WarpBatchItem {
-    #[serde(rename = "type")]
-    event_type: String,
-    properties: Option<WarpProperties>,
-    original_timestamp: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WarpProperties {
-    actual_next_command_run: Option<String>,
-    #[serde(rename = "history_context")]
-    history_context: Option<String>,
-    #[serde(rename = "generate_ai_input_suggestions_request")]
-    ai_suggestions_request: Option<WarpAiSuggestionsRequest>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WarpAiSuggestionsRequest {
-    #[serde(rename = "context_messages")]
-    context_messages: Option<Vec<String>>,
-}
-
-// GraphQL API response structures
-#[derive(Debug, Deserialize)]
-struct GraphQLResponse {
-    operation: String,
-    #[allow(dead_code)]
-    timestamp: String,
-    response: GraphQLResponseData,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphQLResponseData {
-    data: Option<GraphQLData>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphQLData {
-    user: Option<GraphQLUser>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphQLUser {
-    #[serde(rename = "__typename")]
-    #[allow(dead_code)]
-    typename: Option<String>,
-    user: Option<GraphQLUserData>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphQLUserData {
-    #[serde(rename = "conversationUsage")]
-    conversation_usage: Option<Vec<WarpConversation>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WarpConversation {
-    #[serde(rename = "conversationId")]
-    conversation_id: String,
-    #[serde(rename = "lastUpdated")]
-    last_updated: String,
-    title: String,
-    #[serde(rename = "usageMetadata")]
-    usage_metadata: UsageMetadata,
-}
-
-#[derive(Debug, Deserialize)]
-struct UsageMetadata {
-    #[serde(rename = "contextWindowUsage")]
-    context_window_usage: f64,
-    #[serde(rename = "creditsSpent")]
-    credits_spent: f64,
-    #[allow(dead_code)]
-    summarized: bool,
-    #[serde(rename = "tokenUsage")]
-    token_usage: Vec<TokenUsage>,
-    #[serde(rename = "toolUsageMetadata")]
-    tool_usage_metadata: Option<ToolUsageMetadata>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TokenUsage {
-    #[serde(rename = "modelId")]
-    model_id: String,
-    #[serde(rename = "totalTokens")]
-    total_tokens: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolUsageMetadata {
-    #[serde(rename = "runCommandsExecuted")]
-    run_commands_executed: Option<u32>,
-    #[serde(rename = "readFilesStats")]
-    read_files_stats: Option<ToolStats>,
-    #[serde(rename = "grepStats")]
-    grep_stats: Option<ToolStats>,
-    #[serde(rename = "applyFileDiffStats")]
-    apply_file_diff_stats: Option<FileDiffStats>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolStats {
-    count: u32,
-}
-
-#[derive(Debug, Deserialize)]
-struct FileDiffStats {
-    #[allow(dead_code)]
-    count: u32,
-    #[serde(rename = "linesAdded")]
-    lines_added: Option<u32>,
-    #[serde(rename = "linesRemoved")]
-    lines_removed: Option<u32>,
-    #[serde(rename = "filesChanged")]
-    files_changed: Option<u32>,
-}
-
-fn parse_warp_log_file(file_path: &Path) -> Result<Vec<ConversationMessage>> {
-    let content = std::fs::read_to_string(file_path)?;
-    let mut interactions = Vec::new();
-
-    // Find all "Body {" positions and extract complete JSON using brace counting
-    let mut pos = 0;
-    while let Some(body_start) = content[pos..].find("Body {") {
-        let absolute_start = pos + body_start + 5; // Position after "Body "
-
-        // Count braces to find the matching closing brace
-        let mut brace_count = 0;
-        let mut json_end = absolute_start;
-        let chars: Vec<char> = content[absolute_start..].chars().collect();
-
-        for (i, ch) in chars.iter().enumerate() {
-            match ch {
-                '{' => brace_count += 1,
-                '}' => {
-                    brace_count -= 1;
-                    if brace_count == 0 {
-                        json_end = absolute_start + i + 1;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if brace_count == 0 && json_end > absolute_start {
-            // Extract the complete JSON (including braces)
-            let mut mutable_content = content[absolute_start..json_end].to_string();
-            pos = json_end;
-
-            match unsafe { simd_json::from_str::<WarpLogEntry>(&mut mutable_content) } {
-                Ok(log_entry) => {
-                    // Handle direct command execution logs
-                    if let (Some(command), Some(_output)) = (&log_entry.command, &log_entry.output)
-                    {
-                        let timestamp_utc = chrono::Utc::now(); // TODO: extract from log if available
-                        let pwd = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-
-                        // Create user message for command
-                        interactions.push(ConversationMessage {
-                            date: timestamp_utc,
-                            application: Application::Warp,
-                            project_hash: hash_text(&pwd),
-                            conversation_hash: hash_text(&format!("{}{}", timestamp_utc, command)),
-                            global_hash: hash_text(&format!(
-                                "warp_cmd_{}_{}",
-                                timestamp_utc.timestamp(),
-                                &command[..std::cmp::min(command.len(), 20)]
-                            )),
-                            role: MessageRole::User,
-                            content: Some(command.clone()),
-                            model: None,
-                            stats: Stats::default(),
-                            local_hash: None,
-                        });
-
-                        // Create assistant message for command execution
-                        interactions.push(ConversationMessage {
-                            date: timestamp_utc,
-                            application: Application::Warp,
-                            project_hash: hash_text(&pwd),
-                            conversation_hash: hash_text(&format!("{}{}", timestamp_utc, command)),
-                            global_hash: hash_text(&format!(
-                                "warp_out_{}_{}",
-                                timestamp_utc.timestamp(),
-                                &command[..std::cmp::min(command.len(), 20)]
-                            )),
-                            role: MessageRole::Assistant,
-                            content: Some("Command executed".to_string()),
-                            model: Some("Warp Terminal".to_string()),
-                            stats: Stats {
-                                terminal_commands: 1,
-                                ..Stats::default()
-                            },
-                            local_hash: None,
-                        });
-                    }
-
-                    // Handle batch telemetry events
-                    if let Some(batch) = log_entry.batch {
-                        for batch_item in batch {
-                            if batch_item.event_type != "track" {
-                                continue;
-                            }
-
-                            if let Some(properties) = batch_item.properties {
-                                // Handle actual command runs
-                                if let Some(command) = properties.actual_next_command_run {
-                                    // Extract timestamp from original_timestamp or use current time as fallback
-                                    let timestamp_str = batch_item
-                                        .original_timestamp
-                                        .clone()
-                                        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-
-                                    if let Ok(timestamp) =
-                                        DateTime::parse_from_rfc3339(&timestamp_str)
-                                    {
-                                        let timestamp_utc: DateTime<Utc> = timestamp.into();
-
-                                        // For now, let's just use the home directory as pwd since it might not be in the properties
-                                        let pwd = std::env::var("HOME")
-                                            .unwrap_or_else(|_| ".".to_string());
-
-                                        // Create a user message for the command
-                                        interactions.push(ConversationMessage {
-                                            date: timestamp_utc,
-                                            application: Application::Warp,
-                                            project_hash: hash_text(&pwd),
-                                            conversation_hash: hash_text(&timestamp_str), // Use timestamp to group command/output
-                                            global_hash: hash_text(&format!(
-                                                "{}_{}_command",
-                                                timestamp_str,
-                                                &command[..std::cmp::min(command.len(), 20)]
-                                            )),
-                                            role: MessageRole::User,
-                                            content: Some(command.clone()),
-                                            model: None,
-                                            stats: Stats::default(),
-                                            local_hash: None,
-                                        });
-
-                                        // Create an assistant message for the command execution
-                                        interactions.push(ConversationMessage {
-                                            date: timestamp_utc,
-                                            application: Application::Warp,
-                                            project_hash: hash_text(&pwd),
-                                            conversation_hash: hash_text(&timestamp_str),
-                                            global_hash: hash_text(&format!(
-                                                "{}_{}_output",
-                                                timestamp_str,
-                                                &command[..std::cmp::min(command.len(), 20)]
-                                            )),
-                                            role: MessageRole::Assistant,
-                                            content: Some("Command executed".to_string()), // Placeholder for actual output
-                                            model: Some("Warp Terminal".to_string()),
-                                            stats: Stats {
-                                                terminal_commands: 1,
-                                                ..Stats::default()
-                                            },
-                                            local_hash: None,
-                                        });
-                                    }
-                                }
-
-                                // Handle history_context which contains multiple commands
-                                if let Some(history_str) = properties.history_context {
-                                    // History context contains multiple JSON objects as a string, separated by newlines
-                                    for line in history_str.lines() {
-                                        if !line.trim().is_empty() {
-                                            let mut line_mutable = line.to_string();
-                                            if let Ok(command_data) = unsafe {
-                                                simd_json::from_str::<simd_json::OwnedValue>(
-                                                    &mut line_mutable,
-                                                )
-                                            } {
-                                                if let (Some(command), Some(start_ts)) = (
-                                                    command_data
-                                                        .get("command")
-                                                        .and_then(|v| v.as_str()),
-                                                    command_data
-                                                        .get("start_ts")
-                                                        .and_then(|v| v.as_str()),
-                                                ) {
-                                                    if let Ok(timestamp) =
-                                                        DateTime::parse_from_rfc3339(start_ts)
-                                                    {
-                                                        let timestamp_utc: DateTime<Utc> =
-                                                            timestamp.into();
-                                                        let home_dir = std::env::var("HOME")
-                                                            .unwrap_or_else(|_| ".".to_string());
-                                                        let pwd = command_data
-                                                            .get("pwd")
-                                                            .and_then(|v| v.as_str())
-                                                            .unwrap_or(home_dir.as_str());
-
-                                                        // Create a user message for the command
-                                                        interactions.push(ConversationMessage {
-                                                            date: timestamp_utc,
-                                                            application: Application::Warp,
-                                                            project_hash: hash_text(pwd),
-                                                            conversation_hash: hash_text(start_ts),
-                                                            global_hash: hash_text(&format!(
-                                                                "{}_{}_history",
-                                                                start_ts,
-                                                                &command[..std::cmp::min(
-                                                                    command.len(),
-                                                                    20
-                                                                )]
-                                                            )),
-                                                            role: MessageRole::User,
-                                                            content: Some(command.to_string()),
-                                                            model: None,
-                                                            stats: Stats::default(),
-                                                            local_hash: None,
-                                                        });
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Handle AI context messages
-                                if let Some(ai_request) = properties.ai_suggestions_request {
-                                    if let Some(context_messages) = ai_request.context_messages {
-                                        for context_str in context_messages {
-                                            // These are JSON strings containing input/output pairs
-                                            let mut context_mutable = context_str.clone();
-                                            if let Ok(context_data) = unsafe {
-                                                simd_json::from_str::<simd_json::OwnedValue>(
-                                                    &mut context_mutable,
-                                                )
-                                            } {
-                                                if let (Some(input), Some(output)) = (
-                                                    context_data
-                                                        .get("input")
-                                                        .and_then(|v| v.as_str()),
-                                                    context_data
-                                                        .get("output")
-                                                        .and_then(|v| v.as_str()),
-                                                ) {
-                                                    let timestamp_str = batch_item
-                                                        .original_timestamp
-                                                        .clone()
-                                                        .unwrap_or_else(|| {
-                                                            chrono::Utc::now().to_rfc3339()
-                                                        });
-
-                                                    if let Ok(timestamp) =
-                                                        DateTime::parse_from_rfc3339(&timestamp_str)
-                                                    {
-                                                        let timestamp_utc: DateTime<Utc> =
-                                                            timestamp.into();
-                                                        let home_dir = std::env::var("HOME")
-                                                            .unwrap_or_else(|_| ".".to_string());
-                                                        let pwd = context_data
-                                                            .get("context")
-                                                            .and_then(|ctx| ctx.get("pwd"))
-                                                            .and_then(|v| v.as_str())
-                                                            .unwrap_or(home_dir.as_str());
-
-                                                        // Create a user message for the input
-                                                        interactions.push(ConversationMessage {
-                                                            date: timestamp_utc,
-                                                            application: Application::Warp,
-                                                            project_hash: hash_text(pwd),
-                                                            conversation_hash: hash_text(
-                                                                &timestamp_str,
-                                                            ),
-                                                            global_hash: hash_text(&format!(
-                                                                "{}_{}_ai_input",
-                                                                timestamp_str,
-                                                                &input[..std::cmp::min(
-                                                                    input.len(),
-                                                                    20
-                                                                )]
-                                                            )),
-                                                            role: MessageRole::User,
-                                                            content: Some(input.to_string()),
-                                                            model: None,
-                                                            stats: Stats::default(),
-                                                            local_hash: None,
-                                                        });
-
-                                                        // Create an assistant message for the output
-                                                        if !output.is_empty() {
-                                                            interactions.push(
-                                                                ConversationMessage {
-                                                                    date: timestamp_utc,
-                                                                    application: Application::Warp,
-                                                                    project_hash: hash_text(pwd),
-                                                                    conversation_hash: hash_text(
-                                                                        &timestamp_str,
-                                                                    ),
-                                                                    global_hash: hash_text(
-                                                                        &format!(
-                                                                            "{}_{}_ai_output",
-                                                                            timestamp_str,
-                                                                            &input[..std::cmp::min(
-                                                                                input.len(),
-                                                                                20
-                                                                            )]
-                                                                        ),
-                                                                    ),
-                                                                    role: MessageRole::Assistant,
-                                                                    content: Some(
-                                                                        output.to_string(),
-                                                                    ),
-                                                                    model: Some(
-                                                                        "Warp AI".to_string(),
-                                                                    ),
-                                                                    stats: Stats {
-                                                                        tool_calls: 1,
-                                                                        ..Stats::default()
-                                                                    },
-                                                                    local_hash: None,
-                                                                },
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } // End of if let Some(batch)
-                }
-                Err(_e) => {
-                    // Skip unparseable Body sections (e.g., GraphQL queries, other telemetry)
-                }
-            }
-        } else {
-            // Couldn't find matching closing brace, skip this entry
-            pos = absolute_start + 1;
-        }
+impl Default for WarpDevAnalyzer {
+    fn default() -> Self {
+        Self::new()
     }
-
-    Ok(interactions)
-}
-
-// Parse GraphQL conversation data from captured JSONL files
-fn parse_graphql_conversations(file_path: &Path) -> Result<Vec<ConversationMessage>> {
-    let content = std::fs::read_to_string(file_path)?;
-    let mut conversations = Vec::new();
-
-    // Parse JSONL (one JSON object per line)
-    for (line_num, line) in content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let mut mutable_line = line.to_string();
-        match unsafe { simd_json::from_str::<GraphQLResponse>(&mut mutable_line) } {
-            Ok(graphql_response) => {
-                // Only process GetConversationUsage operations
-                if graphql_response.operation != "GetConversationUsage" {
-                    continue;
-                }
-
-                // Extract conversations
-                if let Some(data) = graphql_response.response.data {
-                    if let Some(user) = data.user {
-                        if let Some(user_data) = user.user {
-                            if let Some(conv_usage) = user_data.conversation_usage {
-                                for conv in conv_usage {
-                                    // Parse timestamp
-                                    let timestamp = match DateTime::parse_from_rfc3339(&conv.last_updated) {
-                                        Ok(dt) => dt.with_timezone(&Utc),
-                                        Err(_) => {
-                                            eprintln!("Failed to parse timestamp: {}", conv.last_updated);
-                                            continue;
-                                        }
-                                    };
-
-                                    // Calculate total tokens across all models
-                                    let total_tokens: u64 = conv.usage_metadata.token_usage
-                                        .iter()
-                                        .map(|t| t.total_tokens)
-                                        .sum();
-
-                                    // Get primary model (first or most-used)
-                                    let primary_model = conv.usage_metadata.token_usage
-                                        .first()
-                                        .map(|t| t.model_id.clone());
-
-                                    // Extract tool usage stats
-                                    let (bash_commands, file_reads, grep_searches) =
-                                        if let Some(ref tool_meta) = conv.usage_metadata.tool_usage_metadata {
-                                            (
-                                                tool_meta.run_commands_executed.unwrap_or(0),
-                                                tool_meta.read_files_stats.as_ref().map(|s| s.count).unwrap_or(0),
-                                                tool_meta.grep_stats.as_ref().map(|s| s.count).unwrap_or(0),
-                                            )
-                                        } else {
-                                            (0, 0, 0)
-                                        };
-
-                                    // Extract file diff stats
-                                    let (lines_added, lines_removed, files_changed) =
-                                        if let Some(ref tool_meta) = conv.usage_metadata.tool_usage_metadata {
-                                            if let Some(ref diff_stats) = tool_meta.apply_file_diff_stats {
-                                                (
-                                                    diff_stats.lines_added.unwrap_or(0),
-                                                    diff_stats.lines_removed.unwrap_or(0),
-                                                    diff_stats.files_changed.unwrap_or(0),
-                                                )
-                                            } else {
-                                                (0, 0, 0)
-                                            }
-                                        } else {
-                                            (0, 0, 0)
-                                        };
-
-                                    // Convert credits to USD (1 credit ≈ $0.01 based on analysis)
-                                    // WARP's credits already account for cache savings
-                                    let cost = conv.usage_metadata.credits_spent * 0.01;
-
-                                    // Create user message (conversation start)
-                                    conversations.push(ConversationMessage {
-                                        date: timestamp,
-                                        application: Application::Warp,
-                                        project_hash: hash_text("warp_cloud"), // WARP doesn't expose project
-                                        conversation_hash: hash_text(&conv.conversation_id),
-                                        global_hash: hash_text(&format!("warp_graphql_{}", conv.conversation_id)),
-                                        role: MessageRole::User,
-                                        content: Some(conv.title.clone()),
-                                        model: None,
-                                        stats: Stats::default(),
-                                        local_hash: None,
-                                    });
-
-                                    // Create assistant message with full stats
-                                    // WARP provides totalTokens but doesn't split input/output/cached
-                                    // Estimate based on actual Claude Code usage: 99.5% cached, 0.5% fresh
-                                    // Fresh tokens split 20% input / 80% output
-                                    let cached_ratio = 0.995;
-                                    let estimated_cached = (total_tokens as f64 * cached_ratio) as u64;
-                                    let fresh_tokens = (total_tokens as f64 * (1.0 - cached_ratio)) as u64;
-                                    let estimated_input = (fresh_tokens as f64 * 0.20) as u64;
-                                    let estimated_output = (fresh_tokens as f64 * 0.80) as u64;
-
-                                    conversations.push(ConversationMessage {
-                                        date: timestamp,
-                                        application: Application::Warp,
-                                        project_hash: hash_text("warp_cloud"),
-                                        conversation_hash: hash_text(&conv.conversation_id),
-                                        global_hash: hash_text(&format!("warp_graphql_{}__resp", conv.conversation_id)),
-                                        role: MessageRole::Assistant,
-                                        content: Some(format!(
-                                            "Conversation completed: {} (credits: {:.2}, context: {:.1}%)",
-                                            conv.title,
-                                            conv.usage_metadata.credits_spent,
-                                            conv.usage_metadata.context_window_usage * 100.0
-                                        )),
-                                        model: primary_model,
-                                        stats: Stats {
-                                            // Split based on 99.5% cached ratio (costs already include cache savings)
-                                            input_tokens: estimated_input,
-                                            output_tokens: estimated_output,
-                                            cached_tokens: estimated_cached,
-                                            cost,
-                                            terminal_commands: bash_commands as u64,
-                                            files_read: file_reads as u64,
-                                            file_content_searches: grep_searches as u64,
-                                            lines_added: lines_added as u64,
-                                            lines_deleted: lines_removed as u64,
-                                            files_edited: files_changed as u64,
-                                            tool_calls: (bash_commands + file_reads + grep_searches) as u32,
-                                            ..Stats::default()
-                                        },
-                                        local_hash: None,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to parse GraphQL line {}: {}", line_num + 1, e);
-            }
-        }
-    }
-
-    Ok(conversations)
 }
 
 #[async_trait]
 impl Analyzer for WarpDevAnalyzer {
     fn display_name(&self) -> &'static str {
-        "Warp"
+        DISPLAY_NAME
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
-        // Check multiple possible Warp data directory locations
-        let possible_paths = [
-            "Library/Application Support/Warp/warp_network.log", // Current Warp version
-            "Library/Application Support/dev.warp.Warp-Stable/warp_network.log", // Older version
-            "Library/Application Support/WarpTerminal/warp_network.log", // Alternative
-        ];
-
-        let mut existing_paths = Vec::new();
-        for path_str in &possible_paths {
-            if let Some(mut path) = dirs::home_dir() {
-                path.push(path_str);
-                if path.exists() {
-                    existing_paths.push(path.to_string_lossy().into_owned());
-                }
-            }
-        }
-
-        existing_paths
+        self.database
+            .iter()
+            .flat_map(|db| [db.clone(), wal_path(db)])
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
     }
 
+    /// The database, and its WAL so a write that only reaches the WAL still counts as a change.
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
-        let patterns = self.get_data_glob_patterns();
-        let mut sources = Vec::new();
-
-        // Add terminal telemetry log files
-        for pattern in patterns {
-            for entry in glob(&pattern)? {
-                if let Ok(path) = entry {
-                    if path.is_file() {
-                        sources.push(DataSource { path });
-                    }
-                }
-            }
-        }
-
-        // Add GraphQL captured conversation data
-        if let Some(home) = dirs::home_dir() {
-            let graphql_pattern = home
-                .join("Projects/splitrail/schemas/warp/captured/*.jsonl")
-                .to_string_lossy()
-                .into_owned();
-
-            for entry in glob(&graphql_pattern)? {
-                if let Ok(path) = entry {
-                    if path.is_file() {
-                        sources.push(DataSource { path });
-                    }
-                }
-            }
-        }
-
-        Ok(sources)
+        Ok(self
+            .database
+            .iter()
+            .flat_map(|db| [db.clone(), wal_path(db)])
+            .filter(|p| p.is_file())
+            .map(|path| DataSource { path })
+            .collect())
     }
 
-    async fn parse_conversations(
-        &self,
-        sources: Vec<DataSource>,
-    ) -> Result<Vec<ConversationMessage>> {
-        let all_entries: Vec<ConversationMessage> = sources
-            .into_par_iter()
-            .filter_map(|source| {
-                let path_str = source.path.to_string_lossy();
-
-                // Determine file type and parse accordingly
-                if path_str.contains("graphql_responses") {
-                    // GraphQL conversation data
-                    match parse_graphql_conversations(&source.path) {
-                        Ok(messages) => Some(messages),
-                        Err(e) => {
-                            eprintln!(
-                                "Failed to parse WARP GraphQL file {}: {e:#}",
-                                source.path.display(),
-                            );
-                            None
-                        }
-                    }
-                } else {
-                    // Terminal telemetry log
-                    match parse_warp_log_file(&source.path) {
-                        Ok(messages) => Some(messages),
-                        Err(e) => {
-                            eprintln!(
-                                "Failed to parse Warp log file {}: {e:#}",
-                                source.path.display(),
-                            );
-                            None
-                        }
-                    }
-                }
-            })
-            .flat_map(|messages| messages)
-            .collect();
-
-        let mut seen_hashes = HashSet::new();
-        let deduplicated_entries: Vec<ConversationMessage> = all_entries
-            .into_iter()
-            .filter(|entry| {
-                if seen_hashes.contains(&entry.global_hash) {
-                    return false;
-                }
-                seen_hashes.insert(entry.global_hash.clone());
-                true
-            })
-            .collect();
-
-        Ok(deduplicated_entries)
+    async fn parse_conversations(&self, sources: Vec<DataSource>) -> Result<Vec<ConversationMessage>> {
+        let Some(db) = sources.iter().map(|s| &s.path).find(|p| Some(*p) == self.database.as_ref()) else {
+            return Ok(Vec::new());
+        };
+        Ok(self.messages(db)?.as_ref().clone())
     }
 
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
         let sources = self.discover_data_sources()?;
         let messages = self.parse_conversations(sources).await?;
         let daily_stats = crate::utils::aggregate_by_date(&messages);
-
-        let num_conversations = daily_stats
-            .values()
-            .map(|stats| stats.conversations as u64)
-            .sum();
-
+        let num_conversations = daily_stats.values().map(|s| s.conversations as u64).sum();
         Ok(AgenticCodingToolStats {
-            analyzer_name: self.display_name().to_string(),
             daily_stats,
-            messages,
             num_conversations,
+            messages,
+            analyzer_name: self.display_name().to_string(),
         })
     }
 
     fn is_available(&self) -> bool {
-        self.discover_data_sources()
-            .is_ok_and(|sources| !sources.is_empty())
+        self.database.as_ref().is_some_and(|db| db.is_file())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(s: &str) -> DateTime<Utc> {
+        utc(s).unwrap()
+    }
+
+    #[test]
+    fn conversations_become_one_message_per_model_priced_by_credits() {
+        let data = r#"{"conversation_usage_metadata": {"credits_spent": 100.0,
+            "token_usage": [
+                {"model_id": "Claude Sonnet 5.5 (high)", "warp_tokens": 750, "byok_tokens": 0, "custom_endpoint_tokens": 0},
+                {"model_id": "GPT-5 Nano", "warp_tokens": 250, "byok_tokens": 0, "custom_endpoint_tokens": 0}],
+            "tool_usage_metadata": {"run_command_stats": {"count": 3, "commands_executed": 4},
+                "read_files_stats": {"count": 2},
+                "apply_file_diff_stats": {"count": 1, "lines_added": 61, "lines_removed": 10, "files_changed": 6}}}}"#;
+        let conversations = [Conversation {
+            conversation_id: "c1".into(),
+            last_modified_at: at("2026-10-03 07:06:41"),
+            data: data.into(),
+            summary: Some("Set up devbox-b".into()),
+        }];
+        let queries = [Query {
+            conversation_id: "c1".into(),
+            exchange_id: "e1".into(),
+            at: at("2026-10-03 07:00:00.5"),
+            input: r#"[{"Query":{"text":"make a devbox-b","context":[]}}]"#.into(),
+            working_directory: Some("/Users/x/nas-devbox".into()),
+        }];
+        let messages = messages_from(&conversations, &queries, 1.8);
+        assert_eq!(messages.len(), 3);
+
+        let prompt = &messages[0];
+        assert_eq!(prompt.role, MessageRole::User);
+        assert_eq!(prompt.content.as_deref(), Some("make a devbox-b"));
+        assert_eq!(prompt.project_hash, "nas-devbox");
+
+        let (sonnet, nano) = (&messages[1], &messages[2]);
+        assert_eq!(sonnet.model.as_deref(), Some("claude-sonnet-5.5"));
+        assert_eq!(nano.model.as_deref(), Some("gpt-5-nano"));
+        // 100 credits at 1.8 cents is $1.80, split 3:1 by tokens.
+        assert!((sonnet.stats.cost - 1.35).abs() < 1e-9 && (nano.stats.cost - 0.45).abs() < 1e-9);
+        assert_eq!(sonnet.stats.input_tokens, 750);
+        assert_eq!((sonnet.stats.tool_calls, sonnet.stats.terminal_commands), (6, 4));
+        assert_eq!((sonnet.stats.lines_added, sonnet.stats.lines_deleted), (61, 10));
+        assert_eq!(nano.stats.tool_calls, 0, "tool activity counted once");
+        assert_eq!(sonnet.project_hash, "nas-devbox");
+        assert_eq!(sonnet.content.as_deref(), Some("Set up devbox-b"));
+        assert_eq!(sonnet.conversation_hash, prompt.conversation_hash);
+    }
+
+    #[test]
+    fn empty_or_unreadable_conversations_are_skipped() {
+        let conversation = |data: &str| Conversation {
+            conversation_id: "c".into(),
+            last_modified_at: at("2026-10-03 07:06:41"),
+            data: data.into(),
+            summary: None,
+        };
+        let empty = r#"{"conversation_usage_metadata": {"credits_spent": 0.0, "token_usage": []}}"#;
+        let credits_only = r#"{"conversation_usage_metadata": {"credits_spent": 2.0, "token_usage": []}}"#;
+        assert!(messages_from(&[conversation(empty), conversation("{")], &[], 1.8).is_empty());
+        let messages = messages_from(&[conversation(credits_only)], &[], 1.8);
+        assert_eq!(messages.len(), 1);
+        assert!((messages[0].stats.cost - 0.036).abs() < 1e-9);
+    }
+
+    #[test]
+    fn prompt_text_comes_from_the_query_entry() {
+        assert_eq!(prompt_text(r#"[{"Query":{"text":"hi"}}]"#).as_deref(), Some("hi"));
+        assert_eq!(prompt_text(r#"[{"Other":{}}]"#), None);
+        assert_eq!(prompt_text("not json"), None);
+    }
+
+    /// Reads the real database: `cargo test warp_live -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn warp_live_database_has_data() {
+        let started = std::time::Instant::now();
+        let (conversations, queries) = read_database(&database_path().unwrap()).unwrap();
+        println!("read {} conversations, {} prompts in {:?}", conversations.len(), queries.len(), started.elapsed());
+        let started = std::time::Instant::now();
+        let _ = fingerprint(&database_path().unwrap()).unwrap();
+        println!("fingerprint in {:?}", started.elapsed());
+        let stats = WarpDevAnalyzer::new().get_stats().await.unwrap();
+        let cost: f64 = stats.daily_stats.values().map(|d| d.stats.cost).sum();
+        let models: std::collections::BTreeSet<_> = stats.messages.iter().filter_map(|m| m.model.clone()).collect();
+        println!("messages {} conversations {} cost ${cost:.2} models {models:?}", stats.messages.len(), stats.num_conversations);
+        println!("signed in: {}", signed_in_email().is_some());
+        assert!(!stats.messages.is_empty());
     }
 }

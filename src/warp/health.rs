@@ -67,15 +67,6 @@ impl WarpHealthCache {
     }
 }
 
-/// Check if we're running inside WARP terminal
-pub fn is_running_in_warp() -> bool {
-    std::env::var("TERM_PROGRAM")
-        .ok()
-        .map(|v| v.contains("WarpTerminal") || v == "WarpTerminal")
-        .unwrap_or(false)
-        || std::env::var("WARP_USE_SSH_WRAPPER").is_ok()
-}
-
 /// Get WARP auth token from config or separate token file
 fn get_warp_token() -> Result<String> {
     // Try multiple possible config directories
@@ -113,14 +104,6 @@ fn get_warp_token() -> Result<String> {
     }
 
     Err(anyhow::anyhow!("WARP auth_token not found. Run 'splitrail warp setup'"))
-}
-
-/// Check if WARP token health should be checked (daily limit)
-pub fn should_check_warp_token() -> bool {
-    match WarpHealthCache::load() {
-        Some(cache) => cache.should_check(),
-        None => true, // No cache, should check
-    }
 }
 
 /// Perform a lightweight API call to check if token is valid
@@ -201,57 +184,4 @@ pub async fn check_warp_token_health() -> WarpTokenStatus {
     };
 
     status
-}
-
-/// Display status message to user based on token health
-pub fn display_warp_status(status: &WarpTokenStatus) {
-    match status {
-        WarpTokenStatus::Valid => {
-            // Silent success - no message needed
-        }
-        WarpTokenStatus::NotConfigured => {
-            if is_running_in_warp() {
-                println!("ℹ️  WARP analytics not configured");
-                println!("   Enable with: splitrail warp setup");
-            }
-        }
-        WarpTokenStatus::Expired => {
-            println!("⚠️  WARP token expired");
-            println!("   Refresh with: splitrail warp refresh");
-        }
-        WarpTokenStatus::Error(e) => {
-            eprintln!("Note: Could not check WARP token status: {}", e);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_running_in_warp() {
-        // Save original env
-        let original = std::env::var("TERM_PROGRAM").ok();
-
-        // Test with WARP env var
-        unsafe {
-            std::env::set_var("TERM_PROGRAM", "WarpTerminal");
-        }
-        assert!(is_running_in_warp());
-
-        // Test without WARP env var
-        unsafe {
-            std::env::remove_var("TERM_PROGRAM");
-            std::env::remove_var("WARP_USE_SSH_WRAPPER");
-        }
-        assert!(!is_running_in_warp());
-
-        // Restore original
-        if let Some(val) = original {
-            unsafe {
-                std::env::set_var("TERM_PROGRAM", val);
-            }
-        }
-    }
 }
