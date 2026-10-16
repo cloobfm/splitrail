@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.54] - 2026-10-15
+
+### Changed
+- **Update and devbox versions moved to the header**, beside the dashboard's own version
+  (`2.0.0-dash-0.54  dev-a 0.53  dev-b 0.53`), out of the Activity title, which had run out
+  of width after MQTT.
+
 ## [2.0.0-dash-0.53] - 2026-10-15
 
 ### Added

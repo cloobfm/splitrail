@@ -1163,8 +1163,17 @@ fn draw_ui(
         }
     }
 
+    // The update state goes beside the version, the perf readout (if on) after it.
+    let mut header_spans = vec![Span::styled(version.to_string(), Style::new().cyan().bold())];
+    header_spans.extend(crate::tui::summary_dashboard::update_spans());
+    if header_line.len() > version.len() {
+        header_spans.push(Span::styled(
+            header_line[version.len()..].to_string(),
+            Style::new().cyan().bold(),
+        ));
+    }
     let header = Paragraph::new(Text::from(vec![
-        Line::styled(header_line, Style::new().cyan().bold()),
+        Line::from(header_spans),
         Line::styled("=".repeat(version.len()), Style::new().cyan().bold()),
     ]));
     frame.render_widget(header, chunks[0]);
