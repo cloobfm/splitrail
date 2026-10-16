@@ -43,7 +43,6 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 RENDER_SOURCE = os.path.join(HERE, "render_title.swift")
 RENDER_BINARY = os.path.expanduser("~/Library/Caches/splitrail/render_title")
 _renderer = None
-_rendered = {}
 
 
 def renderer():
@@ -63,23 +62,18 @@ def renderer():
 
 def title(value, stale):
     """The menu bar line: the drawn label-over-number, or plain text if it cannot be drawn."""
-    key = (value, stale)
-    if key not in _rendered:
-        image = ""
-        proc = renderer()
-        if proc:
-            try:
-                proc.stdin.write(f"tk/s\t{value}\t{0.35 if stale else 1}\n")
-                proc.stdin.flush()
-                image = proc.stdout.readline().strip()
-            except OSError:
-                image = ""
-        if len(_rendered) > 500:
-            _rendered.clear()
-        _rendered[key] = image
-    image = _rendered[key]
+    # Asked every time (the helper caches): its colour follows the menu bar, which can change.
+    image = ""
+    proc = renderer()
+    if proc:
+        try:
+            proc.stdin.write(f"tk/s\t{value}\t{0.5 if stale else 1}\n")
+            proc.stdin.flush()
+            image = proc.stdout.readline().strip()
+        except OSError:
+            image = ""
     if image:
-        return f" | templateImage={image}"
+        return f" | image={image}"
     return f"tk/s {value} | font=Menlo size=11" + (" color=gray" if stale else "")
 
 

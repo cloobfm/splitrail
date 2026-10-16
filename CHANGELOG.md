@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.60] - 2026-10-16
+
+### Fixed
+- **Menu bar tk/s stays readable on the display you are not using.** It was a template image,
+  which macOS fades on every display but the active one; it is now drawn in the menu bar's own
+  text colour, the way iStat-style meters are, so it is never fainter than them. The colour
+  comes from the menu bar itself (a zero-width status item in the helper), not Dark Mode, since
+  a light wallpaper keeps the menu bar text dark even in Dark Mode. A stale reading is drawn at
+  half strength rather than a third.
+
 ## [2.0.0-dash-0.59] - 2026-10-15
 
 ### Added
