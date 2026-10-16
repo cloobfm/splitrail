@@ -44,6 +44,7 @@ Splitrail is a comprehensive agentic AI coding tool usage analyzer written in Ru
 14. **Upload Module** (`src/upload.rs`): HTTP client for Splitrail Cloud integration
     - **MQTT Module** (`src/mqtt.rs`): live stats to an MQTT broker with Home Assistant discovery (`[mqtt]` config; `splitrail-dashboard mqtt` runs it headless)
     - **Roll-up Module** (`src/rollup.rs`): other machines' usage from the same broker as extra `Tool@host` columns; `scripts/install_mqtt_publisher.sh` sets up a Linux publisher; publishers report `version` and `publisher_rev` (`build.rs`) in their state topic, shown beside the version in the header, and `U` (`src/self_update.rs`) reinstalls ones that are behind, after updating the dashboard itself in place
+    - **Status file** (`src/status_file.rs`): `~/.config/splitrail/status.json` every 5 s for the SwiftBar menu bar plugin (`scripts/swiftbar/splitrail.5s.py`)
 15. **Config Module** (`src/config.rs`): Configuration file management
 16. **Types Module** (`src/types.rs`): Core data structures and enums
 17. **Models Module** (`src/models.rs`): Model pricing definitions

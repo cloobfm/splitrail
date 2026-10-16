@@ -23,6 +23,7 @@ mod cursor_limits;
 mod droid_limits;
 mod warp_limits;
 mod self_update;
+mod status_file;
 mod reqwest_simd_json;
 mod tui;
 mod types;
@@ -399,6 +400,9 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
         None => stats_manager.get_stats_receiver(),
     };
 
+    // The menu bar's numbers (SwiftBar), from the same merged stats the TUI shows.
+    tokio::spawn(status_file::run(tui_stats.clone()));
+
     // Start real-time TUI with file watcher
     if let Err(e) = tui::run_tui(
         tui_stats,
@@ -442,6 +446,15 @@ async fn run_mqtt(config: config::Config) {
         }
     };
     tokio::spawn(mqtt::run(config.mqtt.clone(), stats_manager.get_stats_receiver()));
+    // On a Mac, keep the menu bar's status file current too, other machines included. Linux
+    // publishers have no menu bar and skip the roll-up subscription it needs.
+    if cfg!(target_os = "macos") {
+        let stats = match rollup::start(&config.mqtt, mqtt::host_slug()) {
+            Some(remote) => rollup::merged_channel(stats_manager.get_stats_receiver(), remote),
+            None => stats_manager.get_stats_receiver(),
+        };
+        tokio::spawn(status_file::run(stats));
+    }
     println!("Publishing to {host} (Ctrl-C to stop)");
 
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));

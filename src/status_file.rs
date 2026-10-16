@@ -1,0 +1,138 @@
+//! `~/.config/splitrail/status.json`: the live numbers for the menu bar (SwiftBar,
+//! `scripts/swiftbar/splitrail.5s.sh`), rewritten every few seconds while the dashboard or
+//! `splitrail-dashboard mqtt` runs. Other machines' columns are included, so the total covers
+//! every machine on the broker.
+//!
+//! ```json
+//! {"updated": 1792130000.0, "tks": 213.4, "cost_today": 41.2,
+//!  "tools": [{"name": "Claude (main)", "tks": 137.4, "cost_today": 30.1,
+//!             "limits": {"five_hour": {"used": 23.0, "resets_in": 5400}, ...}}],
+//!  "publishers": [{"host": "devbox-a", "version": "2.0.0-dash-0.53", "online": true, "behind": false}]}
+//! ```
+
+use chrono::Utc;
+use serde_json::{Value, json};
+use std::path::PathBuf;
+use std::time::Duration;
+use tokio::sync::watch;
+
+use crate::plan_limits::WindowStatus;
+use crate::types::MultiAnalyzerStats;
+
+const INTERVAL: Duration = Duration::from_secs(5);
+
+fn path() -> Option<PathBuf> {
+    Some(std::env::home_dir()?.join(".config/splitrail/status.json"))
+}
+
+fn round(value: f64, places: i32) -> f64 {
+    let factor = 10f64.powi(places);
+    (value * factor).round() / factor
+}
+
+fn window(window: Option<WindowStatus>) -> Value {
+    window.map_or(Value::Null, |w| {
+        json!({ "used": round(w.used_percentage, 1), "resets_in": w.resets_in_secs })
+    })
+}
+
+/// The file's contents for `stats` as of now. Tools idle today with no limits are left out.
+pub fn payload(stats: &MultiAnalyzerStats) -> Value {
+    let now = Utc::now();
+    let mut tools: Vec<_> = crate::mqtt::tool_states(stats, now, crate::plan_limits::limits_for_analyzer)
+        .into_iter()
+        .filter(|t| t.tks > 0.0 || t.cost_today > 0.0 || t.limits.is_some())
+        .collect();
+    tools.sort_by(|a, b| b.tks.total_cmp(&a.tks).then(b.cost_today.total_cmp(&a.cost_today)));
+    let publishers: Vec<Value> = crate::rollup::publishers()
+        .into_iter()
+        .map(|p| json!({ "host": p.host, "version": p.version, "online": p.online, "behind": p.behind() }))
+        .collect();
+    json!({
+        "updated": now.timestamp_millis() as f64 / 1000.0,
+        "version": env!("CARGO_PKG_VERSION"),
+        "tks": round(tools.iter().map(|t| t.tks).sum(), 1),
+        "cost_today": round(tools.iter().map(|t| t.cost_today).sum(), 2),
+        "tools": tools.iter().map(|t| json!({
+            "name": t.name,
+            "tks": round(t.tks, 1),
+            "cost_today": round(t.cost_today, 2),
+            "limits": {
+                "five_hour": window(t.limits.and_then(|l| l.five_hour)),
+                "seven_day": window(t.limits.and_then(|l| l.seven_day)),
+                "monthly": window(t.limits.and_then(|l| l.monthly)),
+            },
+        })).collect::<Vec<_>>(),
+        "publishers": publishers,
+    })
+}
+
+fn write(payload: &Value) -> std::io::Result<()> {
+    let Some(path) = path() else { return Ok(()) };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // Write-then-rename so the menu bar never reads a half-written file.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(payload)?)?;
+    std::fs::rename(tmp, path)
+}
+
+/// Rewrite the file every few seconds (tk/s decays between messages, so on a timer as well as
+/// on change) for as long as the stats channel lives.
+pub async fn run(mut stats_rx: watch::Receiver<MultiAnalyzerStats>) {
+    let mut ticker = tokio::time::interval(INTERVAL);
+    loop {
+        tokio::select! {
+            changed = stats_rx.changed() => if changed.is_err() { break },
+            _ = ticker.tick() => {}
+        }
+        let payload = payload(&stats_rx.borrow_and_update());
+        if let Err(e) = tokio::task::spawn_blocking(move || write(&payload)).await.unwrap_or(Ok(())) {
+            crate::utils::log_error(format!("Status file: {e}"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
+
+    fn tool(name: &str, output: u64, cost: f64, age_secs: i64) -> AgenticCodingToolStats {
+        let now = Utc::now();
+        AgenticCodingToolStats {
+            daily_stats: Default::default(),
+            num_conversations: 1,
+            analyzer_name: name.into(),
+            messages: vec![ConversationMessage {
+                application: Application::ClaudeCode,
+                date: now - chrono::Duration::seconds(age_secs),
+                project_hash: String::new(),
+                conversation_hash: "c".into(),
+                local_hash: None,
+                global_hash: name.to_string(),
+                model: Some("m".into()),
+                stats: Stats { output_tokens: output, cost, ..Default::default() },
+                role: MessageRole::Assistant,
+                content: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn totals_every_tool_busiest_first_skipping_idle_ones() {
+        let stats = MultiAnalyzerStats {
+            analyzer_stats: vec![
+                tool("Status Test Quiet", 900, 0.5, 60).into(),
+                tool("Status Test Busy", 9000, 2.0, 60).into(),
+                tool("Status Test Idle", 0, 0.0, 10 * 86_400).into(),
+            ],
+        };
+        let payload = payload(&stats);
+        let names: Vec<&str> = payload["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Status Test Busy", "Status Test Quiet"]);
+        assert_eq!(payload["tks"], 11.0); // 9,900 output tokens over the 15-minute window.
+        assert_eq!(payload["cost_today"], 2.5);
+    }
+}

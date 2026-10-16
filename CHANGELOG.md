@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.55] - 2026-10-15
+
+### Added
+- **Menu bar tk/s (SwiftBar).** The dashboard, and `splitrail-dashboard mqtt` on a Mac, rewrite
+  `~/.config/splitrail/status.json` every 5 seconds: overall tk/s and today's cost across every
+  machine, each tool's rate, cost and limits, and the other machines' publisher versions.
+  `scripts/swiftbar/splitrail.5s.py` shows `⚡ 69 tk/s` in the menu bar (grey when the file is
+  over a minute old) with a dropdown of tools, limit windows with reset times, devboxes, and
+  "Open dashboard", which attaches the `splitrail` tmux session in a new Warp window (through a
+  tab config) or Terminal, starting it if needed. Install with
+  `ln -s "$PWD/scripts/swiftbar/splitrail.5s.py" ~/.swiftbar/`.
+
 ## [2.0.0-dash-0.54] - 2026-10-15
 
 ### Changed
