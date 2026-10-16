@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.46] - 2026-10-15
+
+### Changed
+- **Remote columns shorten the machine before the tool.** `Claude Code` on `devbox-a` is now
+  `Claude@dev-a` rather than `CC@devbox-a`: the part of the machine name before its last `-` is
+  cut to three characters, and the tool is only abbreviated if that still does not fit.
+
 ## [2.0.0-dash-0.45] - 2026-10-15
 
 ### Fixed

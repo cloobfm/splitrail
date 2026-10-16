@@ -345,7 +345,7 @@ fn newer_remote_snapshot(local: &str) -> Option<String> {
         .map(|(_, s)| s.to_string())
 }
 
-/// The snapshot behind a remote Claude column (`CC@devbox-a`): that machine's newest, or a
+/// The snapshot behind a remote Claude column (`Claude@dev-a`): that machine's newest, or a
 /// newer one for the same login from anywhere, this machine included.
 fn remote_column_snapshot(column: &str) -> Option<String> {
     let (slug, tool) = crate::rollup::remote_source(column)?;
@@ -621,15 +621,15 @@ mod tests {
 
     #[test]
     fn a_remote_claude_column_shows_its_machines_login_and_limits() {
-        assert_eq!(remote_column_snapshot("CC@test-box"), None);
-        crate::rollup::register_remote_column("CC@test-box", "test_box", "Claude Code");
+        assert_eq!(remote_column_snapshot("Claude@tes-box"), None);
+        crate::rollup::register_remote_column("Claude@tes-box", "test_box", "Claude Code");
         crate::rollup::register_remote_column("Codex@test-box", "test_box", "Codex");
         set_remote_snapshots(
             "test_box",
             vec![serde_json::json!({"captured_at": 1000.0, "login_hash": crate::rollup::login_hash("dev@x.com"),
                 "login_name": "dev", "rate_limits": {"five_hour": {"used_percentage": 40.0, "resets_at": 9000.0}}})],
         );
-        let snapshot = remote_column_snapshot("CC@test-box").unwrap();
+        let snapshot = remote_column_snapshot("Claude@tes-box").unwrap();
         assert_eq!(parse_login(&snapshot).as_deref(), Some("dev"));
         assert_eq!(parse_snapshot(&snapshot, 1500.0).unwrap().five_hour.unwrap().used_percentage, 40.0);
         assert_eq!(remote_column_snapshot("Codex@test-box"), None, "only Claude has snapshots");

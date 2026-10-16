@@ -9,7 +9,7 @@
 //! * `splitrail/<host>/limits`: plan limit snapshots, with the login replaced by a hash.
 //!
 //! The dashboard subscribes to every other host's topics and appends a column per remote tool
-//! (`CC@devbox-a`), built from those: daily totals feed the summary, recent messages
+//! (`Claude@dev-a`), built from those: daily totals feed the summary, recent messages
 //! feed tk/s, the sparklines and activity state. Remote limit snapshots for an account this
 //! machine also uses replace the local one when they are newer (`plan_limits`), since a limit
 //! belongs to the account, not to the machine that last saw it.
@@ -384,9 +384,10 @@ fn remote_tools(slug: &str, host: &str, daily: &DailyPayload, recent: &RecentPay
 const COLUMN_CHARS: usize = 13;
 
 /// A remote tool's column, fitted to the summary's 13-character headers: its first word and the
-/// machine (`Claude@nas`), else the tool abbreviated (`Claude Code` → `CC@devbox-a`), else the
-/// tool's initial with the machine shortened in the middle. `keep_label` keeps an account label
-/// (`Claude (v)` → `C(v)@devbox-a`) for a tool with two accounts.
+/// machine (`Claude@nas`), else with the machine shortened (`devbox-a` → `Claude@dev-a`), else the
+/// tool abbreviated (`CC@devbox-a`), else the tool's initial with the machine cut in the middle.
+/// `keep_label` keeps an account label (`Claude (v)` → `Cld(v)@dev-a`) for a tool with two
+/// accounts.
 pub fn remote_name(tool: &str, host: &str, keep_label: bool) -> String {
     let (base, label) = match tool.find('(').filter(|_| keep_label) {
         Some(i) => (tool[..i].trim(), tool[i..].replace(' ', "")),
@@ -394,20 +395,36 @@ pub fn remote_name(tool: &str, host: &str, keep_label: bool) -> String {
     };
     let first = base.split_whitespace().next().unwrap_or(base);
     let initial: String = base.chars().take(1).collect();
-    let forms = [
-        format!("{first}{label}"),
-        format!("{}{label}", abbreviate(base)),
-        format!("{initial}{label}"),
+    let short_host = shorten_host(host);
+    let first = format!("{first}{label}");
+    let abbreviated = format!("{}{label}", abbreviate(base));
+    let initial = format!("{initial}{label}");
+    let candidates = [
+        (&first, host),
+        (&first, short_host.as_str()),
+        (&abbreviated, host),
+        (&abbreviated, short_host.as_str()),
+        (&initial, short_host.as_str()),
     ];
-    for form in &forms {
+    for (form, host) in candidates {
         let name = format!("{form}@{host}");
         if name.chars().count() <= COLUMN_CHARS {
             return name;
         }
     }
-    let form = &forms[2];
-    let room = COLUMN_CHARS.saturating_sub(form.chars().count() + 1);
-    format!("{form}@{}", squeeze(host, room))
+    let room = COLUMN_CHARS.saturating_sub(initial.chars().count() + 1);
+    format!("{initial}@{}", squeeze(&short_host, room))
+}
+
+/// A machine name with the part before its last `-` cut to three characters, keeping the suffix
+/// that tells siblings apart (`devbox-a` → `dev-a`); unchanged without a `-`.
+fn shorten_host(host: &str) -> String {
+    match host.rsplit_once('-') {
+        Some((stem, suffix)) if !suffix.is_empty() => {
+            format!("{}-{suffix}", stem.chars().take(3).collect::<String>())
+        }
+        _ => host.to_string(),
+    }
 }
 
 /// Initials of a tool's words and inner capitals (`Claude Code` → `CC`, `OpenCode` → `OC`), or
@@ -477,7 +494,7 @@ pub(crate) fn register_remote_column(column: &str, slug: &str, tool: &str) {
     }
 }
 
-/// Where a remote column (`CC@devbox-a`) comes from: the machine's slug and the tool's name
+/// Where a remote column (`Claude@dev-a`) comes from: the machine's slug and the tool's name
 /// there (`Claude Code`); `None` for a local column.
 pub fn remote_source(column: &str) -> Option<(String, String)> {
     remote_columns().lock().ok()?.get(column).cloned()
@@ -718,7 +735,7 @@ mod tests {
         let daily: DailyPayload = serde_json::from_str(&serde_json::to_string(&daily).unwrap()).unwrap();
         let recent: RecentPayload = serde_json::from_str(&serde_json::to_string(&recent).unwrap()).unwrap();
         let tools = remote_tools("devbox_a", "devbox-a", &daily, &recent);
-        let claude = tools.iter().find(|t| t.analyzer_name == "CC@devbox-a").unwrap();
+        let claude = tools.iter().find(|t| t.analyzer_name == "Claude@dev-a").unwrap();
         assert_eq!(claude.daily_stats.len(), 1);
         assert_eq!(claude.messages.len(), 2);
         assert_eq!(claude.messages[1].stats.output_tokens, 900);
@@ -729,13 +746,17 @@ mod tests {
 
     #[test]
     fn remote_names_fit_a_column() {
-        assert_eq!(remote_name("Codex", "devbox-a", false), "Cdx@devbox-a");
-        assert_eq!(remote_name("Claude Code", "devbox-a", false), "CC@devbox-a");
+        assert_eq!(remote_name("Claude Code", "devbox-a", false), "Claude@dev-a");
         assert_eq!(remote_name("OpenCode", "devbox-a", false), "OC@devbox-a");
+        assert_eq!(remote_name("Codex", "devbox-a", false), "Codex@dev-a");
         assert_eq!(remote_name("Claude Code", "nas", false), "Claude@nas");
-        assert_eq!(remote_name("Claude (v)", "devbox-a", true), "C(v)@devbox-a");
-        assert_eq!(remote_name("Claude (main)", "devbox-a", true), "C(main)@de…-a");
-        for name in [remote_name("Claude Code", "a-very-long-hostname", false), remote_name("Claude (main)", "devbox-a", true)] {
+        assert_eq!(remote_name("Claude Code", "buildserver", false), "C@buildserver");
+        assert_eq!(remote_name("Claude (v)", "devbox-a", true), "Cld(v)@dev-a");
+        for name in [
+            remote_name("Claude Code", "a-very-long-hostname", false),
+            remote_name("Claude Code", "averylonghostname", false),
+            remote_name("Claude (main)", "devbox-a", true),
+        ] {
             assert!(name.chars().count() <= COLUMN_CHARS, "{name}");
         }
     }
