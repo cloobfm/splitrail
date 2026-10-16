@@ -1174,7 +1174,11 @@ pub fn update_spans() -> Vec<Span<'static>> {
         use crate::rollup::PublisherUpdate;
         let version = publisher.version.as_deref().map(short).unwrap_or_else(|| "old".into());
         let (text, color) = match publisher.update {
-            PublisherUpdate::Updating => (format!("{version}⏳"), Color::Yellow),
+            // Its turn has come (a progress entry) or it waits for the machine before it.
+            PublisherUpdate::Updating => match crate::self_update::progress(&publisher.slug) {
+                Some(progress) => (format!("{version}⏳ {}", progress.label()), Color::Yellow),
+                None => (format!("{version}⏳ queued"), Color::Yellow),
+            },
             PublisherUpdate::Failed => (format!("{version}❌"), Color::Red),
             PublisherUpdate::Idle if !publisher.online => ("off".to_string(), Color::DarkGray),
             PublisherUpdate::Idle if publisher.behind() => (format!("{version}⬆"), Color::Yellow),
@@ -1192,7 +1196,12 @@ pub fn update_spans() -> Vec<Span<'static>> {
         crate::self_update::State::Available(v) => {
             Some((format!("⬆ {} · U to update", short(&v)), Color::Yellow))
         }
-        crate::self_update::State::Building(v) => Some((format!("⏳ building {}", short(&v)), Color::Yellow)),
+        crate::self_update::State::Building(v) => {
+            let progress = crate::self_update::progress(crate::self_update::LOCAL)
+                .map(|p| format!(" · {}", p.label()))
+                .unwrap_or_default();
+            Some((format!("⏳ building {}{progress}", short(&v)), Color::Yellow))
+        }
         crate::self_update::State::Ready(v) => Some((format!("🔄 restarting into {}", short(&v)), Color::Green)),
         crate::self_update::State::Failed(_) => {
             Some(("❌ update failed: ~/.config/splitrail/update.log".to_string(), Color::Red))

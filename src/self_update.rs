@@ -97,6 +97,154 @@ pub async fn watch() {
     }
 }
 
+/// A build's progress: when it started and cargo's `done/total` crate count, by what is being
+/// updated (`LOCAL`, or a publisher's slug).
+#[derive(Debug, Clone, Copy)]
+pub struct Progress {
+    pub started: std::time::Instant,
+    pub done: u32,
+    pub total: u32,
+    /// How long the same update took last time, in seconds.
+    pub expected: Option<u64>,
+}
+
+fn clock(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+impl Progress {
+    /// `63% · 1:42` while many crates remain; otherwise the timer against last time's duration
+    /// (`0:25 of ~0:55`). An incremental build spends nearly all its time on the last crate or
+    /// two, where a percentage would sit at 99%.
+    pub fn label(&self) -> String {
+        let timer = clock(self.started.elapsed().as_secs());
+        if self.total > 0 && self.total - self.done.min(self.total) > 3 {
+            format!("{}% · {timer}", self.done * 100 / self.total)
+        } else if let Some(expected) = self.expected {
+            format!("{timer} of ~{}", clock(expected))
+        } else {
+            timer
+        }
+    }
+}
+
+fn durations_path() -> Option<PathBuf> {
+    Some(std::env::home_dir()?.join(".config/splitrail/update_durations.json"))
+}
+
+/// Seconds each kind of update took last time, by key.
+fn durations() -> serde_json::Map<String, serde_json::Value> {
+    durations_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// The key a duration is remembered under: the profile for this dashboard, the machine for a
+/// publisher (the first one in a round also builds the Linux binary).
+fn duration_key(key: &str) -> String {
+    if key == LOCAL {
+        format!("local-{}", if cfg!(debug_assertions) { "debug" } else { "release" })
+    } else {
+        format!("publisher-{key}")
+    }
+}
+
+fn remember_duration(key: &str, secs: u64) {
+    let mut all = durations();
+    all.insert(duration_key(key), secs.into());
+    if let Some(path) = durations_path() {
+        let _ = std::fs::write(path, serde_json::Value::Object(all).to_string());
+    }
+}
+
+pub const LOCAL: &str = "";
+
+static PROGRESS: Mutex<Vec<(String, Progress)>> = Mutex::new(Vec::new());
+
+pub fn progress(key: &str) -> Option<Progress> {
+    PROGRESS.lock().ok()?.iter().find(|(k, _)| k == key).map(|(_, p)| *p)
+}
+
+fn set_progress(key: &str, change: impl FnOnce(&mut Progress)) {
+    if let Ok(mut all) = PROGRESS.lock() {
+        if let Some((_, p)) = all.iter_mut().find(|(k, _)| k == key) {
+            change(p);
+        } else {
+            let expected = durations().get(&duration_key(key)).and_then(|v| v.as_u64());
+            let mut p = Progress { started: std::time::Instant::now(), done: 0, total: 0, expected };
+            change(&mut p);
+            all.push((key.to_string(), p));
+        }
+    }
+}
+
+fn clear_progress(key: &str) {
+    if let Ok(mut all) = PROGRESS.lock() {
+        all.retain(|(k, _)| k != key);
+    }
+}
+
+/// Cargo's `done/total` from one progress line (`Building [===>  ] 120/300: crate`).
+pub fn parse_progress(line: &str) -> Option<(u32, u32)> {
+    let rest = line.trim_start().strip_prefix("Building [")?;
+    let counts = rest.split("] ").nth(1)?.split(':').next()?;
+    let (done, total) = counts.split_once('/')?;
+    Some((done.trim().parse().ok()?, total.trim().parse().ok()?))
+}
+
+/// Run `command` with its output appended to `log`, tracking cargo's progress under `key`.
+/// Cargo only draws progress for a terminal unless told to; those redraws are kept out of the log.
+fn run_tracked(mut command: std::process::Command, log: Option<std::fs::File>, key: &str) -> bool {
+    use std::io::{Read, Write};
+    command
+        .env("CARGO_TERM_PROGRESS_WHEN", "always")
+        .env("CARGO_TERM_PROGRESS_WIDTH", "100")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    // Never the terminal: the TUI owns it.
+    match log.as_ref().and_then(|l| l.try_clone().ok()) {
+        Some(out) => command.stdout(out),
+        None => command.stdout(std::process::Stdio::null()),
+    };
+    set_progress(key, |_| {});
+    let Ok(mut child) = command.spawn() else {
+        clear_progress(key);
+        return false;
+    };
+    if let Some(mut stderr) = child.stderr.take() {
+        let mut log = log;
+        let mut buf = [0u8; 4096];
+        let mut pending = Vec::new();
+        while let Ok(n) = stderr.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            for &byte in &buf[..n] {
+                if byte != b'\r' && byte != b'\n' {
+                    pending.push(byte);
+                    continue;
+                }
+                let line = String::from_utf8_lossy(&pending).into_owned();
+                pending.clear();
+                if let Some((done, total)) = parse_progress(&line) {
+                    set_progress(key, |p| (p.done, p.total) = (done, total));
+                } else if !line.trim().is_empty()
+                    && let Some(log) = log.as_mut()
+                {
+                    let _ = writeln!(log, "{line}");
+                }
+            }
+        }
+    }
+    let ok = child.wait().is_ok_and(|s| s.success());
+    if ok && let Some(progress) = progress(key) {
+        remember_duration(key, progress.started.elapsed().as_secs());
+    }
+    clear_progress(key);
+    ok
+}
+
 fn log_path() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join(".config/splitrail/update.log"))
 }
@@ -119,22 +267,13 @@ pub fn start() {
         if !cfg!(debug_assertions) {
             command.arg("--release");
         }
-        command.current_dir(source_dir()).stdin(std::process::Stdio::null());
-        if let Some(log) = log_path().and_then(|p| std::fs::File::create(p).ok())
-            && let Ok(err) = log.try_clone()
-        {
-            command.stdout(log).stderr(err);
-        }
-        match command.status() {
-            Ok(status) if status.success() => {
-                set(State::Ready(version));
-                RESTART.store(true, Ordering::Relaxed);
-            }
-            Ok(_) => set(State::Failed(version)),
-            Err(e) => {
-                crate::utils::log_error(format!("Update: could not run cargo: {e}"));
-                set(State::Failed(version));
-            }
+        command.current_dir(source_dir());
+        let log = log_path().and_then(|p| std::fs::File::create(p).ok());
+        if run_tracked(command, log, LOCAL) {
+            set(State::Ready(version));
+            RESTART.store(true, Ordering::Relaxed);
+        } else {
+            set(State::Failed(version));
         }
     });
 }
@@ -169,16 +308,8 @@ fn start_publishers() {
         });
         for target in targets {
             let mut command = std::process::Command::new(source_dir().join("scripts/install_mqtt_publisher.sh"));
-            command
-                .args([&target.host, &broker, &user])
-                .current_dir(source_dir())
-                .stdin(std::process::Stdio::null());
-            if let Some(out) = log.as_ref().and_then(|l| l.try_clone().ok())
-                && let Ok(err) = out.try_clone()
-            {
-                command.stdout(out).stderr(err);
-            }
-            let ok = command.status().is_ok_and(|s| s.success());
+            command.args([&target.host, &broker, &user]).current_dir(source_dir());
+            let ok = run_tracked(command, log.as_ref().and_then(|l| l.try_clone().ok()), &target.slug);
             if !ok {
                 crate::utils::log_error(format!("Update: installing on {} failed; see ~/.config/splitrail/update.log", target.host));
             }
@@ -211,6 +342,18 @@ mod tests {
         assert!(is_newer("2.0.0-dash-0.100", "2.0.0-dash-0.99"));
         assert!(!is_newer("2.0.0-dash-0.50", "2.0.0-dash-0.50"));
         assert!(!is_newer("2.0.0-dash-0.49", "2.0.0-dash-0.50"));
+    }
+
+    #[test]
+    fn reads_cargo_progress_lines() {
+        assert_eq!(parse_progress("    Building [=====>      ] 120/300: serde, tokio"), Some((120, 300)));
+        assert_eq!(parse_progress("    Building [             ] 0/2: itoa"), Some((0, 2)));
+        assert_eq!(parse_progress("   Compiling itoa v1.0.15"), None);
+        let progress = Progress { started: std::time::Instant::now(), done: 63, total: 100, expected: Some(55) };
+        assert_eq!(progress.label(), "63% · 0:00");
+        // Near the end of the crate list the percentage says nothing; last time's duration does.
+        assert_eq!(Progress { done: 98, ..progress }.label(), "0:00 of ~0:55");
+        assert_eq!(Progress { total: 0, expected: None, ..progress }.label(), "0:00");
     }
 
     #[test]

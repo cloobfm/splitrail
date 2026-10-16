@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.57] - 2026-10-15
+
+### Added
+- **Update progress.** `⏳ building 0.57 · 63% · 1:42` in the header while `U` builds, and per
+  machine while publishers update (`dev-a 0.53⏳ 0:32 of ~1:50`, `dev-b 0.53⏳ queued`). The
+  percentage is cargo's crate count (forced on for a pipe with `CARGO_TERM_PROGRESS_WHEN`); near
+  the end of the list, where an incremental build spends its time, the timer is shown against how
+  long the same update took last time (`~/.config/splitrail/update_durations.json`). Cargo's
+  progress redraws are kept out of `update.log`.
+
 ## [2.0.0-dash-0.55] - 2026-10-15
 
 ### Added
