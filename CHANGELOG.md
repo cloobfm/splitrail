@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.48] - 2026-10-15
+
+### Changed
+- **Bursts past the top of a histogram burn like a flame.** A slot above its scale draws its full
+  bar in blue, and at three times the scale or more in white, so a clipped burst is told apart
+  from one that merely fills the bar.
+
 ## [2.0.0-dash-0.47] - 2026-10-15
 
 ### Fixed

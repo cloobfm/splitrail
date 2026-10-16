@@ -1179,8 +1179,13 @@ fn sparkline_spans(buckets: &[u64], stable_max: u64) -> Vec<Span<'static>> {
                 let idx = ((ratio * (chars.len() - 1) as f64) as usize).max(1);
                 let ch = chars[idx.min(chars.len() - 1)];
 
-                // Gradient colors: green (low) -> yellow (medium) -> red (high)
-                let color = if ratio < 0.33 {
+                // Gradient colors: green (low) -> yellow (medium) -> red (high), and past the
+                // top like a flame: blue over the scale, white-hot at three times it.
+                let color = if count >= stable_max.saturating_mul(3) {
+                    Color::White
+                } else if count > stable_max {
+                    Color::LightBlue
+                } else if ratio < 0.33 {
                     Color::Green
                 } else if ratio < 0.66 {
                     Color::Yellow
@@ -2390,6 +2395,8 @@ mod overall_sparkline_tests {
         let bars = heights(&cache[OVERALL_SPARKLINE]);
         assert_eq!(bars.chars().last(), Some('⣿'));
         assert_eq!(bars.chars().rev().nth(1), Some('⣿'), "steady slots stay tall: {bars}");
+        let colors: Vec<_> = cache[OVERALL_SPARKLINE].iter().rev().take(2).map(|s| s.style.fg).collect();
+        assert_eq!(colors, [Some(Color::White), Some(Color::Red)], "the burst burns white-hot");
 
         // Each mode is scaled to the bars it draws: a burst only verbose mode shows.
         let g = tool("G", &[5], 2000, now);
