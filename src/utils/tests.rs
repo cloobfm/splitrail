@@ -127,6 +127,63 @@ mod tests {
         assert_eq!(cutoff, watermark, "a lagging watermark pulls the cutoff back");
     }
 
+    /// The upload path collected every retained message and *then* filtered to the handful past
+    /// the watermark, cloning the whole corpus to keep a few (BZL-14 phase 4). Collecting only
+    /// what qualifies must give exactly the same result.
+    #[test]
+    fn pending_upload_matches_clone_then_filter() {
+        use crate::utils::messages_pending_upload;
+
+        let at = |ms: i64| ConversationMessage {
+            application: Application::ClaudeCode,
+            date: chrono::DateTime::from_timestamp_millis(ms).unwrap(),
+            project_hash: "p".into(),
+            conversation_hash: "c".into(),
+            local_hash: None,
+            global_hash: ms.to_string(),
+            model: None,
+            stats: Stats::default(),
+            role: MessageRole::User,
+            content: None,
+        };
+
+        let one = std::sync::Arc::new(crate::types::AgenticCodingToolStats {
+            daily_stats: Default::default(),
+            num_conversations: 0,
+            messages: vec![at(1_000), at(5_000)],
+            analyzer_name: "a".into(),
+        });
+        let two = std::sync::Arc::new(crate::types::AgenticCodingToolStats {
+            daily_stats: Default::default(),
+            num_conversations: 0,
+            messages: vec![at(3_000), at(9_000)],
+            analyzer_name: "b".into(),
+        });
+        let stats = crate::types::MultiAnalyzerStats {
+            analyzer_stats: vec![one.clone(), two.clone()],
+        };
+
+        let watermark = 3_000;
+
+        // What the old path produced: flatten everything, then filter.
+        let mut expected: Vec<String> = [one.messages.clone(), two.messages.clone()]
+            .concat()
+            .into_iter()
+            .filter(|m| m.date.timestamp_millis() >= watermark)
+            .map(|m| m.global_hash)
+            .collect();
+        expected.sort();
+
+        let mut got: Vec<String> = messages_pending_upload(watermark, &stats)
+            .into_iter()
+            .map(|m| m.global_hash)
+            .collect();
+        got.sort();
+
+        assert_eq!(got, expected, "same messages as clone-then-filter");
+        assert_eq!(got, ["3000", "5000", "9000"], "the message exactly at the watermark counts");
+    }
+
     #[test]
     fn test_aggregate_by_date_empty() {
         let messages = vec![];

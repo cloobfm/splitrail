@@ -163,14 +163,8 @@ pub async fn perform_background_upload(
             return None;
         }
 
-        let mut messages = vec![];
-        for analyzer_stats in &stats.analyzer_stats {
-            messages.extend(analyzer_stats.messages.iter().cloned());
-        }
-
-        let messages = utils::get_messages_later_than(config.upload.last_date_uploaded, messages)
-            .await
-            .ok()?;
+        // Clones only what is actually pending, not the whole corpus (BZL-14 phase 4).
+        let messages = utils::messages_pending_upload(config.upload.last_date_uploaded, &stats);
 
         if messages.is_empty() {
             return Some(Ok(())); // Nothing new to upload

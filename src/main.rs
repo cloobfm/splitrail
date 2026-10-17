@@ -577,10 +577,6 @@ async fn run_upload() -> Result<()> {
     .await;
     let registry = create_analyzer_registry();
     let stats = registry.load_all_stats().await?;
-    let mut messages = vec![];
-    for analyzer_stats in &stats.analyzer_stats {
-        messages.extend(analyzer_stats.messages.iter().cloned());
-    }
 
     // Load config file to get formatting options
     let config_file = config::Config::load().unwrap_or(None).unwrap_or_default();
@@ -593,10 +589,9 @@ async fn run_upload() -> Result<()> {
 
     match config::Config::load() {
         Ok(Some(mut config)) if config.is_configured() => {
+            // Clones only what is pending, not every retained message (BZL-14 phase 4).
             let messages =
-                utils::get_messages_later_than(config.upload.last_date_uploaded, messages)
-                    .await
-                    .context("Failed to get messages later than last saved date")?;
+                utils::messages_pending_upload(config.upload.last_date_uploaded, &stats);
             let progress_callback = tui::create_upload_progress_callback(&format_options);
             upload::upload_message_stats(&messages, &mut config, progress_callback)
                 .await

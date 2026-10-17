@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.87] - 2026-10-17
+
+BZL-14 phase 4.
+
+### Changed
+- The upload paths clone only the messages actually pending. `upload.rs`, `watcher.rs` and
+  `main.rs` each flattened every retained message into one vector and *then* filtered it to those
+  past the watermark — copying the whole corpus to keep a handful. `utils::messages_pending_upload`
+  filters while collecting, and replaces `get_messages_later_than`, which was also `async` without
+  containing a single await.
+
+### Note on the other phases
+- **Phase 3 (day drill-down re-parses on demand) needs no work.** The drill-down already reads
+  `daily_stats` rather than raw messages, since 0.18 moved `active_seconds` into the aggregate.
+- **Phase 2b (persist the ledger) is not worth building as specified.** Its two motivations have
+  both been addressed by other work: startup is 4.32 s cold / 0.13 s warm (measured, all 11
+  analyzers, release build) after the BZL-74 caches, and the memory it was meant to reclaim went
+  with the incremental fold in 0.20. Persisting derived state across restarts would add a
+  versioned on-disk format and a new way to report numbers from state not just read — the failure
+  shape behind two of today's three real defects. Recorded on BZL-14 rather than built.
+
 ## [2.0.0-dash-0.86] - 2026-10-17
 
 BZL-74, second pass: Kiro CLI, Ollama and Cursor Agent, plus companion-file stamping.

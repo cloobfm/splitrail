@@ -654,18 +654,22 @@ pub fn aggregate_by_date(entries: &[ConversationMessage]) -> BTreeMap<String, Da
 }
 
 /// Filters messages to only include those created after a specific date
-pub async fn get_messages_later_than(
+/// Messages at or after the upload watermark, across every analyzer.
+///
+/// Cloning happens only for messages that qualify. The upload paths used to flatten every
+/// retained message into one vector and filter that, which copied the whole corpus to keep the
+/// handful actually pending (BZL-14 phase 4).
+pub fn messages_pending_upload(
     date: i64,
-    messages: Vec<ConversationMessage>,
-) -> Result<Vec<ConversationMessage>> {
-    let mut messages_later_than_date = Vec::new();
-    for msg in messages {
-        if msg.date.timestamp_millis() >= date {
-            messages_later_than_date.push(msg);
-        }
-    }
-
-    Ok(messages_later_than_date)
+    stats: &crate::types::MultiAnalyzerStats,
+) -> Vec<ConversationMessage> {
+    stats
+        .analyzer_stats
+        .iter()
+        .flat_map(|analyzer| analyzer.messages.iter())
+        .filter(|msg| msg.date.timestamp_millis() >= date)
+        .cloned()
+        .collect()
 }
 
 pub fn hash_text(text: &str) -> String {

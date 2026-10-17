@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_types::event::{Event, EventKind};
 use std::collections::HashSet;
@@ -473,16 +473,12 @@ impl RealtimeStatsManager {
             _ => return Ok(()), // Config not available or incomplete
         };
 
-        // Collect all messages from current stats
-        let mut messages = vec![];
-        for analyzer_stats in &self.current_stats.analyzer_stats {
-            messages.extend(analyzer_stats.messages.iter().cloned());
-        }
-
-        // Filter messages to upload only those not yet uploaded
-        let messages_to_upload = utils::get_messages_later_than(config.upload.last_date_uploaded, messages)
-            .await
-            .context("Failed to get messages later than last saved date")?;
+        // Only the messages past the watermark are cloned, not every retained one (BZL-14
+        // phase 4).
+        let messages_to_upload = utils::messages_pending_upload(
+            config.upload.last_date_uploaded,
+            &self.current_stats,
+        );
 
         if messages_to_upload.is_empty() {
             return Ok(()); // Nothing to upload
