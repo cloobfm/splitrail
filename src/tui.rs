@@ -192,6 +192,85 @@ pub struct ClockTitleCache {
     pub tks_display: String,
 }
 
+/// How a tool tab groups its rows (`g` cycles them).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Period {
+    #[default]
+    Day,
+    Week,
+    Month,
+}
+
+impl Period {
+    fn next(self) -> Self {
+        match self {
+            Period::Day => Period::Week,
+            Period::Week => Period::Month,
+            Period::Month => Period::Day,
+        }
+    }
+
+    /// Short unit for the totals row: `Total (30d)`.
+    fn unit(self) -> &'static str {
+        match self {
+            Period::Day => "d",
+            Period::Week => "w",
+            Period::Month => "mo",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Period::Day => "day",
+            Period::Week => "week",
+            Period::Month => "month",
+        }
+    }
+
+    /// The row a `YYYY-MM-DD` day belongs to, as a key that sorts in time order:
+    /// the day itself, `2026-W42` (ISO week) or `2026-10`.
+    fn key(self, day: &str) -> String {
+        let Ok(date) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d") else {
+            return day.to_string();
+        };
+        match self {
+            Period::Day => day.to_string(),
+            Period::Week => {
+                let week = chrono::Datelike::iso_week(&date);
+                format!("{}-W{:02}", week.year(), week.week())
+            }
+            Period::Month => date.format("%Y-%m").to_string(),
+        }
+    }
+}
+
+/// `stats` with its days merged into weeks or months. Only the daily totals are carried over,
+/// which is all the table reads.
+fn group_by_period(stats: &AgenticCodingToolStats, period: Period) -> AgenticCodingToolStats {
+    let mut grouped: std::collections::BTreeMap<String, crate::types::DailyStats> = Default::default();
+    for (day, day_stats) in &stats.daily_stats {
+        let key = period.key(day);
+        let row = grouped.entry(key.clone()).or_insert_with(|| crate::types::DailyStats {
+            date: key,
+            ..Default::default()
+        });
+        row.user_messages += day_stats.user_messages;
+        row.ai_messages += day_stats.ai_messages;
+        row.conversations += day_stats.conversations;
+        row.active_seconds += day_stats.active_seconds;
+        for (model, count) in &day_stats.models {
+            *row.models.entry(model.clone()).or_default() += count;
+        }
+        crate::utils::add_stats_delta_into_day(row, &day_stats.stats, day_stats.stats.cost);
+    }
+    AgenticCodingToolStats {
+        daily_stats: grouped,
+        num_conversations: stats.num_conversations,
+        messages: Vec::new(),
+        analyzer_name: stats.analyzer_name.clone(),
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TuiState {
     pub selected_tab: usize,
@@ -207,6 +286,8 @@ pub struct TuiState {
     pub quotas_view: bool,
     /// `r` on the Summary tab: personal bests instead of the summary.
     pub records_view: bool,
+    /// Rows on the tool tabs: days, weeks or months.
+    pub period: Period,
     pub daily_stats_view_start: usize, // For daily stats pagination (0 = most recent 30 days)
     pub status_message: Option<String>, // Temporary status messages (Slack toggle, etc.)
     pub status_message_timer: Option<std::time::Instant>, // Auto-clear timer for status messages
@@ -735,6 +816,16 @@ async fn run_app(
                     if key.code == KeyCode::Char('p') && tui_state.selected_tab == 0 {
                         tui_state.quotas_view = !tui_state.quotas_view;
                         tui_state.records_view = false;
+                        needs_redraw = true;
+                        continue;
+                    }
+
+                    if key.code == KeyCode::Char('g') && tui_state.selected_tab > 0 {
+                        tui_state.period = tui_state.period.next();
+                        tui_state.daily_stats_view_start = 0;
+                        for state in table_states.iter_mut() {
+                            state.select(Some(0));
+                        }
                         needs_redraw = true;
                         continue;
                     }
@@ -1474,13 +1565,21 @@ fn draw_ui(
                     current_table_state.select(Some(0));
                 }
                 // Main table
+                let grouped;
+                let table_stats: &AgenticCodingToolStats = if tui_state.period == Period::Day {
+                    current_stats
+                } else {
+                    grouped = group_by_period(current_stats, tui_state.period);
+                    &grouped
+                };
                 draw_daily_stats_table(
                     frame,
                     chunks[2],
-                    current_stats,
+                    table_stats,
                     format_options,
                     current_table_state,
                     tui_state.daily_stats_view_start,
+                    tui_state.period,
                 );
 
                 // Summary stats - pass all filtered stats for aggregation
@@ -1526,7 +1625,9 @@ fn draw_ui(
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, U: update, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, g: by {} (now {}), +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, U: update, q/Esc: quit",
+                tui_state.period.next().name(),
+                tui_state.period.name(),
                 mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
@@ -1683,6 +1784,7 @@ fn draw_daily_stats_table(
     format_options: &NumberFormatOptions,
     table_state: &mut TableState,
     view_start_offset: usize, // Pagination offset for viewing historical data
+    period: Period,
 ) -> usize {
     // Convert BTreeMap to Vec and reverse to show most recent first
     let all_dates: Vec<(&String, &crate::types::DailyStats)> = stats.daily_stats.iter().collect();
@@ -2110,7 +2212,7 @@ fn draw_daily_stats_table(
             Line::from(Span::raw(""))
         },
         Line::from(Span::styled(
-            format!("Total ({}d)", visible_dates_reversed.len()),
+            format!("Total ({}{})", visible_dates_reversed.len(), period.unit()),
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
@@ -2185,7 +2287,7 @@ fn draw_daily_stats_table(
             Constraint::Length(1),  // Arrow
             Constraint::Length(12), // Date - reduced from 15 to 12 since we shortened the text to "Total (XXd)"
             Constraint::Length(10), // Cost
-            Constraint::Length(13), // Cached (was 12, increased for larger numbers)
+            Constraint::Length(15), // Cached: monthly and 30-day totals pass 10B ("14,722,853,747")
             Constraint::Length(12), // Input (was 8, increased significantly)
             Constraint::Length(12), // Output (was 9, increased)
             Constraint::Length(12), // Reasoning (was 11, increased)
@@ -2449,4 +2551,37 @@ pub fn show_upload_error(error: &str) {
         Print(format!("✕ {}\n", error)),
         ResetColor
     );
+}
+
+#[cfg(test)]
+mod period_tests {
+    use super::*;
+
+    #[test]
+    fn days_group_into_iso_weeks_and_months_keeping_every_total() {
+        let mut stats = AgenticCodingToolStats {
+            daily_stats: Default::default(),
+            num_conversations: 0,
+            messages: Vec::new(),
+            analyzer_name: "t".into(),
+        };
+        // Sun Dec 28 2025 is ISO week 52 of 2025; Mon Dec 29 starts 2026-W01.
+        for (day, output, cost) in [("2025-12-28", 1, 1.0), ("2025-12-29", 10, 2.0), ("2026-01-02", 100, 4.0)] {
+            let mut d = crate::types::DailyStats::default();
+            d.stats.output_tokens = output;
+            d.stats.cost = cost;
+            d.stats.cache_creation_tokens = 7;
+            d.stats.cache_creation_1h_tokens = 5;
+            d.models.insert("m".into(), 1);
+            stats.daily_stats.insert(day.into(), d);
+        }
+        let weeks = group_by_period(&stats, Period::Week);
+        assert_eq!(weeks.daily_stats.keys().collect::<Vec<_>>(), ["2025-W52", "2026-W01"]);
+        let w1 = &weeks.daily_stats["2026-W01"];
+        assert_eq!((w1.stats.output_tokens, w1.stats.cost, w1.models["m"]), (110, 6.0, 2));
+        assert_eq!((w1.stats.cache_creation_tokens, w1.stats.cache_creation_1h_tokens), (14, 10));
+        let months = group_by_period(&stats, Period::Month);
+        assert_eq!(months.daily_stats.keys().collect::<Vec<_>>(), ["2025-12", "2026-01"]);
+        assert_eq!(months.daily_stats["2025-12"].stats.output_tokens, 11);
+    }
 }

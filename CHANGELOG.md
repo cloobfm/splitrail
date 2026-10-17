@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.84] - 2026-10-17
+
+### Added
+- **Weekly and monthly rows on the tool tabs (BZL-138).** `g` cycles each tool tab between
+  days, ISO weeks (`2026-W42`) and months (`2026-10`). Rows merge the daily totals, carrying
+  the 1h cache-write subset through. The totals row says what it counts (`Total (6mo)`), and
+  the help line shows the current grouping.
+
+### Fixed
+- **Cached-token totals were cut off.** The column was 13 wide, so totals of 10B or more lost
+  their leading digits (24.7B showed as "4,741,882,109"). It is now 15 wide.
+
 ## [2.0.0-dash-0.83] - 2026-10-17
 
 ### Fixed
