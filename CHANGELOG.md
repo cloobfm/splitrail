@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.76] - 2026-10-17
+
+### Added
+- **Quotas: what is left, and the pace needed to use it.** Each plan window now carries its
+  spend so far (input, output, cache and API-equivalent cost since the window began, from the
+  daily totals, every machine on the account summed), which measures what 1% of the allowance is
+  worth. From that the Quotas view (`p`) shows **Left** (output tokens and dollars until the
+  reset), **Need** (output tk/s from now to the reset to use it all; green when the current rate
+  keeps up, yellow when behind), **Now** (the last 15 minutes) and **Locked out** (time between
+  running out and the reset at the current pace). For Claude the ranking also gives the
+  remainder as Opus 5.5 / Fable 5.1 / Sonnet 5.5 output tokens, repricing the window's own
+  token mix on each model, so Fable's higher price is counted (about 1.8× Opus for a
+  cache-heavy mix). Rows are ordered by how much is about to be wasted, as the ranking, and the
+  columns fit narrower windows. `splitrail quotas`, its JSON and the MCP answers carry the same.
+
 ## [2.0.0-dash-0.75] - 2026-10-17
 
 ### Changed

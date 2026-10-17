@@ -1,6 +1,7 @@
 // Library interface for splitrail-dashboard
 // This allows benchmarking and testing of internal modules
 
+pub mod advisor;
 pub mod analyzer;
 pub mod analyzers;
 pub mod config;

@@ -219,28 +219,39 @@ fn print_quotas(as_json: bool) {
     if let Some(note) = quotas["stale"].as_str() {
         println!("⚠️  {note}\n");
     }
-    println!("{:<24} {:<34} {:<6} {:>5} {:>6} {:>7}  {:<10} {:<22} 5h now", "Tool", "Account", "Plan", "Used", "Pace", "Unused", "Runs out", "Resets");
+    println!(
+        "{:<22} {:<24} {:<6} {:>5} {:>14} {:>9} {:>9} {:>9} {:>11}  {:<20} 5h now",
+        "Tool", "Account", "Plan", "Used", "Left", "Need", "Now", "Runs out", "Locked out", "Resets"
+    );
     let pct = |v: &serde_json::Value| v.as_f64().map_or("-".into(), |p| format!("{p:.0}%"));
+    let tks = |v: &serde_json::Value| v.as_f64().filter(|t| *t > 0.0).map_or("-".into(), |t| format!("{t:.0} tk/s"));
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or("-").to_string();
     for row in quotas["plans"].as_array().into_iter().flatten() {
         let w = &row["plan"];
         let five = &row["five_hour_now"];
         let five = if five.is_null() {
             "-".to_string()
         } else {
-            format!("{} · {}", pct(&five["used_percent"]), five["resets_in"].as_str().unwrap_or("?"))
+            format!("{} · {}", pct(&five["used_percent"]), text(&five["resets_in"]))
+        };
+        let left = match (w["left_output_tokens"].as_f64(), w["left_dollars"].as_f64()) {
+            (Some(t), Some(d)) => format!("{} · ${d:.0}", advisor::human_tokens(t)),
+            _ => "-".into(),
         };
         println!(
-            "{:<24} {:<34} {:<6} {:>5} {:>6} {:>7}  {:<10} {:<22} {five}",
-            w["tool"].as_str().unwrap_or("?"),
-            w["account"].as_str().unwrap_or("-"),
-            w["window"].as_str().unwrap_or("?"),
+            "{:<22} {:<24} {:<6} {:>5} {:>14} {:>9} {:>9} {:>9} {:>11}  {:<20} {five}",
+            text(&w["tool"]),
+            text(&w["account"]).replace(" (personal)", ""),
+            text(&w["window"]),
             pct(&w["used_percent"]),
-            pct(&w["projected_percent_at_reset"]),
-            pct(&w["unused_at_reset_percent"]),
-            w["runs_out_in"].as_str().unwrap_or("-"),
+            left,
+            tks(&w["need_tks"]),
+            tks(&w["now_tks"]),
+            text(&w["runs_out_in"]),
+            text(&w["locked_out_for"]),
             format!(
                 "{} ({})",
-                w["resets_in"].as_str().unwrap_or("?"),
+                text(&w["resets_in"]),
                 w["resets_at"].as_str().map(|t| t.get(5..16).unwrap_or(t).replace('T', " ")).unwrap_or_default()
             ),
         );

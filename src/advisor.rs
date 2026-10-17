@@ -31,6 +31,135 @@ fn window_label(key: &str) -> &'static str {
     }
 }
 
+/// Tokens and cost spent inside one window, from the daily totals (the first day counted only
+/// from the window's start).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Spend {
+    pub input: f64,
+    pub output: f64,
+    pub cache_write: f64,
+    pub cache_read: f64,
+    /// API-equivalent dollars, as the dashboard prices them.
+    pub cost: f64,
+}
+
+impl Spend {
+    fn add(&mut self, other: &Spend) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_write += other.cache_write;
+        self.cache_read += other.cache_read;
+        self.cost += other.cost;
+    }
+
+    /// What the same tokens would have cost on `model`.
+    pub fn cost_on(&self, model: &str) -> f64 {
+        crate::models::calculate_total_cost(
+            model,
+            self.input as u64,
+            self.output as u64,
+            self.cache_write as u64,
+            self.cache_read as u64,
+        )
+    }
+
+    fn to_json(self) -> Value {
+        json!({"input": self.input.round(), "output": self.output.round(), "cache_write": self.cache_write.round(),
+               "cache_read": self.cache_read.round(), "cost": round2(self.cost)})
+    }
+
+    fn from_json(v: &Value) -> Option<Spend> {
+        let f = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+        v.is_object().then(|| Spend {
+            input: f("input"),
+            output: f("output"),
+            cache_write: f("cache_write"),
+            cache_read: f("cache_read"),
+            cost: f("cost"),
+        })
+    }
+}
+
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+
+/// A tool's spend since `start`, from its per-day totals. The first day counts only the share
+/// of it after `start` (daily totals have no hours), so this is close but not exact.
+pub fn window_spend(stats: &crate::types::AgenticCodingToolStats, start: DateTime<Utc>) -> Spend {
+    let start_local = start.with_timezone(&Local);
+    let first_day = start_local.date_naive();
+    let first_share = first_day
+        .succ_opt()
+        .and_then(|next| next.and_hms_opt(0, 0, 0))
+        .and_then(|midnight| midnight.and_local_timezone(Local).earliest())
+        .map_or(1.0, |midnight| ((midnight - start_local).num_seconds() as f64 / 86_400.0).clamp(0.0, 1.0));
+    let mut spend = Spend::default();
+    for (day, totals) in stats.daily_stats.range(first_day.format("%Y-%m-%d").to_string()..) {
+        let share = if *day == first_day.format("%Y-%m-%d").to_string() { first_share } else { 1.0 };
+        let t = &totals.stats;
+        spend.add(&Spend {
+            input: t.input_tokens as f64 * share,
+            output: t.output_tokens as f64 * share,
+            cache_write: t.cache_creation_tokens as f64 * share,
+            cache_read: t.cache_read_tokens as f64 * share,
+            cost: t.cost * share,
+        });
+    }
+    spend
+}
+
+/// Output tokens per second over the last 15 minutes, as the rest of the dashboard counts it.
+pub fn recent_tks(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc>) -> f64 {
+    let since = now - Duration::minutes(15);
+    let output: u64 = stats
+        .messages
+        .iter()
+        .filter(|m| m.role == crate::types::MessageRole::Assistant && m.date >= since && m.date <= now)
+        .map(|m| m.stats.output_tokens)
+        .sum();
+    output as f64 / 900.0
+}
+
+/// One tool's entry in the `status.json` shape, with each window's spend so far.
+pub fn tool_json(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc>) -> Option<Value> {
+    let name = stats.analyzer_name.as_str();
+    let limits = crate::plan_limits::limits_for_analyzer(name)?;
+    let window = |key: &str, w: Option<crate::plan_limits::WindowStatus>| {
+        w.map_or(Value::Null, |w| {
+            let spend = w
+                .resets_in_secs
+                .map(|left| window_spend(stats, now + Duration::seconds(left) - Duration::seconds(window_secs(key) as i64)));
+            json!({"used": w.used_percentage, "resets_in": w.resets_in_secs, "spend": spend.map(Spend::to_json)})
+        })
+    };
+    Some(json!({
+        "name": name,
+        "account": crate::plan_limits::account_for_analyzer(name),
+        "tks": round1(recent_tks(stats, now)),
+        "limits": {
+            "five_hour": window("five_hour", limits.five_hour),
+            "seven_day": window("seven_day", limits.seven_day),
+            "monthly": window("monthly", limits.monthly),
+        },
+    }))
+}
+
+/// Models to express a Claude plan's remaining allowance in, as (label, model).
+const CLAUDE_MODELS: [(&str, &str); 3] =
+    [("Opus 5.5", "claude-opus-5-5"), ("Fable 5.1", "claude-fable-5-1"), ("Sonnet 5.5", "claude-sonnet-5-5")];
+
+/// `1.6M`, `650k`, `900`.
+pub fn human_tokens(tokens: f64) -> String {
+    if tokens >= 1e6 {
+        format!("{:.1}M", tokens / 1e6)
+    } else if tokens >= 1e3 {
+        format!("{:.0}k", tokens / 1e3)
+    } else {
+        format!("{tokens:.0}")
+    }
+}
+
 /// A used share is "full" from here: the tool will refuse soon, so it is not somewhere to spend.
 const FULL: f64 = 95.0;
 
@@ -46,6 +175,10 @@ pub struct Window {
     pub resets_in_secs: Option<i64>,
     /// Used share at the reset if use carries on at the window's average rate so far.
     pub projected: Option<f64>,
+    /// Tokens and cost spent in the window so far, when the dashboard knows them.
+    pub spend: Option<Spend>,
+    /// The tool's output tk/s over the last 15 minutes.
+    pub now_tks: f64,
 }
 
 impl Window {
@@ -61,6 +194,51 @@ impl Window {
         let elapsed = length - left as f64;
         let per_sec = self.used / elapsed;
         Some(((100.0 - self.used) / per_sec) as i64)
+    }
+
+    /// Seconds between running out and the reset: time without this account at this pace.
+    pub fn locked_out_secs(&self) -> Option<i64> {
+        Some(self.resets_in_secs? - self.runs_out_in_secs()?)
+    }
+
+    /// API-equivalent dollars per 1% of the window, measured from what this window has used.
+    pub fn dollars_per_percent(&self) -> Option<f64> {
+        let spend = self.spend?;
+        (self.used >= 1.0 && spend.cost > 0.0).then(|| spend.cost / self.used)
+    }
+
+    /// Dollars of allowance left until the reset.
+    pub fn left_dollars(&self) -> Option<f64> {
+        Some(self.dollars_per_percent()? * (100.0 - self.used).max(0.0))
+    }
+
+    /// Output tokens the rest of the allowance buys, at this window's mix of models and cache.
+    pub fn left_output(&self) -> Option<f64> {
+        let spend = self.spend?;
+        (spend.output > 0.0).then_some(())?;
+        Some(spend.output * self.left_dollars()? / spend.cost)
+    }
+
+    /// Output tk/s needed from now until the reset to use the whole allowance.
+    pub fn need_tks(&self) -> Option<f64> {
+        let left = self.resets_in_secs.filter(|s| *s > 0)?;
+        Some(self.left_output()? / left as f64)
+    }
+
+    /// For a Claude plan: the remaining allowance as output tokens on each model, if this
+    /// window's work (its input, cache and output mix) had run on that model.
+    pub fn left_output_by_model(&self) -> Vec<(&'static str, f64)> {
+        let (Some(spend), Some(left)) = (self.spend, self.left_dollars()) else { return Vec::new() };
+        if !self.tool.contains("Claude") || spend.output <= 0.0 {
+            return Vec::new();
+        }
+        CLAUDE_MODELS
+            .iter()
+            .filter_map(|(label, model)| {
+                let cost = spend.cost_on(model);
+                (cost > 0.0).then(|| (*label, spend.output * left / cost))
+            })
+            .collect()
     }
 
     /// Quota projected to go unused at the reset, as a share of the window.
@@ -79,6 +257,15 @@ impl Window {
             "projected_percent_at_reset": self.projected.map(round1),
             "unused_at_reset_percent": round1(self.expiring()),
             "runs_out_in": self.runs_out_in_secs().map(human_secs),
+            "locked_out_for": self.locked_out_secs().map(human_secs),
+            "spend_so_far": self.spend.map(Spend::to_json),
+            "dollars_per_percent": self.dollars_per_percent().map(round2),
+            "left_dollars": self.left_dollars().map(round2),
+            "left_output_tokens": self.left_output().map(f64::round),
+            "left_output_tokens_by_model": self.left_output_by_model().into_iter()
+                .map(|(label, tokens)| (label.to_string(), json!(tokens.round()))).collect::<serde_json::Map<_, _>>(),
+            "need_tks": self.need_tks().map(round1),
+            "now_tks": round1(self.now_tks),
             "full": self.used >= FULL,
         })
     }
@@ -110,6 +297,7 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
     for tool in status.get("tools").and_then(Value::as_array).into_iter().flatten() {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("?");
         let account = tool.get("account").and_then(Value::as_str).map(str::to_string);
+        let now_tks = tool.get("tks").and_then(Value::as_f64).unwrap_or(0.0);
         for key in ["five_hour", "seven_day", "monthly"] {
             let Some(w) = tool.get("limits").and_then(|l| l.get(key)).filter(|w| !w.is_null()) else {
                 continue;
@@ -133,6 +321,8 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
                 resets_at: resets_in.map(|s| now + Duration::seconds(s)),
                 resets_in_secs: resets_in,
                 projected,
+                spend: w.get("spend").and_then(Spend::from_json),
+                now_tks,
             });
         }
     }
@@ -177,10 +367,22 @@ fn merge_shared_accounts(windows: Vec<Window>) -> Vec<Window> {
             // `Claude (main), dev-a`: the others by host when they are remote columns.
             let others: Vec<&str> = group[1..].iter().map(|t| t.rsplit('@').next().unwrap_or(t)).collect();
             let name = if others.is_empty() { group[0].clone() } else { format!("{}, {}", group[0], others.join(", ")) };
+            // The account's use is every column's: sum their spend and rate.
             windows
                 .iter()
                 .filter(|w| w.tool == group[0])
-                .map(|w| Window { tool: name.clone(), ..w.clone() })
+                .map(|w| {
+                    let mut merged = Window { tool: name.clone(), ..w.clone() };
+                    for other in windows.iter().filter(|o| group[1..].contains(&o.tool) && o.window == w.window) {
+                        merged.now_tks += other.now_tks;
+                        if let Some(more) = other.spend {
+                            let mut sum = merged.spend.unwrap_or_default();
+                            sum.add(&more);
+                            merged.spend = Some(sum);
+                        }
+                    }
+                    merged
+                })
                 .collect::<Vec<_>>()
         })
         .collect()
@@ -214,6 +416,14 @@ pub fn plan_rows(windows: &[Window]) -> Vec<PlanRow> {
         })
         .collect();
     rows.sort_by_key(|r| r.plan.resets_in_secs.unwrap_or(i64::MAX));
+    rows
+}
+
+/// `plan_rows` in ranking order: most quota about to be wasted first.
+pub fn plans_by_waste(windows: &[Window]) -> Vec<PlanRow> {
+    let picks = where_to_spend(windows);
+    let mut rows = plan_rows(windows);
+    rows.sort_by_key(|r| picks.iter().position(|p| p.tool == r.plan.tool).unwrap_or(usize::MAX));
     rows
 }
 
@@ -266,18 +476,27 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                         (None, None) => "too early to project".into(),
                     };
                     let resets = w.resets_in_secs.map(human_secs).unwrap_or_else(|| "?".into());
-                    Pick {
-                        tool: tool.to_string(),
-                        account: w.account.clone(),
-                        available: true,
-                        reason: format!(
-                            "{} window {:.0}% used, {pace}; about {:.0}% would go unused at its reset in {resets}",
-                            w.window,
-                            w.used,
-                            w.expiring()
-                        ),
-                        score,
+                    let mut reason = format!(
+                        "{} window {:.0}% used, {pace}; about {:.0}% would go unused at its reset in {resets}",
+                        w.window,
+                        w.used,
+                        w.expiring()
+                    );
+                    if let (Some(left), Some(need)) = (w.left_output(), w.need_tks()) {
+                        reason.push_str(&format!(
+                            ". Left: ~{} output tokens (${:.0}); to use it all: {need:.0} tk/s until the reset, now {:.0}",
+                            human_tokens(left),
+                            w.left_dollars().unwrap_or(0.0),
+                            w.now_tks
+                        ));
+                        let models = w.left_output_by_model();
+                        if !models.is_empty() {
+                            let list: Vec<String> =
+                                models.iter().map(|(m, t)| format!("{} {m}", human_tokens(*t))).collect();
+                            reason.push_str(&format!(" (≈ {} if all on one model)", list.join(" / ")));
+                        }
                     }
+                    Pick { tool: tool.to_string(), account: w.account.clone(), available: true, reason, score }
                 }
                 None => Pick { tool: tool.to_string(), account: None, available: true, reason: "no window data".into(), score: 0.0 },
             }
@@ -289,22 +508,10 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
 
 /// The same shape as `status.json`'s `tools`, built straight from each column's limits, for the
 /// dashboard's own Quotas view (no file needed).
-pub fn status_for_tools(names: &[&str]) -> Value {
-    let window = |w: Option<crate::plan_limits::WindowStatus>| {
-        w.map_or(Value::Null, |w| json!({"used": w.used_percentage, "resets_in": w.resets_in_secs}))
-    };
-    let tools: Vec<Value> = names
-        .iter()
-        .filter_map(|name| {
-            let limits = crate::plan_limits::limits_for_analyzer(name)?;
-            Some(json!({"name": name, "account": crate::plan_limits::account_for_analyzer(name), "limits": {
-                "five_hour": window(limits.five_hour),
-                "seven_day": window(limits.seven_day),
-                "monthly": window(limits.monthly),
-            }}))
-        })
-        .collect();
-    json!({"updated": Utc::now().timestamp_millis() as f64 / 1000.0, "tools": tools})
+pub fn status_for_tools(stats: &[&crate::types::AgenticCodingToolStats]) -> Value {
+    let now = Utc::now();
+    let tools: Vec<Value> = stats.iter().filter_map(|s| tool_json(s, now)).collect();
+    json!({"updated": now.timestamp_millis() as f64 / 1000.0, "tools": tools})
 }
 
 /// How old a status payload is, in seconds.
@@ -339,7 +546,7 @@ pub fn quotas_answer(status: &Value, now: DateTime<Utc>) -> Value {
     json!({
         "as_of": now.with_timezone(&Local).to_rfc3339(),
         "stale": freshness(status, now),
-        "plans": plan_rows(&all).iter().map(|r| json!({
+        "plans": plans_by_waste(&all).iter().map(|r| json!({
             "plan": r.plan.to_json(),
             "five_hour_now": r.five_hour.as_ref().map(Window::to_json),
         })).collect::<Vec<_>>(),
@@ -436,6 +643,23 @@ mod tests {
     }
 
     #[test]
+    fn measured_spend_turns_the_remaining_share_into_tokens_and_a_pace() {
+        // 70% of the week cost $381 for 3.77M output tokens; 9.2 hours left.
+        let w = Window {
+            tool: "Claude (main)".into(), account: None, window: "week", used: 70.0, resets_at: None,
+            resets_in_secs: Some(33_120), projected: Some(74.0), now_tks: 140.0,
+            spend: Some(Spend { input: 9_764.0, output: 3_770_000.0, cache_write: 17_259_201.0,
+                                cache_read: 1_094_254_105.0, cost: 381.0 }),
+        };
+        assert!((w.dollars_per_percent().unwrap() - 381.0 / 70.0).abs() < 1e-9);
+        assert!((w.left_dollars().unwrap() - 381.0 * 30.0 / 70.0).abs() < 1e-6);
+        let left = w.left_output().unwrap();
+        assert!((left - 3_770_000.0 * 30.0 / 70.0).abs() < 1.0, "{left}");
+        assert!((w.need_tks().unwrap() - left / 33_120.0).abs() < 1e-9);
+        assert_eq!(w.locked_out_secs(), None, "on pace for 74%: it does not run out");
+    }
+
+    #[test]
     fn durations_read_naturally() {
         assert_eq!(human_secs(90_000), "1d1h");
         assert_eq!(human_secs(7_500), "2h05m");
@@ -448,7 +672,7 @@ mod tests {
         // 70% of a week used in 3.5 days: 20%/day, so the last 30% lasts 1.5 days.
         let w = Window {
             tool: "t".into(), account: None, window: "week", used: 70.0, resets_at: None,
-            resets_in_secs: Some(302_400), projected: Some(140.0),
+            resets_in_secs: Some(302_400), projected: Some(140.0), spend: None, now_tks: 0.0,
         };
         assert_eq!(w.runs_out_in_secs(), Some(129_600));
     }

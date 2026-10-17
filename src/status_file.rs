@@ -99,11 +99,18 @@ pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
             "account": crate::plan_limits::account_for_analyzer(&t.name),
             "tks": round(t.tks, 1),
             "cost_today": round(t.cost_today, 2),
-            "limits": {
-                "five_hour": window(t.limits.and_then(|l| l.five_hour)),
-                "seven_day": window(t.limits.and_then(|l| l.seven_day)),
-                "monthly": window(t.limits.and_then(|l| l.monthly)),
-            },
+            // With each window's spend so far, for the quota advisor.
+            "limits": stats
+                .analyzer_stats
+                .iter()
+                .find(|s| s.analyzer_name == t.name)
+                .and_then(|s| crate::advisor::tool_json(s, now))
+                .map(|j| j["limits"].clone())
+                .unwrap_or_else(|| json!({
+                    "five_hour": window(t.limits.and_then(|l| l.five_hour)),
+                    "seven_day": window(t.limits.and_then(|l| l.seven_day)),
+                    "monthly": window(t.limits.and_then(|l| l.monthly)),
+                })),
         })).collect::<Vec<_>>(),
         "publishers": publishers,
         "month": month_pace(stats, now.with_timezone(&Local), goal_tks),

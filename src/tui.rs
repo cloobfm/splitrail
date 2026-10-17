@@ -1095,16 +1095,21 @@ fn redraw_clock_only(
     Ok(true)
 }
 
-/// `p` on the Summary tab: every plan window with its reset and pace, then where to spend next
-/// (the same answers as `splitrail quotas` and the MCP server).
+/// `p` on the Summary tab: each account's week or month allowance, ordered by how much is about
+/// to go unused: what is left (tokens and dollars, measured from this window's own spend), the
+/// output tk/s needed to use it all by the reset against the current rate, when a fast pace runs
+/// out and for how long the account would then be locked out, and the 5-hour window as a switch
+/// signal. The same answers as `splitrail quotas` and the MCP server.
 fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCodingToolStats]) {
-    let names: Vec<&str> = filtered_stats.iter().map(|s| s.analyzer_name.as_str()).collect();
-    let status = crate::advisor::status_for_tools(&names);
+    use crate::advisor::{human_secs, human_tokens};
+    let status = crate::advisor::status_for_tools(filtered_stats);
     let now = chrono::Utc::now();
-    let mut windows = crate::advisor::windows(&status, now);
-    windows.sort_by_key(|w| w.resets_in_secs.unwrap_or(i64::MAX));
+    let windows = crate::advisor::windows(&status, now);
     let picks = crate::advisor::where_to_spend(&windows);
+    // Most quota about to be wasted first, as the ranking below.
+    let plans = crate::advisor::plans_by_waste(&windows);
 
+    let dim = Style::default().fg(Color::DarkGray);
     let used_color = |used: f64| {
         if used >= 90.0 {
             Color::Red
@@ -1114,24 +1119,36 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             Color::Green
         }
     };
-    let resets = |w: &crate::advisor::Window| match (w.resets_in_secs, w.resets_at) {
-        (Some(secs), Some(at)) => format!(
-            "{} ({})",
-            crate::advisor::human_secs(secs),
-            // A weekday is enough this week; further out it needs the date.
-            at.with_timezone(&chrono::Local)
-                .format(if secs < 6 * 86_400 { "%a %H:%M" } else { "%b %-d %H:%M" })
-        ),
-        _ => "?".into(),
-    };
-    let rows: Vec<Row> = crate::advisor::plan_rows(&windows)
+    let rows: Vec<Row> = plans
         .iter()
         .map(|row| {
             let w = &row.plan;
-            let runs_out = w.runs_out_in_secs().map(crate::advisor::human_secs);
+            // `ambertyeung@gmail.com (personal)` -> the email; a team name stays.
+            let account = w.account.clone().map(|a| a.replace(" (personal)", "")).unwrap_or_else(|| "-".into());
+            let left = match (w.left_output(), w.left_dollars()) {
+                (Some(t), Some(d)) => format!("{} · ${d:.0}", human_tokens(t)),
+                _ => "-".into(),
+            };
+            // Needed rate against the current one: green when keeping up, yellow when behind.
+            let need = w.need_tks().map(|need| {
+                let keeping_up = w.now_tks >= need;
+                Cell::from(format!("{need:.0} tk/s"))
+                    .style(Style::default().fg(if keeping_up { Color::Green } else { Color::Yellow }))
+            });
+            let runs_out = w.runs_out_in_secs().map(human_secs);
+            let locked = w.locked_out_secs().map(human_secs);
+            let resets = match (w.resets_in_secs, w.resets_at) {
+                (Some(secs), Some(at)) => format!(
+                    "{} ({})",
+                    human_secs(secs),
+                    at.with_timezone(&chrono::Local)
+                        .format(if secs < 6 * 86_400 { "%a %H:%M" } else { "%b %-d" })
+                ),
+                _ => "?".into(),
+            };
             // The 5-hour window only says when to switch: yellow from 80%, red when full.
             let five = row.five_hour.as_ref().map(|f| {
-                let refill = f.resets_in_secs.map(crate::advisor::human_secs).unwrap_or_else(|| "?".into());
+                let refill = f.resets_in_secs.map(human_secs).unwrap_or_else(|| "?".into());
                 let color = if f.used >= 95.0 {
                     Color::Red
                 } else if f.used >= crate::advisor::SWITCH_SOON {
@@ -1143,16 +1160,18 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             });
             Row::new(vec![
                 Cell::from(w.tool.clone()),
-                Cell::from(w.account.clone().unwrap_or_else(|| "-".into()))
-                    .style(Style::default().fg(if w.account.is_some() { Color::Cyan } else { Color::DarkGray })),
+                Cell::from(account).style(Style::default().fg(if w.account.is_some() { Color::Cyan } else { Color::DarkGray })),
                 Cell::from(w.window),
-                Cell::from(format!("{:>4.0}%", w.used)).style(Style::default().fg(used_color(w.used))),
-                Cell::from(w.projected.map_or("    -".into(), |p| format!("{:>4.0}%", p.min(999.0)))),
-                Cell::from(format!("{:>4.0}%", w.expiring())),
+                Cell::from(format!("{:>3.0}%", w.used)).style(Style::default().fg(used_color(w.used))),
+                Cell::from(left),
+                need.unwrap_or_else(|| Cell::from("-").style(dim)),
+                Cell::from(if w.now_tks > 0.0 { format!("{:.0} tk/s", w.now_tks) } else { "-".into() }),
                 Cell::from(runs_out.clone().unwrap_or_else(|| "-".into()))
-                    .style(Style::default().fg(if runs_out.is_some() { Color::Red } else { Color::DarkGray })),
-                Cell::from(resets(w)),
-                five.unwrap_or_else(|| Cell::from("-").style(Style::default().fg(Color::DarkGray))),
+                    .style(if runs_out.is_some() { Style::default().fg(Color::Red) } else { dim }),
+                Cell::from(locked.clone().unwrap_or_else(|| "-".into()))
+                    .style(if locked.is_some() { Style::default().fg(Color::Red) } else { dim }),
+                Cell::from(resets),
+                five.unwrap_or_else(|| Cell::from("-").style(dim)),
             ])
         })
         .collect();
@@ -1163,24 +1182,30 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
     let table = Table::new(
         rows,
         [
-            Constraint::Length(24),
-            Constraint::Length(34),
-            Constraint::Length(6),
-            Constraint::Length(6),
-            Constraint::Length(6),
-            Constraint::Length(7),
-            Constraint::Length(10),
+            Constraint::Length(20),
             Constraint::Length(22),
-            Constraint::Min(12),
+            Constraint::Length(5),
+            Constraint::Length(4),
+            Constraint::Length(13),
+            Constraint::Length(9),
+            Constraint::Length(9),
+            Constraint::Length(8),
+            Constraint::Length(10),
+            Constraint::Length(17),
+            Constraint::Min(11),
         ],
     )
     .header(
-        Row::new(vec!["Tool", "Account", "Plan", "Used", "Pace", "Unused", "Runs out", "Resets", "5h now"])
-            .style(Style::default().add_modifier(Modifier::BOLD))
-            .bottom_margin(1),
+        Row::new(vec![
+            "Tool", "Account", "Plan", "Used", "Left", "Need", "Now", "Runs out", "Locked out", "Resets", "5h now",
+        ])
+        .style(Style::default().add_modifier(Modifier::BOLD))
+        .bottom_margin(1),
     )
-    .column_spacing(2)
-    .block(Block::default().borders(Borders::ALL).title(" ⏱ Plan quotas: each account's week/month allowance; 5h now = when to switch · p: back to summary "));
+    .column_spacing(1)
+    .block(Block::default().borders(Borders::ALL).title(
+        " ⏱ Plan quotas: week/month allowance, most about to be wasted first · Need = tk/s to use it all by the reset · 5h now = when to switch · p: back ",
+    ));
     frame.render_widget(table, table_area);
 
     let lines: Vec<Line> = if picks.is_empty() {
@@ -1193,18 +1218,17 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
                 let style = if pick.available { Style::default() } else { Style::default().add_modifier(Modifier::DIM) };
                 Line::from(vec![
                     Span::styled(format!("{}. {}", i + 1, pick.tool), style.add_modifier(Modifier::BOLD)),
-                    Span::styled(
-                        pick.account.as_ref().map(|a| format!(" ({a})")).unwrap_or_default(),
-                        style.fg(Color::Cyan),
-                    ),
                     Span::styled(if pick.available { String::new() } else { " (unavailable)".into() }, style),
                     Span::styled(format!(": {}", pick.reason), style),
                 ])
             })
             .collect()
     };
-    let block = Block::default().borders(Borders::ALL).title(" Where to spend next (most quota about to expire unused first) ");
-    frame.render_widget(Paragraph::new(lines).block(block), picks_area);
+    let block = Block::default().borders(Borders::ALL).title(" Where to spend next ");
+    frame.render_widget(
+        Paragraph::new(lines).block(block).wrap(ratatui::widgets::Wrap { trim: true }),
+        picks_area,
+    );
 }
 
 fn draw_ui(
