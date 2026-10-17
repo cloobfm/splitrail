@@ -436,6 +436,43 @@ pub struct Pick {
     pub reason: String,
     /// Higher first.
     pub score: f64,
+    /// The window the pick is about: the full one when unavailable, else the plan's longest.
+    pub window: Option<Window>,
+}
+
+impl Pick {
+    /// What to do, in a word or two, for the dashboard's at-a-glance list.
+    pub fn action(&self) -> &'static str {
+        let Some(w) = &self.window else { return "-" };
+        if !self.available {
+            "WAIT"
+        } else if w.runs_out_in_secs().is_some() {
+            "EASE OFF"
+        } else if w.projected.is_none() {
+            "USE"
+        } else if w.expiring() >= 25.0 || (w.expiring() >= 5.0 && w.resets_in_secs.is_some_and(|s| s < 86_400)) {
+            // A lot unused, or some with under a day to use it.
+            "USE NOW"
+        } else if w.expiring() >= 5.0 {
+            "USE"
+        } else {
+            "ON TRACK"
+        }
+    }
+
+    /// Why, as a short phrase.
+    pub fn why(&self) -> String {
+        let Some(w) = &self.window else { return "no data".into() };
+        let secs = |s: Option<i64>| s.map(human_secs).unwrap_or_else(|| "?".into());
+        if !self.available {
+            return format!("{} full · back in {}", w.window, secs(w.resets_in_secs));
+        }
+        match (w.projected, w.runs_out_in_secs()) {
+            (_, Some(out)) => format!("runs out in {}", human_secs(out)),
+            (Some(p), None) => format!("on pace for {:.0}%", p.min(999.0)),
+            (None, None) => "too early to tell".into(),
+        }
+    }
 }
 
 /// Rank tools by quota that would otherwise be lost: the window furthest from being used up
@@ -457,6 +494,7 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                     available: false,
                     reason: format!("{} window {:.0}% used; back in {back}", full.window, full.used),
                     score: -1.0 - full.resets_in_secs.unwrap_or(0) as f64 / 86_400.0,
+                    window: Some((*full).clone()),
                 };
             }
             // The plan's real allowance is its longest window (week or month); the 5-hour one
@@ -496,9 +534,16 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                             reason.push_str(&format!(" (≈ {} if all on one model)", list.join(" / ")));
                         }
                     }
-                    Pick { tool: tool.to_string(), account: w.account.clone(), available: true, reason, score }
+                    Pick {
+                        tool: tool.to_string(),
+                        account: w.account.clone(),
+                        available: true,
+                        reason,
+                        score,
+                        window: Some((*w).clone()),
+                    }
                 }
-                None => Pick { tool: tool.to_string(), account: None, available: true, reason: "no window data".into(), score: 0.0 },
+                None => Pick { tool: tool.to_string(), account: None, available: true, reason: "no window data".into(), score: 0.0, window: None },
             }
         })
         .collect();

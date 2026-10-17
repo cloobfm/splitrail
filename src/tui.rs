@@ -1208,27 +1208,71 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
     ));
     frame.render_widget(table, table_area);
 
-    let lines: Vec<Line> = if picks.is_empty() {
-        vec![Line::from("No plan limits known yet.").dim()]
-    } else {
-        picks
-            .iter()
-            .enumerate()
-            .map(|(i, pick)| {
-                let style = if pick.available { Style::default() } else { Style::default().add_modifier(Modifier::DIM) };
-                Line::from(vec![
-                    Span::styled(format!("{}. {}", i + 1, pick.tool), style.add_modifier(Modifier::BOLD)),
-                    Span::styled(if pick.available { String::new() } else { " (unavailable)".into() }, style),
-                    Span::styled(format!(": {}", pick.reason), style),
-                ])
-            })
-            .collect()
-    };
-    let block = Block::default().borders(Borders::ALL).title(" Where to spend next ");
-    frame.render_widget(
-        Paragraph::new(lines).block(block).wrap(ratatui::widgets::Wrap { trim: true }),
-        picks_area,
-    );
+    // One line per tool, a word for what to do and phrases for why, most to gain first.
+    let pick_rows: Vec<Row> = picks
+        .iter()
+        .enumerate()
+        .map(|(i, pick)| {
+            let action = pick.action();
+            let action_color = match action {
+                "USE NOW" => Color::Green,
+                "USE" => Color::LightGreen,
+                "EASE OFF" => Color::Yellow,
+                "WAIT" => Color::Red,
+                _ => Color::DarkGray,
+            };
+            let w = pick.window.as_ref();
+            let wasted = w.filter(|w| w.expiring() >= 1.0).map(|w| match w.left_dollars() {
+                Some(d) if w.projected.is_some() => format!("{:.0}% · ${:.0}", w.expiring(), d * w.expiring() / (100.0 - w.used).max(1.0)),
+                _ => format!("{:.0}%", w.expiring()),
+            });
+            let need = w.and_then(|w| w.need_tks()).filter(|_| pick.available);
+            let now_tks = w.map(|w| w.now_tks).unwrap_or(0.0);
+            let need_cell = match need {
+                Some(n) => Cell::from(format!("{n:.0} tk/s"))
+                    .style(Style::default().fg(if now_tks >= n { Color::Green } else { Color::Yellow })),
+                None => Cell::from("-").style(dim),
+            };
+            let resets = w.and_then(|w| w.resets_in_secs).map(human_secs).unwrap_or_else(|| "?".into());
+            let style = if pick.available { Style::default() } else { dim };
+            Row::new(vec![
+                Cell::from(format!("{}", i + 1)).style(dim),
+                Cell::from(action).style(Style::default().fg(action_color).add_modifier(Modifier::BOLD)),
+                Cell::from(pick.tool.clone()).style(style.add_modifier(Modifier::BOLD)),
+                Cell::from(wasted.unwrap_or_else(|| "-".into())).style(style),
+                need_cell,
+                Cell::from(if now_tks > 0.0 { format!("{now_tks:.0} tk/s") } else { "-".into() }).style(style),
+                Cell::from(resets).style(style),
+                Cell::from(pick.why()).style(dim),
+            ])
+        })
+        .collect();
+    let block = Block::default().borders(Borders::ALL).title(" Where to spend next · top first ");
+    if pick_rows.is_empty() {
+        frame.render_widget(Paragraph::new("No plan limits known yet.").dim().block(block), picks_area);
+        return;
+    }
+    let picks_table = Table::new(
+        pick_rows,
+        [
+            Constraint::Length(2),
+            Constraint::Length(9),
+            Constraint::Length(22),
+            Constraint::Length(12),
+            Constraint::Length(9),
+            Constraint::Length(9),
+            Constraint::Length(8),
+            Constraint::Min(20),
+        ],
+    )
+    .header(
+        Row::new(vec!["#", "Do", "Tool", "Wasted", "Need", "Now", "Resets", "Why"])
+            .style(Style::default().add_modifier(Modifier::BOLD))
+            .bottom_margin(1),
+    )
+    .column_spacing(1)
+    .block(block);
+    frame.render_widget(picks_table, picks_area);
 }
 
 fn draw_ui(

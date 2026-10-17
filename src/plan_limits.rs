@@ -335,24 +335,82 @@ pub fn set_remote_snapshots(host: &str, snapshots: Vec<serde_json::Value>) {
     }
 }
 
-/// A snapshot from another machine for the same login, captured after `local` was: the account
-/// is shared, so whichever machine saw it last knows its limits best.
-fn newer_remote_snapshot(local: &str) -> Option<String> {
-    let local: serde_json::Value = serde_json::from_str(local).ok()?;
-    let local_at = local.get("captured_at")?.as_f64()?;
-    let hash = crate::rollup::login_hash(local.get("login")?.as_str()?);
-    let all = REMOTE_SNAPSHOTS.get()?.lock().ok()?;
-    all.values()
-        .flatten()
-        .filter(|s| s.get("login_hash").and_then(|h| h.as_str()) == Some(hash.as_str()))
-        .filter_map(|s| Some((s.get("captured_at")?.as_f64()?, s)))
-        .filter(|(at, _)| *at > local_at)
-        .max_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, s)| s.to_string())
+/// Reset times of one window differ slightly between reports; beyond this they are different
+/// windows (as in `scripts/claude_statusline_capture.py`).
+const SAME_WINDOW_TOLERANCE_SECS: f64 = 30.0 * 60.0;
+
+/// The more current of two reports of one window: a later window wins, and within one window the
+/// higher figure, since usage only grows until the reset. Taking the newest report instead would
+/// flip between machines: a session that has not called the API lately keeps re-reporting the
+/// figure from its last call (devbox-a's 70% against this Mac's 79%).
+fn better_window<'a>(a: &'a serde_json::Value, b: &'a serde_json::Value) -> &'a serde_json::Value {
+    let used = |w: &serde_json::Value| w.get("used_percentage").and_then(|u| u.as_f64());
+    let reset = |w: &serde_json::Value| w.get("resets_at").and_then(|r| r.as_f64());
+    match (used(a), used(b)) {
+        (None, _) => return b,
+        (_, None) => return a,
+        _ => {}
+    }
+    if let (Some(ra), Some(rb)) = (reset(a), reset(b)) {
+        if rb > ra + SAME_WINDOW_TOLERANCE_SECS {
+            return b;
+        }
+        if rb < ra - SAME_WINDOW_TOLERANCE_SECS {
+            return a;
+        }
+    }
+    if used(b) > used(a) { b } else { a }
 }
 
-/// The snapshot behind a remote Claude column (`Claude@dev-a`): that machine's newest, or a
-/// newer one for the same login from anywhere, this machine included.
+/// The newest of `snapshots` (for the login and capture time) with each window taken from
+/// whichever snapshot reports it best (`better_window`). They must all be the same login's.
+fn merge_snapshots(snapshots: Vec<serde_json::Value>) -> Option<serde_json::Value> {
+    let captured = |s: &serde_json::Value| s.get("captured_at").and_then(|a| a.as_f64());
+    let mut merged = snapshots
+        .iter()
+        .filter_map(|s| Some((captured(s)?, s)))
+        .max_by(|a, b| a.0.total_cmp(&b.0))?
+        .1
+        .clone();
+    let mut windows = serde_json::Map::new();
+    for limits in snapshots.iter().filter_map(|s| s.get("rate_limits")?.as_object()) {
+        for (key, window) in limits {
+            let best = match windows.get(key) {
+                Some(current) => better_window(current, window).clone(),
+                None => window.clone(),
+            };
+            windows.insert(key.clone(), best);
+        }
+    }
+    if !windows.is_empty() {
+        merged["rate_limits"] = serde_json::Value::Object(windows);
+    }
+    Some(merged)
+}
+
+/// `local` merged with other machines' snapshots for the same login (`merge_snapshots`): the
+/// account is shared, so between them they know its limits best.
+fn with_remote_snapshots(local: &str) -> Option<String> {
+    let local: serde_json::Value = serde_json::from_str(local).ok()?;
+    let hash = crate::rollup::login_hash(local.get("login")?.as_str()?);
+    let mut snapshots: Vec<serde_json::Value> = REMOTE_SNAPSHOTS
+        .get()?
+        .lock()
+        .ok()?
+        .values()
+        .flatten()
+        .filter(|s| s.get("login_hash").and_then(|h| h.as_str()) == Some(hash.as_str()))
+        .cloned()
+        .collect();
+    if snapshots.is_empty() {
+        return None;
+    }
+    snapshots.push(local);
+    merge_snapshots(snapshots).map(|s| s.to_string())
+}
+
+/// The snapshot behind a remote Claude column (`Claude@dev-a`): that machine's newest, merged
+/// with every snapshot for the same login from anywhere, this machine included.
 fn remote_column_snapshot(column: &str) -> Option<String> {
     let (slug, tool) = crate::rollup::remote_source(column)?;
     if !tool.starts_with("Claude") {
@@ -392,11 +450,7 @@ fn remote_column_snapshot(column: &str) -> Option<String> {
             }
         }
     }
-    candidates
-        .into_iter()
-        .filter_map(|s| Some((captured(&s)?, s)))
-        .max_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, s)| s.to_string())
+    merge_snapshots(candidates).map(|s| s.to_string())
 }
 
 /// Current plan limits for an analyzer, from its own logs or a status line snapshot.
@@ -413,7 +467,7 @@ pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
     }
     let label = account_label(analyzer_name)?;
     let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
-    let content = newer_remote_snapshot(&content).unwrap_or(content);
+    let content = with_remote_snapshots(&content).unwrap_or(content);
     parse_snapshot(&content, now_secs)
 }
 
@@ -626,21 +680,25 @@ mod tests {
     }
 
     #[test]
-    fn a_newer_snapshot_from_another_machine_wins_for_the_same_login() {
+    fn other_machines_snapshots_for_the_same_login_keep_the_highest_figure_per_window() {
         let local = r#"{"captured_at": 1000.0, "login": "me@x.com",
-            "rate_limits": {"five_hour": {"used_percentage": 100.0, "resets_at": 9000.0}}}"#;
-        assert_eq!(newer_remote_snapshot(local), None);
+            "rate_limits": {"five_hour": {"used_percentage": 10.0, "resets_at": 9000.0},
+                            "seven_day": {"used_percentage": 79.0, "resets_at": 90000.0}}}"#;
+        assert_eq!(with_remote_snapshots(local), None);
         let remote = |at: f64, login: &str, pct: f64| {
             serde_json::json!({"captured_at": at, "login_hash": crate::rollup::login_hash(login),
-                "rate_limits": {"five_hour": {"used_percentage": pct, "resets_at": 9000.0}}})
+                "rate_limits": {"five_hour": {"used_percentage": pct, "resets_at": 9000.0},
+                                "seven_day": {"used_percentage": 70.0, "resets_at": 90000.0}}})
         };
         set_remote_snapshots(
             "test-devbox",
             vec![remote(900.0, "me@x.com", 1.0), remote(2000.0, "other@x.com", 2.0), remote(1500.0, "ME@x.com", 25.0)],
         );
-        let chosen = newer_remote_snapshot(local).unwrap();
+        let chosen = with_remote_snapshots(local).unwrap();
         let limits = parse_snapshot(&chosen, 1600.0).unwrap();
-        assert_eq!(limits.five_hour.unwrap().used_percentage, 25.0);
+        assert_eq!(limits.five_hour.unwrap().used_percentage, 25.0, "the other login's 2% is ignored");
+        // The newest snapshot (1500) repeats an older 70% for the week; the higher figure stays.
+        assert_eq!(limits.seven_day.unwrap().used_percentage, 79.0);
         set_remote_snapshots("test-devbox", vec![]);
     }
 
@@ -659,5 +717,15 @@ mod tests {
         assert_eq!(parse_snapshot(&snapshot, 1500.0).unwrap().five_hour.unwrap().used_percentage, 40.0);
         assert_eq!(remote_column_snapshot("Codex@test-box"), None, "only Claude has snapshots");
         set_remote_snapshots("test_box", vec![]);
+    }
+
+    #[test]
+    fn a_later_window_beats_a_higher_figure_from_the_last_one() {
+        let w = |used: f64, reset: f64| serde_json::json!({"used_percentage": used, "resets_at": reset});
+        let (old, new) = (w(95.0, 1000.0), w(3.0, 1000.0 + 5.0 * 3600.0));
+        assert_eq!(better_window(&old, &new), &new);
+        assert_eq!(better_window(&new, &old), &new);
+        let (stale, current) = (w(70.0, 1000.0), w(79.0, 1060.0));
+        assert_eq!(better_window(&current, &stale), &current, "same window: the higher figure");
     }
 }

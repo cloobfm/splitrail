@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.77] - 2026-10-17
+
+### Fixed
+- **Claude's weekly figure no longer flips between machines (70% / 79%).** A shared login's
+  limits came from whichever machine's snapshot was written last, and an idle session keeps
+  re-reporting the figure from its last API call, so devbox-a's stale 70% kept replacing this
+  Mac's 79%. Snapshots for the same login are now merged per window: a later window wins, and
+  within one window the higher figure (usage only grows until the reset).
+
+### Changed
+- **"Where to spend next" is a table you can scan.** One row per tool: a verb (USE NOW, USE,
+  EASE OFF, WAIT, ON TRACK), what would be wasted (% and $), the tk/s needed against now, the
+  reset, and a short why ("on pace for 81%", "runs out in 1d4h"). The full sentences stay in
+  `quotas` / the MCP answer.
+
 ## [2.0.0-dash-0.76] - 2026-10-17
 
 ### Added
