@@ -219,11 +219,18 @@ fn print_quotas(as_json: bool) {
     if let Some(note) = quotas["stale"].as_str() {
         println!("⚠️  {note}\n");
     }
-    println!("{:<24} {:<34} {:<6} {:>5} {:>6} {:>7}  {:<11} resets", "Tool", "Account", "Window", "Used", "Pace", "Unused", "Runs out");
-    for w in quotas["windows"].as_array().into_iter().flatten() {
-        let pct = |v: &serde_json::Value| v.as_f64().map_or("-".into(), |p| format!("{p:.0}%"));
+    println!("{:<24} {:<34} {:<6} {:>5} {:>6} {:>7}  {:<10} {:<22} 5h now", "Tool", "Account", "Plan", "Used", "Pace", "Unused", "Runs out", "Resets");
+    let pct = |v: &serde_json::Value| v.as_f64().map_or("-".into(), |p| format!("{p:.0}%"));
+    for row in quotas["plans"].as_array().into_iter().flatten() {
+        let w = &row["plan"];
+        let five = &row["five_hour_now"];
+        let five = if five.is_null() {
+            "-".to_string()
+        } else {
+            format!("{} · {}", pct(&five["used_percent"]), five["resets_in"].as_str().unwrap_or("?"))
+        };
         println!(
-            "{:<24} {:<34} {:<6} {:>5} {:>6} {:>7}  {:<11} {} ({})",
+            "{:<24} {:<34} {:<6} {:>5} {:>6} {:>7}  {:<10} {:<22} {five}",
             w["tool"].as_str().unwrap_or("?"),
             w["account"].as_str().unwrap_or("-"),
             w["window"].as_str().unwrap_or("?"),
@@ -231,8 +238,11 @@ fn print_quotas(as_json: bool) {
             pct(&w["projected_percent_at_reset"]),
             pct(&w["unused_at_reset_percent"]),
             w["runs_out_in"].as_str().unwrap_or("-"),
-            w["resets_in"].as_str().unwrap_or("?"),
-            w["resets_at"].as_str().map(|t| t.get(..16).unwrap_or(t).replace('T', " ")).unwrap_or_default(),
+            format!(
+                "{} ({})",
+                w["resets_in"].as_str().unwrap_or("?"),
+                w["resets_at"].as_str().map(|t| t.get(5..16).unwrap_or(t).replace('T', " ")).unwrap_or_default()
+            ),
         );
     }
     println!("\nWhere to spend next:");

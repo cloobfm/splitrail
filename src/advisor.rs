@@ -186,6 +186,37 @@ fn merge_shared_accounts(windows: Vec<Window>) -> Vec<Window> {
         .collect()
 }
 
+/// One account's plan as the Quotas view shows it: its allowance (the longest window, week or
+/// month) and, beside it, the current 5-hour window, which only says when to switch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanRow {
+    pub plan: Window,
+    pub five_hour: Option<Window>,
+}
+
+/// A 5-hour window from here means switching soon; at `FULL` it means switching now.
+pub const SWITCH_SOON: f64 = 80.0;
+
+/// One row per tool or account, soonest allowance reset first.
+pub fn plan_rows(windows: &[Window]) -> Vec<PlanRow> {
+    let mut tools: Vec<&str> = windows.iter().map(|w| w.tool.as_str()).collect();
+    tools.sort();
+    tools.dedup();
+    let mut rows: Vec<PlanRow> = tools
+        .into_iter()
+        .filter_map(|tool| {
+            let own: Vec<&Window> = windows.iter().filter(|w| w.tool == tool).collect();
+            let plan = own
+                .iter()
+                .max_by(|a, b| window_secs_label(a.window).total_cmp(&window_secs_label(b.window)))?;
+            let five_hour = own.iter().find(|w| w.window == "5h" && w.window != plan.window);
+            Some(PlanRow { plan: (*plan).clone(), five_hour: five_hour.map(|w| (*w).clone()) })
+        })
+        .collect();
+    rows.sort_by_key(|r| r.plan.resets_in_secs.unwrap_or(i64::MAX));
+    rows
+}
+
 /// One ranked suggestion of where to spend tokens next.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pick {
@@ -308,6 +339,10 @@ pub fn quotas_answer(status: &Value, now: DateTime<Utc>) -> Value {
     json!({
         "as_of": now.with_timezone(&Local).to_rfc3339(),
         "stale": freshness(status, now),
+        "plans": plan_rows(&all).iter().map(|r| json!({
+            "plan": r.plan.to_json(),
+            "five_hour_now": r.five_hour.as_ref().map(Window::to_json),
+        })).collect::<Vec<_>>(),
         "windows": all.iter().map(Window::to_json).collect::<Vec<_>>(),
     })
 }
@@ -385,6 +420,19 @@ mod tests {
         assert!(last.reason.contains("back in 30m"));
         let main = picks.iter().find(|p| p.tool == "Claude (main), dev-b").unwrap();
         assert!(main.score < picks[0].score, "on pace to use its week: little expires");
+    }
+
+    #[test]
+    fn one_row_per_plan_with_the_five_hour_window_beside_it() {
+        let now = DateTime::from_timestamp(1000, 0).unwrap();
+        let rows = plan_rows(&windows(&status(), now));
+        let v = rows.iter().find(|r| r.plan.tool == "Claude (v)").unwrap();
+        assert_eq!(v.plan.window, "week");
+        assert_eq!(v.five_hour.as_ref().map(|w| w.used), Some(10.0));
+        // Only a 5-hour window: that is the plan.
+        let dev_a = rows.iter().find(|r| r.plan.tool == "Claude@dev-a").unwrap();
+        assert_eq!((dev_a.plan.window, dev_a.five_hour.is_none()), ("5h", true));
+        assert_eq!(rows.iter().filter(|r| r.plan.tool == "Claude (v)").count(), 1);
     }
 
     #[test]

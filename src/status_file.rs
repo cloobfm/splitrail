@@ -96,6 +96,7 @@ pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
         "cost_today": round(tools.iter().map(|t| t.cost_today).sum(), 2),
         "tools": tools.iter().map(|t| json!({
             "name": t.name,
+            "account": crate::plan_limits::account_for_analyzer(&t.name),
             "tks": round(t.tks, 1),
             "cost_today": round(t.cost_today, 2),
             "limits": {

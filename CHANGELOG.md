@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.75] - 2026-10-17
+
+### Changed
+- **Quotas view: one row per account, managed to the week or month.** Each row is the account's
+  real allowance (its longest window), and the 5-hour window moves to a side column, `5h now`,
+  with its use and when it refills: grey normally, yellow from 80% (switch soon), red from 95%
+  (switch now). The ranking already judged plans by week or month and used the 5-hour window
+  only to mark an account unavailable. `splitrail quotas` matches, the JSON gains `plans`, and
+  `status.json` now carries each tool's account.
+
 ## [2.0.0-dash-0.74] - 2026-10-17
 
 ### Changed

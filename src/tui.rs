@@ -1114,20 +1114,33 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             Color::Green
         }
     };
-    let rows: Vec<Row> = windows
+    let resets = |w: &crate::advisor::Window| match (w.resets_in_secs, w.resets_at) {
+        (Some(secs), Some(at)) => format!(
+            "{} ({})",
+            crate::advisor::human_secs(secs),
+            // A weekday is enough this week; further out it needs the date.
+            at.with_timezone(&chrono::Local)
+                .format(if secs < 6 * 86_400 { "%a %H:%M" } else { "%b %-d %H:%M" })
+        ),
+        _ => "?".into(),
+    };
+    let rows: Vec<Row> = crate::advisor::plan_rows(&windows)
         .iter()
-        .map(|w| {
-            let resets = match (w.resets_in_secs, w.resets_at) {
-                (Some(secs), Some(at)) => format!(
-                    "{} ({})",
-                    crate::advisor::human_secs(secs),
-                    // A weekday is enough this week; further out it needs the date.
-                    at.with_timezone(&chrono::Local)
-                        .format(if secs < 6 * 86_400 { "%a %H:%M" } else { "%b %-d %H:%M" })
-                ),
-                _ => "?".into(),
-            };
+        .map(|row| {
+            let w = &row.plan;
             let runs_out = w.runs_out_in_secs().map(crate::advisor::human_secs);
+            // The 5-hour window only says when to switch: yellow from 80%, red when full.
+            let five = row.five_hour.as_ref().map(|f| {
+                let refill = f.resets_in_secs.map(crate::advisor::human_secs).unwrap_or_else(|| "?".into());
+                let color = if f.used >= 95.0 {
+                    Color::Red
+                } else if f.used >= crate::advisor::SWITCH_SOON {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                };
+                Cell::from(format!("{:>3.0}% · {refill}", f.used)).style(Style::default().fg(color))
+            });
             Row::new(vec![
                 Cell::from(w.tool.clone()),
                 Cell::from(w.account.clone().unwrap_or_else(|| "-".into()))
@@ -1138,7 +1151,8 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
                 Cell::from(format!("{:>4.0}%", w.expiring())),
                 Cell::from(runs_out.clone().unwrap_or_else(|| "-".into()))
                     .style(Style::default().fg(if runs_out.is_some() { Color::Red } else { Color::DarkGray })),
-                Cell::from(resets),
+                Cell::from(resets(w)),
+                five.unwrap_or_else(|| Cell::from("-").style(Style::default().fg(Color::DarkGray))),
             ])
         })
         .collect();
@@ -1156,16 +1170,17 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             Constraint::Length(6),
             Constraint::Length(7),
             Constraint::Length(10),
-            Constraint::Min(16),
+            Constraint::Length(22),
+            Constraint::Min(12),
         ],
     )
     .header(
-        Row::new(vec!["Tool", "Account", "Window", "Used", "Pace", "Unused", "Runs out", "Resets"])
+        Row::new(vec!["Tool", "Account", "Plan", "Used", "Pace", "Unused", "Runs out", "Resets", "5h now"])
             .style(Style::default().add_modifier(Modifier::BOLD))
             .bottom_margin(1),
     )
     .column_spacing(2)
-    .block(Block::default().borders(Borders::ALL).title(" ⏱ Plan quotas · p: back to summary "));
+    .block(Block::default().borders(Borders::ALL).title(" ⏱ Plan quotas: each account's week/month allowance; 5h now = when to switch · p: back to summary "));
     frame.render_widget(table, table_area);
 
     let lines: Vec<Line> = if picks.is_empty() {
