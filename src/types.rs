@@ -25,6 +25,9 @@ pub enum Application {
     Antigravity,
     Ollama,
     CursorAgent,
+    /// GitHub Copilot CLI (`copilot`), as opposed to Copilot Chat in VS Code (`Copilot`).
+    CopilotCli,
+    PiAgent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -311,6 +311,8 @@ fn application_for(tool: &str) -> Application {
         _ if name.starts_with("kilo cli") => Application::KiloCli,
         _ if name.starts_with("kilo") => Application::KiloCode,
         _ if name.starts_with("kiro") => Application::KiroCli,
+        _ if name.starts_with("copilot cli") => Application::CopilotCli,
+        _ if name.starts_with("pi agent") => Application::PiAgent,
         _ if name.starts_with("qwen") => Application::QwenCode,
         _ if name.starts_with("cline") => Application::Cline,
         _ if name.starts_with("warp") => Application::Warp,

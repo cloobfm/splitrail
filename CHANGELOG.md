@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.82] - 2026-10-17
+
+### Added
+- **Copilot CLI and Pi Agent columns (BZL-135, upstream #141 / #65).**
+  - **Pi Agent** reads `~/.pi/agent/sessions/*/*.jsonl`, with Pi's own token counts and its
+    reported cost (our prices when it reports none). Replies that failed before any tokens are
+    skipped.
+  - **Copilot CLI** reads 0.0.3xx's `~/.copilot/history-session-state/session_*.json`. Those
+    files record no tokens and no model, so tokens are **estimated** at about 4 characters a
+    token: output is the reply plus its tool calls; input is what is new since the last reply,
+    with the earlier conversation as cache reads. The model is taken as Claude Sonnet 4.5, the
+    CLI's default then. Newer CLIs' `session-state/<id>/events.jsonl` (real usage, upstream #141)
+    is not read yet, since none exist here.
+  - Both use the per-file `StampCache`. Neither is uploaded to Splitrail Cloud, which doesn't
+    know them; Kilo CLI (0.78) is now kept out of uploads for the same reason.
+
 ## [2.0.0-dash-0.81] - 2026-10-17
 
 BZL-74, first pass: the shared whole-file cache, and the four analyzers whose sources are replaced

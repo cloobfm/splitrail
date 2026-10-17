@@ -26,7 +26,12 @@ where
         .filter(|m| {
             !matches!(
                 m.application,
-                Application::Antigravity | Application::Ollama | Application::CursorAgent
+                Application::Antigravity
+                    | Application::Ollama
+                    | Application::CursorAgent
+                    | Application::KiloCli
+                    | Application::CopilotCli
+                    | Application::PiAgent
             )
         })
         .collect();
