@@ -15,6 +15,11 @@
 //! changed, with every token counted as input. Cost is the credits spent at what a credit costs
 //! on the plan (`warp_limits::cents_per_credit`), split across models by tokens.
 //!
+//! Runs of `warp agent run` (the Oz CLI) are not in that database at all. `warp-run`
+//! (`scripts/headless_run.py`) saves each one's `warp run get` record to
+//! `~/.config/splitrail/warp/runs/<run id>.json`: credits spent and cost per model, no tokens.
+//! Each becomes the prompt plus one assistant message per model, dated when the run last changed.
+//!
 //! The database is several hundred MB with a busy WAL (it also holds terminal history), so it is
 //! read in place, read-only, rather than copied; Warp's `-wal` and `-shm` already exist beside
 //! it, so opening it creates nothing. With no WAL (Warp not running) it is opened immutable.
@@ -38,6 +43,109 @@ fn database_path() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join(
         "Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support/dev.warp.Warp-Stable/warp.sqlite",
     ))
+}
+
+/// Where `warp-run` saves CLI runs.
+fn runs_dir() -> Option<PathBuf> {
+    Some(std::env::home_dir()?.join(".config/splitrail/warp/runs"))
+}
+
+fn rfc3339(value: Option<&Value>) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value?.as_str()?).ok().map(|t| t.with_timezone(&Utc))
+}
+
+/// Sum of every number under `value` whose key ends in `_cents` (a model's input, cache, output
+/// and web costs).
+fn cents(value: &Value) -> f64 {
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, v)| match v {
+                Value::Number(n) if key.ends_with("_cents") => n.as_f64().unwrap_or(0.0),
+                _ => cents(v),
+            })
+            .sum(),
+        _ => 0.0,
+    }
+}
+
+/// Messages for one saved `warp run get` record. `cents_per_credit` prices the credits, as for
+/// interactive conversations; the models split it by what each cost.
+pub fn run_messages(run: &Value, cents_per_credit: f64) -> Vec<ConversationMessage> {
+    let Some(run_id) = run.get("run_id").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let usage = run.get("request_usage");
+    let credits = usage.and_then(|u| u.get("inference_cost")).and_then(Value::as_f64).unwrap_or(0.0);
+    let started = rfc3339(run.get("started_at")).or_else(|| rfc3339(run.get("created_at")));
+    let Some(started) = started else {
+        return Vec::new();
+    };
+    let ended = rfc3339(run.get("finished_at")).or_else(|| rfc3339(run.get("updated_at"))).unwrap_or(started);
+    let conversation = run.get("conversation_id").and_then(Value::as_str).unwrap_or(run_id);
+    let project = project_name(run.get("cwd").and_then(Value::as_str));
+    let mut by_model: Vec<(String, f64)> = Vec::new();
+    for category in usage
+        .and_then(|u| u.get("usage_by_category"))
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|c| c.values())
+    {
+        for (model, spend) in category.get("direct_api_inference_usage").and_then(Value::as_object).into_iter().flatten() {
+            let model = crate::analyzers::antigravity::normalize_model(model);
+            match by_model.iter_mut().find(|(m, _)| *m == model) {
+                Some((_, total)) => *total += cents(spend),
+                None => by_model.push((model, cents(spend))),
+            }
+        }
+    }
+    by_model.retain(|(model, _)| !model.is_empty());
+    if by_model.is_empty() {
+        by_model.push(("warp".to_string(), 0.0));
+    }
+    let total: f64 = by_model.iter().map(|(_, c)| c).sum();
+    let cost = credits * cents_per_credit / 100.0;
+    let mut messages = vec![ConversationMessage {
+        application: Application::Warp,
+        date: started,
+        project_hash: project.clone(),
+        conversation_hash: hash_text(conversation),
+        local_hash: None,
+        global_hash: hash_text(&format!("warp:run:{run_id}")),
+        model: None,
+        stats: Stats::default(),
+        role: MessageRole::User,
+        content: run.get("prompt").and_then(Value::as_str).map(str::to_string),
+    }];
+    for (i, (model, spend)) in by_model.iter().enumerate() {
+        let share = if total > 0.0 { spend / total } else { 1.0 / by_model.len() as f64 };
+        messages.push(ConversationMessage {
+            application: Application::Warp,
+            date: ended,
+            project_hash: project.clone(),
+            conversation_hash: hash_text(conversation),
+            local_hash: None,
+            global_hash: hash_text(&format!("warp:run:{run_id}:{model}")),
+            model: Some(model.clone()),
+            stats: Stats { cost: cost * share, ..Default::default() },
+            role: MessageRole::Assistant,
+            content: if i == 0 { run.get("title").and_then(Value::as_str).map(str::to_string) } else { None },
+        });
+    }
+    messages
+}
+
+fn read_runs(dir: &Path, cents_per_credit: f64) -> Vec<ConversationMessage> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter_map(|p| serde_json::from_slice::<Value>(&std::fs::read(p).ok()?).ok())
+        .flat_map(|run| run_messages(&run, cents_per_credit))
+        .collect()
 }
 
 fn wal_path(db: &Path) -> PathBuf {
@@ -273,6 +381,7 @@ fn stamp(db: &Path) -> Stamp {
 
 pub struct WarpDevAnalyzer {
     database: Option<PathBuf>,
+    runs: Option<PathBuf>,
     /// The last read, kept until the database or its WAL changes. Warp writes terminal history
     /// to the same database constantly, so most changes leave the AI tables as they were; the
     /// read is two small queries.
@@ -281,7 +390,7 @@ pub struct WarpDevAnalyzer {
 
 impl WarpDevAnalyzer {
     pub fn new() -> Self {
-        Self { database: database_path(), cache: Mutex::new(None) }
+        Self { database: database_path(), runs: runs_dir(), cache: Mutex::new(None) }
     }
 
     fn messages(&self, db: &Path) -> Result<Arc<Vec<ConversationMessage>>> {
@@ -331,26 +440,43 @@ impl Analyzer for WarpDevAnalyzer {
         self.database
             .iter()
             .flat_map(|db| [db.clone(), wal_path(db)])
+            .chain(self.runs.iter().map(|dir| dir.join("*.json")))
             .map(|p| p.to_string_lossy().into_owned())
             .collect()
     }
 
-    /// The database, and its WAL so a write that only reaches the WAL still counts as a change.
+    /// The database, and its WAL so a write that only reaches the WAL still counts as a change,
+    /// and the saved CLI runs.
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
+        let runs = self
+            .runs
+            .iter()
+            .filter_map(|dir| std::fs::read_dir(dir).ok())
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json"));
         Ok(self
             .database
             .iter()
             .flat_map(|db| [db.clone(), wal_path(db)])
             .filter(|p| p.is_file())
+            .chain(runs)
             .map(|path| DataSource { path })
             .collect())
     }
 
     async fn parse_conversations(&self, sources: Vec<DataSource>) -> Result<Vec<ConversationMessage>> {
-        let Some(db) = sources.iter().map(|s| &s.path).find(|p| Some(*p) == self.database.as_ref()) else {
-            return Ok(Vec::new());
+        let mut messages = match sources.iter().map(|s| &s.path).find(|p| Some(*p) == self.database.as_ref()) {
+            Some(db) => self.messages(db)?.as_ref().clone(),
+            None => Vec::new(),
         };
-        Ok(self.messages(db)?.as_ref().clone())
+        if let Some(dir) = &self.runs
+            && sources.iter().any(|s| s.path.starts_with(dir))
+        {
+            messages.extend(read_runs(dir, crate::warp_limits::cents_per_credit()));
+        }
+        Ok(messages)
     }
 
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
@@ -367,7 +493,7 @@ impl Analyzer for WarpDevAnalyzer {
     }
 
     fn is_available(&self) -> bool {
-        self.database.as_ref().is_some_and(|db| db.is_file())
+        self.database.as_ref().is_some_and(|db| db.is_file()) || self.runs.as_ref().is_some_and(|d| d.is_dir())
     }
 }
 
@@ -424,6 +550,30 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_cli_run_is_its_prompt_and_its_cost_per_model() {
+        let mut run: Value =
+            serde_json::from_str(include_str!("../../scripts/testdata/warp_run_get.json")).unwrap();
+        run["cwd"] = "/Users/x/Courtside".into();
+        let messages = run_messages(&run, 1.8);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, MessageRole::User);
+        assert_eq!(messages[0].project_hash, "Courtside");
+        assert_eq!(messages[0].content.as_deref(), Some("Reply with just the word OK. Do not run any tools."));
+        let reply = &messages[1];
+        assert_eq!(reply.date, at("2026-10-17 02:04:45.046175"));
+        assert!((reply.stats.cost - 4.98725 * 0.018).abs() < 1e-9);
+        assert_eq!(reply.stats.output_tokens, 0);
+        // Two models: the cost splits by what each cost.
+        run["request_usage"]["usage_by_category"]["tool_summarization"] = serde_json::json!({
+            "direct_api_inference_usage": {"claude-haiku-4-5": {"cost_in_cents": {"output_cost_in_cents": 1.0}}}
+        });
+        let messages = run_messages(&run, 1.8);
+        assert_eq!(messages.len(), 3);
+        let total: f64 = messages.iter().map(|m| m.stats.cost).sum();
+        assert!((total - 4.98725 * 0.018).abs() < 1e-9);
+    }
+
+    #[test]
     fn empty_or_unreadable_conversations_are_skipped() {
         let conversation = |data: &str| Conversation {
             conversation_id: "c".into(),
@@ -460,6 +610,8 @@ mod tests {
         let cost: f64 = stats.daily_stats.values().map(|d| d.stats.cost).sum();
         let models: std::collections::BTreeSet<_> = stats.messages.iter().filter_map(|m| m.model.clone()).collect();
         println!("messages {} conversations {} cost ${cost:.2} models {models:?}", stats.messages.len(), stats.num_conversations);
+        let runs = read_runs(&runs_dir().unwrap(), crate::warp_limits::cents_per_credit());
+        println!("CLI runs: {} messages ${:.2}", runs.len(), runs.iter().map(|m| m.stats.cost).sum::<f64>());
         println!("signed in: {}", signed_in_email().is_some());
         assert!(!stats.messages.is_empty());
     }

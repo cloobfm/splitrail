@@ -1,0 +1,4 @@
+{"type":"system","event_type":"run_started","run_id":"01a1479a-9140-7de0-8680-1ddf548d9c3c","run_url":"https://oz.warp.dev/runs/01a1479a-9140-7de0-8680-1ddf548d9c3c"}
+{"type":"system","event_type":"conversation_started","conversation_id":"917e6c48-722c-4db3-8fef-0eb0bf508f7b"}
+{"type":"agent_reasoning","text":"\n"}
+{"type":"agent","text":"OK\n"}

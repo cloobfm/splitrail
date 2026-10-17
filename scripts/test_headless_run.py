@@ -1,4 +1,4 @@
-"""Tests for cursor-run / agy-run. Run: python3 -m unittest scripts/test_headless_run.py"""
+"""Tests for cursor-run / agy-run / warp-run. Run: python3 -m unittest scripts/test_headless_run.py"""
 
 import json
 import os
@@ -7,7 +7,10 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
 import headless_run  # noqa: E402
-from headless_run import TOOLS, agy_usage, cursor_usage, option_value, with_print_flag  # noqa: E402
+from headless_run import (  # noqa: E402
+    TOOLS, agy_usage, cursor_usage, option_value, warp_record, warp_run_id, warp_text, with_print_flag,
+    without_option,
+)
 
 DATA = os.path.join(os.path.dirname(__file__), "testdata")
 
@@ -94,6 +97,25 @@ class OptionTests(unittest.TestCase):
         self.assertEqual(option_value(["--output-format", "json"], "--output-format"), "json")
         self.assertEqual(option_value(["--output-format=stream-json"], "--output-format"), "stream-json")
         self.assertIsNone(option_value(["-p"], "--output-format"))
+
+class WarpTests(unittest.TestCase):
+    def test_run_id_and_text_from_a_real_stream(self):
+        stream = events("warp_stream.ndjson")
+        self.assertEqual(warp_run_id(stream), "01a1479a-9140-7de0-8680-1ddf548d9c3c")
+        self.assertEqual("".join(filter(None, map(warp_text, stream))), "OK\n")
+
+    def test_record_keeps_usage_and_drops_who_ran_it(self):
+        run = json.load(open(os.path.join(DATA, "warp_run_get.json")))
+        run["creator"] = {"email": "x@example.com"}
+        record = warp_record(run, "/Users/x/proj", 9.0)
+        self.assertNotIn("creator", record)
+        self.assertEqual(record["cwd"], "/Users/x/proj")
+        self.assertEqual(record["request_usage"]["inference_cost"], 4.98725)
+
+    def test_caller_format_is_replaced(self):
+        args = ["--cwd", "x", "--output-format", "text", "--prompt", "hi"]
+        self.assertEqual(without_option(args, "--output-format"), ["--cwd", "x", "--prompt", "hi"])
+        self.assertEqual(without_option(["--output-format=json", "-p", "hi"], "--output-format"), ["-p", "hi"])
 
 
 if __name__ == "__main__":

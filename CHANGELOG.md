@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.62] - 2026-10-16
+
+### Added
+- **Warp CLI runs (`warp agent run`) in the Warp column.** The Oz CLI saves nothing locally (the
+  Warp app's database holds only interactive conversations) and prints no usage, so those runs
+  were missing. `warp-run` (same arguments as `warp agent run`; `scripts/headless_run.py`, beside
+  `cursor-run` and `agy-run`) runs it as `ndjson` for the run id, prints what text mode would,
+  then saves `warp run get`'s record (credits and cost per model; no tokens, Warp does not report
+  them) to `~/.config/splitrail/warp/runs/<run id>.json`, which the Warp analyzer reads: the
+  prompt plus one message per model. `warp-run --record <run id> --cwd <dir>` saves a past run.
+
 ## [2.0.0-dash-0.61] - 2026-10-16
 
 ### Added

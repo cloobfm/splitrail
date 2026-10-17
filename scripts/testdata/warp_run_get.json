@@ -1,0 +1,72 @@
+{
+ "agent_config": {
+  "name": "splitrail-probe"
+ },
+ "children": [],
+ "conversation_id": "917e6c48-722c-4db3-8fef-0eb0bf508f7b",
+ "created_at": "2026-10-17T02:04:34.536358Z",
+ "debug_agent_available": false,
+ "execution_location": "LOCAL",
+ "finished_at": null,
+ "is_run_type_cancellable": false,
+ "is_sandbox_running": false,
+ "prompt": "Reply with just the word OK. Do not run any tools.",
+ "request_usage": {
+  "inference_cost": 4.98725,
+  "inference_cost_usd": 0.0897705,
+  "model_token_usage": [
+   {
+    "model_id": "gpt-6-1-sol-low",
+    "tokens_by_category": {
+     "primary_agent": 35749
+    },
+    "total_tokens": 35749,
+    "usage_type": "warp"
+   }
+  ],
+  "total_tokens": 35749,
+  "usage_by_category": {
+   "primary_agent": {
+    "direct_api_inference_usage": {
+     "gpt-6.1-sol-low-reasoning": {
+      "cost_in_cents": {
+       "input_cache_read_cost_in_cents": 0,
+       "input_cache_write_cost_in_cents": 8.91225,
+       "input_cost_in_cents": 0.0088,
+       "output_cost_in_cents": 0.056
+      },
+      "token_count": {
+       "input": 44,
+       "input_cache_read": 0,
+       "input_cache_write": 35649,
+       "output": 56
+      },
+      "web_fetch_cost_in_cents": 0,
+      "web_fetch_cost_in_credits": 0,
+      "web_fetch_page_count": 0,
+      "web_search_cost_in_cents": 0,
+      "web_search_count": 0
+     }
+    },
+    "platform_usage_duration_seconds": 0,
+    "platform_usage_in_cents": 0
+   }
+  }
+ },
+ "root_run_id": "01a1479a-9140-7de0-8680-1ddf548d9c3c",
+ "run_id": "01a1479a-9140-7de0-8680-1ddf548d9c3c",
+ "run_time": "PT10S",
+ "scope": {
+  "type": "User",
+  "uid": "user-1"
+ },
+ "source": "CLI",
+ "started_at": "2026-10-17T02:04:34.923125Z",
+ "state": "SUCCEEDED",
+ "status_message": {
+  "message": "OK"
+ },
+ "task_id": "01a1479a-9140-7de0-8680-1ddf548d9c3c",
+ "title": "Simple Confirmation Response",
+ "updated_at": "2026-10-17T02:04:45.046175Z"
+}

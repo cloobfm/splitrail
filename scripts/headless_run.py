@@ -1,5 +1,6 @@
 #!/usr/bin/python3
-"""`cursor-run` / `agy-run`: run Cursor Agent or Antigravity headless and record usage (BZL-75).
+"""`cursor-run` / `agy-run` / `warp-run`: run Cursor Agent, Antigravity or Warp's agent headless
+and record usage (BZL-75).
 
 Both tools are tracked through interactive-only features (Cursor's token hooks, agy's status
 line), so a print-mode run (`cursor-agent -p`, `agy -p`, how other agents call them) leaves no
@@ -8,6 +9,14 @@ This script is installed under the two command names; the name picks the tool:
 
     cursor-run [args…] "prompt"   ≡ cursor-agent -p [args…] "prompt"
     agy-run    [args…] "prompt"   ≡ agy -p [args…] "prompt"
+    warp-run   [args…]            ≡ warp agent run [args…]
+
+Warp is different: `warp agent run` saves nothing locally (the Warp app's database only has
+interactive conversations), and its output has no usage. Its `ndjson` output names the run, and
+`warp run get <run id>` (Warp's own sign-in) has the run's credits and cost per model, so
+`warp-run` runs as `ndjson`, prints what `text` would, then saves that record to
+`~/.config/splitrail/warp/runs/<run id>.json` for the Warp analyzer. `warp-run --record <run id>
+[--cwd dir]` saves one after the fact.
 
 * `-p` is added when missing (for agy, whose `-p` takes the prompt as its value, right before
   the prompt, the last argument); everything else goes to the real binary unchanged.
@@ -159,6 +168,122 @@ def agy_usage(events, args, now):
     return {k: v for k, v in line.items() if v is not None}
 
 
+# --- Warp ----------------------------------------------------------------------------------
+
+WARP_DONE = ("SUCCEEDED", "FAILED", "ERROR", "CANCELLED", "BLOCKED")
+# What `warp run get` says that the record has no use for (who ran it, links, plan artifacts).
+WARP_DROP = ("creator", "executor", "session_link", "artifacts", "children")
+
+
+def warp_run_id(events):
+    return next((e["run_id"] for e in events if isinstance(e.get("run_id"), str)), None)
+
+
+def warp_text(event):
+    """What `--output-format text` would print for one `ndjson` event: the agent's replies."""
+    return event.get("text") if event.get("type") == "agent" and isinstance(event.get("text"), str) else None
+
+
+def warp_record(run, cwd, now):
+    """The saved record: the run as `warp run get` reports it, plus where it ran."""
+    record = {k: v for k, v in run.items() if k not in WARP_DROP}
+    record["cwd"] = cwd
+    record["recorded_at"] = now
+    return record
+
+
+def warp_fetch(real, run_id, attempts=6, wait=5.0):
+    """`warp run get`, retried until the run is finished with its usage (it lags the exit)."""
+    run = None
+    for attempt in range(attempts):
+        try:
+            out = subprocess.run([real, "run", "get", run_id, "--output-format", "json"],
+                                 capture_output=True, timeout=60)
+            run = json.loads(out.stdout) if out.returncode == 0 else run
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        if run and run.get("state") in WARP_DONE and run.get("request_usage"):
+            return run
+        if attempt + 1 < attempts:
+            time.sleep(wait)
+    return run
+
+
+def warp_save(real, run_id, cwd):
+    try:
+        run = warp_fetch(real, run_id)
+        if not run:
+            return False
+        runs = os.path.join(CONFIG, "warp", "runs")
+        os.makedirs(runs, exist_ok=True)
+        path = os.path.join(runs, f"{run_id.replace('/', '_')}.json")
+        with open(path + ".tmp", "w") as f:
+            json.dump(warp_record(run, cwd, time.time()), f)
+        os.replace(path + ".tmp", path)
+        return True
+    except Exception:  # noqa: BLE001 - recording must never affect the run
+        return False
+
+
+def without_option(args, name):
+    """`args` minus `--name value` / `--name=value`."""
+    out, skip = [], False
+    for arg in args:
+        if skip:
+            skip = False
+        elif arg == name:
+            skip = True
+        elif not arg.startswith(name + "="):
+            out.append(arg)
+    return out
+
+
+def run_warp(real, args):
+    if args[:1] == ["--record"] and len(args) >= 2:
+        cwd = option_value(args, "--cwd") or option_value(args, "-C") or os.getcwd()
+        ok = warp_save(real, args[1], os.path.abspath(cwd))
+        sys.stderr.write(f"warp-run: {'saved' if ok else 'could not get'} run {args[1]}\n")
+        return 0 if ok else 1
+    fmt = option_value(args, "--output-format") or os.environ.get("WARP_OUTPUT_FORMAT") or "pretty"
+    cwd = os.path.abspath(option_value(args, "--cwd") or option_value(args, "-C") or os.getcwd())
+    child_args = ["agent", "run", *without_option(args, "--output-format"), "--output-format", "ndjson"]
+    child = subprocess.Popen([real, *child_args], stdout=subprocess.PIPE)
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda s, _f: child.send_signal(s))
+    out = sys.stdout.buffer
+    events, raw_lines = [], []
+    for raw in child.stdout:
+        raw_lines.append(raw.decode("utf-8", "replace"))
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            event = None
+        if isinstance(event, dict):
+            events.append(event)
+        if fmt == "ndjson":
+            out.write(raw)
+        elif event is None:
+            out.write(raw)  # Not an event (an error before the run started): show it as is.
+        elif fmt != "json" and warp_text(event):
+            out.write(warp_text(event).encode())
+        out.flush()
+    code = child.wait()
+    if fmt == "json":
+        out.write(json.dumps(events, indent=2).encode() + b"\n")
+        out.flush()
+    run_id = warp_run_id(events)
+    if run_id:
+        try:
+            runs = os.path.join(CONFIG, "warp", "runs")
+            os.makedirs(runs, exist_ok=True)
+            with open(os.path.join(runs, f"{run_id}.events.jsonl"), "w") as f:
+                f.writelines(raw_lines)
+        except OSError:
+            pass
+        warp_save(real, run_id, cwd)
+    return code
+
+
 TOOLS = {
     "cursor-run": {
         "binary": "cursor-agent",
@@ -180,6 +305,10 @@ TOOLS = {
         "result": agy_result,
         "text": agy_text,
         "usage": agy_usage,
+    },
+    "warp-run": {
+        "binary": "warp",
+        "run": run_warp,
     },
 }
 
@@ -283,7 +412,7 @@ def main():
         sys.stderr.write(f"{name}: {tool['binary']} not found on PATH\n")
         sys.exit(127)
     try:
-        code = run(tool, real, sys.argv[1:])
+        code = tool["run"](real, sys.argv[1:]) if "run" in tool else run(tool, real, sys.argv[1:])
     except BrokenPipeError:
         code = 0
     sys.exit(code if code >= 0 else 128 - code)
