@@ -246,6 +246,26 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
     picks
 }
 
+/// The same shape as `status.json`'s `tools`, built straight from each column's limits, for the
+/// dashboard's own Quotas view (no file needed).
+pub fn status_for_tools(names: &[&str]) -> Value {
+    let window = |w: Option<crate::plan_limits::WindowStatus>| {
+        w.map_or(Value::Null, |w| json!({"used": w.used_percentage, "resets_in": w.resets_in_secs}))
+    };
+    let tools: Vec<Value> = names
+        .iter()
+        .filter_map(|name| {
+            let limits = crate::plan_limits::limits_for_analyzer(name)?;
+            Some(json!({"name": name, "limits": {
+                "five_hour": window(limits.five_hour),
+                "seven_day": window(limits.seven_day),
+                "monthly": window(limits.monthly),
+            }}))
+        })
+        .collect();
+    json!({"updated": Utc::now().timestamp_millis() as f64 / 1000.0, "tools": tools})
+}
+
 /// How old a status payload is, in seconds.
 pub fn age_secs(status: &Value, now: DateTime<Utc>) -> f64 {
     let updated = status.get("updated").and_then(Value::as_f64).unwrap_or(0.0);

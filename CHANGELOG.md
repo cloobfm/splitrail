@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.73] - 2026-10-17
+
+### Added
+- **Quotas in the dashboard: press `p` on the Summary tab.** The same answers as
+  `splitrail quotas`, live inside the dashboard: every plan window per tool and account (devbox
+  columns merged with the login they share), used %, pace to the reset, unused share, when a
+  fast pace runs out (red), and the reset as a countdown and a time (a date beyond this week),
+  then where to spend next. `p` again returns to the summary.
+
 ## [2.0.0-dash-0.72] - 2026-10-17
 
 ### Added

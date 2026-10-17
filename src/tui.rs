@@ -203,6 +203,8 @@ pub struct TuiState {
     pub layout: UiLayout,
     pub mouse_mode_enabled: bool, // Toggle between mouse scroll and text selection
     pub summary_verbose_mode: bool,
+    /// `p` on the Summary tab: plan quotas instead of the summary.
+    pub quotas_view: bool,
     pub daily_stats_view_start: usize, // For daily stats pagination (0 = most recent 30 days)
     pub status_message: Option<String>, // Temporary status messages (Slack toggle, etc.)
     pub status_message_timer: Option<std::time::Instant>, // Auto-clear timer for status messages
@@ -728,6 +730,12 @@ async fn run_app(
                         continue;
                     }
 
+                    if key.code == KeyCode::Char('p') && tui_state.selected_tab == 0 {
+                        tui_state.quotas_view = !tui_state.quotas_view;
+                        needs_redraw = true;
+                        continue;
+                    }
+
                     if key.code == KeyCode::Char('v') && tui_state.selected_tab == 0 {
                         tui_state.summary_verbose_mode = !tui_state.summary_verbose_mode;
                         // Toggle perf overlay with verbose mode; reset stats when enabling
@@ -1087,6 +1095,93 @@ fn redraw_clock_only(
     Ok(true)
 }
 
+/// `p` on the Summary tab: every plan window with its reset and pace, then where to spend next
+/// (the same answers as `splitrail quotas` and the MCP server).
+fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCodingToolStats]) {
+    let names: Vec<&str> = filtered_stats.iter().map(|s| s.analyzer_name.as_str()).collect();
+    let status = crate::advisor::status_for_tools(&names);
+    let now = chrono::Utc::now();
+    let mut windows = crate::advisor::windows(&status, now);
+    windows.sort_by_key(|w| w.resets_in_secs.unwrap_or(i64::MAX));
+    let picks = crate::advisor::where_to_spend(&windows);
+
+    let used_color = |used: f64| {
+        if used >= 90.0 {
+            Color::Red
+        } else if used >= 70.0 {
+            Color::Yellow
+        } else {
+            Color::Green
+        }
+    };
+    let rows: Vec<Row> = windows
+        .iter()
+        .map(|w| {
+            let resets = match (w.resets_in_secs, w.resets_at) {
+                (Some(secs), Some(at)) => format!(
+                    "{} ({})",
+                    crate::advisor::human_secs(secs),
+                    // A weekday is enough this week; further out it needs the date.
+                    at.with_timezone(&chrono::Local)
+                        .format(if secs < 6 * 86_400 { "%a %H:%M" } else { "%b %-d %H:%M" })
+                ),
+                _ => "?".into(),
+            };
+            let runs_out = w.runs_out_in_secs().map(crate::advisor::human_secs);
+            Row::new(vec![
+                Cell::from(w.tool.clone()),
+                Cell::from(w.window),
+                Cell::from(format!("{:>4.0}%", w.used)).style(Style::default().fg(used_color(w.used))),
+                Cell::from(w.projected.map_or("    -".into(), |p| format!("{:>4.0}%", p.min(999.0)))),
+                Cell::from(format!("{:>4.0}%", w.expiring())),
+                Cell::from(runs_out.clone().unwrap_or_else(|| "-".into()))
+                    .style(Style::default().fg(if runs_out.is_some() { Color::Red } else { Color::DarkGray })),
+                Cell::from(resets),
+            ])
+        })
+        .collect();
+    let table_height = (rows.len() as u16 + 3).min(area.height.saturating_sub(4).max(3));
+    let [table_area, picks_area] =
+        Layout::vertical([Constraint::Length(table_height), Constraint::Min(3)]).areas(area);
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(30),
+            Constraint::Length(6),
+            Constraint::Length(6),
+            Constraint::Length(6),
+            Constraint::Length(7),
+            Constraint::Length(10),
+            Constraint::Min(16),
+        ],
+    )
+    .header(
+        Row::new(vec!["Tool / account", "Window", "Used", "Pace", "Unused", "Runs out", "Resets"])
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+    )
+    .block(Block::default().borders(Borders::ALL).title(" ⏱ Plan quotas · p: back to summary "));
+    frame.render_widget(table, table_area);
+
+    let lines: Vec<Line> = if picks.is_empty() {
+        vec![Line::from("No plan limits known yet.").dim()]
+    } else {
+        picks
+            .iter()
+            .enumerate()
+            .map(|(i, pick)| {
+                let style = if pick.available { Style::default() } else { Style::default().add_modifier(Modifier::DIM) };
+                Line::from(vec![
+                    Span::styled(format!("{}. {}", i + 1, pick.tool), style.add_modifier(Modifier::BOLD)),
+                    Span::styled(if pick.available { String::new() } else { " (unavailable)".into() }, style),
+                    Span::styled(format!(": {}", pick.reason), style),
+                ])
+            })
+            .collect()
+    };
+    let block = Block::default().borders(Borders::ALL).title(" Where to spend next (most quota about to expire unused first) ");
+    frame.render_widget(Paragraph::new(lines).block(block), picks_area);
+}
+
 fn draw_ui(
     frame: &mut Frame,
     filtered_stats: &[&AgenticCodingToolStats],
@@ -1197,7 +1292,10 @@ fn draw_ui(
 
         frame.render_widget(tabs, chunks[1]);
 
-        if tui_state.selected_tab == 0 {
+        if tui_state.selected_tab == 0 && tui_state.quotas_view {
+            draw_quotas_view(frame, chunks[2], filtered_stats);
+            draw_summary_stats(frame, chunks[3], filtered_stats, format_options, false);
+        } else if tui_state.selected_tab == 0 {
             // Summary view - show cached aggregated data across all analyzers
             if let Some(summary_data) = &cached_summary_data {
                 draw_summary_view(
@@ -1267,7 +1365,8 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, U: update, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, p: {}, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, U: update, q/Esc: quit",
+                if tui_state.quotas_view { "summary" } else { "quotas" },
                 mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
