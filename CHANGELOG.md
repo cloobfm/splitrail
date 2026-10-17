@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.65] - 2026-10-16
+
+### Fixed
+- **Warp's output tokens counted, so Warp adds to tk/s.** Every Warp token used to count as input
+  (Warp recorded one total per model). Warp now also records `total_charged_usage` with input,
+  output, cache read and cache write tokens per conversation, which the analyzer reads, shared
+  across the conversation's models by their token counts; conversations from before that stay
+  as input. CLI runs, which report only cost, get input and output tokens from what each model
+  cost at its list price (none for a model without a known price).
+
 ## [2.0.0-dash-0.64] - 2026-10-16
 
 ### Fixed

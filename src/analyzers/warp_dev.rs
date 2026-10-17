@@ -10,15 +10,18 @@
 //! * `ai_queries`: one row per prompt, `input` a JSON list whose `Query.text` is the prompt, with
 //!   `start_ts` (UTC) and `working_directory`.
 //!
-//! Warp records totals per conversation, not per reply, and does not split input from output, so
-//! each conversation becomes one assistant message per model, dated when the conversation last
-//! changed, with every token counted as input. Cost is the credits spent at what a credit costs
+//! Warp records totals per conversation, not per reply, so each conversation becomes one assistant
+//! message per model, dated when the conversation last changed. Since October 2026 Warp also
+//! records `total_charged_usage` (input, output, cache read and cache write tokens for the whole
+//! conversation), split here across the models by their share of tokens; older conversations have
+//! only a total per model, counted as input. Cost is the credits spent at what a credit costs
 //! on the plan (`warp_limits::cents_per_credit`), split across models by tokens.
 //!
 //! Runs of `warp agent run` (the Oz CLI) are not in that database at all. `warp-run`
 //! (`scripts/headless_run.py`) saves each one's `warp run get` record to
 //! `~/.config/splitrail/warp/runs/<run id>.json`: credits spent and cost per model, no tokens.
-//! Each becomes the prompt plus one assistant message per model, dated when the run last changed.
+//! Each becomes the prompt plus one assistant message per model, dated when the run last changed,
+//! with input and output tokens estimated from what each cost at the model's list price.
 //!
 //! The database is several hundred MB with a busy WAL (it also holds terminal history), so it is
 //! read in place, read-only, rather than copied; Warp's `-wal` and `-shm` already exist beside
@@ -96,7 +99,8 @@ pub fn run_messages(run: &Value, cents_per_credit: f64) -> Vec<ConversationMessa
         .max(started);
     let conversation = run.get("conversation_id").and_then(Value::as_str).unwrap_or(run_id);
     let project = project_name(run.get("cwd").and_then(Value::as_str));
-    let mut by_model: Vec<(String, f64)> = Vec::new();
+    // (model, cents in total, cents for input, cents for output)
+    let mut by_model: Vec<(String, f64, f64, f64)> = Vec::new();
     for category in usage
         .and_then(|u| u.get("usage_by_category"))
         .and_then(Value::as_object)
@@ -105,17 +109,25 @@ pub fn run_messages(run: &Value, cents_per_credit: f64) -> Vec<ConversationMessa
     {
         for (model, spend) in category.get("direct_api_inference_usage").and_then(Value::as_object).into_iter().flatten() {
             let model = crate::analyzers::antigravity::normalize_model(model);
-            match by_model.iter_mut().find(|(m, _)| *m == model) {
-                Some((_, total)) => *total += cents(spend),
-                None => by_model.push((model, cents(spend))),
+            let part = |key: &str| {
+                spend.get("cost_in_cents").and_then(|c| c.get(key)).and_then(Value::as_f64).unwrap_or(0.0)
+            };
+            let (input, output) = (part("input_cost_in_cents"), part("output_cost_in_cents"));
+            match by_model.iter_mut().find(|(m, ..)| *m == model) {
+                Some((_, total, i, o)) => {
+                    *total += cents(spend);
+                    *i += input;
+                    *o += output;
+                }
+                None => by_model.push((model, cents(spend), input, output)),
             }
         }
     }
-    by_model.retain(|(model, _)| !model.is_empty());
+    by_model.retain(|(model, ..)| !model.is_empty());
     if by_model.is_empty() {
-        by_model.push(("warp".to_string(), 0.0));
+        by_model.push(("warp".to_string(), 0.0, 0.0, 0.0));
     }
-    let total: f64 = by_model.iter().map(|(_, c)| c).sum();
+    let total: f64 = by_model.iter().map(|(_, c, ..)| c).sum();
     let cost = credits * cents_per_credit / 100.0;
     let mut messages = vec![ConversationMessage {
         application: Application::Warp,
@@ -129,7 +141,7 @@ pub fn run_messages(run: &Value, cents_per_credit: f64) -> Vec<ConversationMessa
         role: MessageRole::User,
         content: run.get("prompt").and_then(Value::as_str).map(str::to_string),
     }];
-    for (i, (model, spend)) in by_model.iter().enumerate() {
+    for (i, (model, spend, input_cents, output_cents)) in by_model.iter().enumerate() {
         let share = if total > 0.0 { spend / total } else { 1.0 / by_model.len() as f64 };
         messages.push(ConversationMessage {
             application: Application::Warp,
@@ -139,12 +151,25 @@ pub fn run_messages(run: &Value, cents_per_credit: f64) -> Vec<ConversationMessa
             local_hash: None,
             global_hash: hash_text(&format!("warp:run:{run_id}:{model}")),
             model: Some(model.clone()),
-            stats: Stats { cost: cost * share, ..Default::default() },
+            stats: Stats {
+                cost: cost * share,
+                input_tokens: tokens_for(*input_cents, crate::models::calculate_input_cost(model, 1_000_000)),
+                output_tokens: tokens_for(*output_cents, crate::models::calculate_output_cost(model, 1_000_000)),
+                ..Default::default()
+            },
             role: MessageRole::Assistant,
             content: if i == 0 { run.get("title").and_then(Value::as_str).map(str::to_string) } else { None },
         });
     }
     messages
+}
+
+/// Tokens that cost `cents` at `dollars_per_million`, or 0 for a model with no known price.
+fn tokens_for(cents: f64, dollars_per_million: f64) -> u64 {
+    if dollars_per_million <= 0.0 || cents <= 0.0 {
+        return 0;
+    }
+    (cents / 100.0 / dollars_per_million * 1_000_000.0).round() as u64
 }
 
 fn read_runs(dir: &Path, cents_per_credit: f64) -> Vec<ConversationMessage> {
@@ -293,17 +318,37 @@ pub fn messages_from(
             .sum();
         let project = project_name(last_dir.get(conversation.conversation_id.as_str()).copied());
         let cost = credits * cents_per_credit / 100.0;
+        // Input, output and cache tokens for the whole conversation, when Warp recorded them.
+        let charged = usage.get("total_charged_usage").filter(|c| c.get("output_tokens").is_some());
+        let charged_tokens = |key: &str| charged.and_then(|c| c.get(key)).and_then(Value::as_u64).unwrap_or(0);
+        let split = [
+            charged_tokens("input_tokens"),
+            charged_tokens("output_tokens"),
+            charged_tokens("input_cache_read_tokens"),
+            charged_tokens("input_cache_write_tokens"),
+        ];
+        let mut given = [0u64; 4];
         for (i, (model, tokens)) in models.iter().enumerate() {
             let share = if total_tokens > 0 {
                 *tokens as f64 / total_tokens as f64
             } else {
                 1.0 / models.len() as f64
             };
-            let mut stats = Stats {
-                input_tokens: *tokens,
-                cost: cost * share,
-                ..Default::default()
-            };
+            let mut stats = Stats { input_tokens: *tokens, cost: cost * share, ..Default::default() };
+            if charged.is_some() {
+                // By share of tokens; the last model takes the rounding, so the totals are exact.
+                let last = i + 1 == models.len();
+                let part: Vec<u64> = (0..4)
+                    .map(|k| if last { split[k].saturating_sub(given[k]) } else { (split[k] as f64 * share).round() as u64 })
+                    .collect();
+                for k in 0..4 {
+                    given[k] += part[k];
+                }
+                stats.input_tokens = part[0];
+                stats.output_tokens = part[1];
+                stats.cache_read_tokens = part[2];
+                stats.cache_creation_tokens = part[3];
+            }
             // Tool activity is per conversation; it goes on the first model's message.
             if i == 0 {
                 stats.tool_calls = u32::try_from(tool_calls).unwrap_or(u32::MAX);
@@ -559,6 +604,33 @@ mod tests {
         assert_eq!(sonnet.project_hash, "nas-devbox");
         assert_eq!(sonnet.content.as_deref(), Some("Set up devbox-b"));
         assert_eq!(sonnet.conversation_hash, prompt.conversation_hash);
+        assert_eq!(sonnet.stats.output_tokens, 0, "no split recorded: all input");
+    }
+
+    #[test]
+    fn recorded_token_split_is_shared_across_models() {
+        let data = r#"{"conversation_usage_metadata": {"credits_spent": 10.0,
+            "total_charged_usage": {"input_tokens": 198, "output_tokens": 9063,
+                "input_cache_read_tokens": 939077, "input_cache_write_tokens": 174330},
+            "token_usage": [
+                {"model_id": "GPT-6.1 Sol (medium reasoning)", "warp_tokens": 828086},
+                {"model_id": "GPT-6 Luna (low reasoning)", "warp_tokens": 34807},
+                {"model_id": "Claude Haiku 4.5", "warp_tokens": 259775}]}}"#;
+        let conversations = [Conversation {
+            conversation_id: "c2".into(),
+            last_modified_at: at("2026-10-17 01:58:19"),
+            data: data.into(),
+            summary: None,
+        }];
+        let messages = messages_from(&conversations, &[], 1.8);
+        assert_eq!(messages.len(), 3);
+        let sum = |f: fn(&Stats) -> u64| messages.iter().map(|m| f(&m.stats)).sum::<u64>();
+        assert_eq!(sum(|s| s.output_tokens), 9063);
+        assert_eq!(sum(|s| s.input_tokens), 198);
+        assert_eq!(sum(|s| s.cache_read_tokens), 939_077);
+        assert_eq!(sum(|s| s.cache_creation_tokens), 174_330);
+        // Sol had 828,086 of the 1,122,668 tokens.
+        assert_eq!(messages[0].stats.output_tokens, (9063.0 * 828_086.0 / 1_122_668.0_f64).round() as u64);
     }
 
     #[test]
@@ -574,7 +646,9 @@ mod tests {
         let reply = &messages[1];
         assert_eq!(reply.date, at("2026-10-17 02:04:45.046175"));
         assert!((reply.stats.cost - 4.98725 * 0.018).abs() < 1e-9);
-        assert_eq!(reply.stats.output_tokens, 0);
+        // Output tokens from the output cost at the model's list price, when it has one.
+        assert_eq!(tokens_for(31.2455, 10.0), 31_246);
+        assert_eq!(tokens_for(1.0, 0.0), 0);
         // Two models: the cost splits by what each cost.
         run["request_usage"]["usage_by_category"]["tool_summarization"] = serde_json::json!({
             "direct_api_inference_usage": {"claude-haiku-4-5": {"cost_in_cents": {"output_cost_in_cents": 1.0}}}
@@ -627,8 +701,14 @@ mod tests {
         let cost: f64 = stats.daily_stats.values().map(|d| d.stats.cost).sum();
         let models: std::collections::BTreeSet<_> = stats.messages.iter().filter_map(|m| m.model.clone()).collect();
         println!("messages {} conversations {} cost ${cost:.2} models {models:?}", stats.messages.len(), stats.num_conversations);
+        crate::price_feed::init(Default::default(), true); // As the dashboard does at start.
         let runs = read_runs(&runs_dir().unwrap(), crate::warp_limits::cents_per_credit());
         println!("CLI runs: {} messages ${:.2}", runs.len(), runs.iter().map(|m| m.stats.cost).sum::<f64>());
+        for m in runs.iter().filter(|m| m.role == MessageRole::Assistant) {
+            println!("  {:?} in {} out {}", m.model, m.stats.input_tokens, m.stats.output_tokens);
+        }
+        let output: u64 = stats.messages.iter().map(|m| m.stats.output_tokens).sum();
+        println!("output tokens, all Warp: {output}");
         println!("signed in: {}", signed_in_email().is_some());
         assert!(!stats.messages.is_empty());
     }
