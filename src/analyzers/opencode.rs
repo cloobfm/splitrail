@@ -117,11 +117,42 @@ struct OpenCodeMessageTools {
     task: Option<bool>,
 }
 
+/// Which OpenCode-format tool an analyzer reads: OpenCode itself, or Kilo CLI (a fork that
+/// keeps the same storage under its own name).
+#[derive(Debug, Clone)]
+pub struct Flavor {
+    pub display_name: &'static str,
+    /// Under the home directory: `.local/share/opencode`.
+    pub data_dir: &'static str,
+    /// `opencode` reads `opencode.db` and channel databases like `opencode-canary.db`.
+    pub db_stem: &'static str,
+    pub application: Application,
+    /// Prefixes the global hash, so the tools' message ids never collide.
+    pub hash_prefix: &'static str,
+}
+
+pub const OPENCODE: Flavor = Flavor {
+    display_name: "OpenCode",
+    data_dir: ".local/share/opencode",
+    db_stem: "opencode",
+    application: Application::OpenCode,
+    hash_prefix: "opencode",
+};
+
+pub const KILO_CLI: Flavor = Flavor {
+    display_name: "Kilo CLI",
+    data_dir: ".local/share/kilo",
+    db_stem: "kilo",
+    application: Application::KiloCli,
+    hash_prefix: "kilo_cli",
+};
+
 pub struct OpenCodeAnalyzer {
-    /// Messages read from `opencode.db`, kept between reloads. OpenCode writes logs and
+    flavor: Flavor,
+    /// Messages read from each database, kept between reloads. OpenCode writes logs and
     /// snapshots next to the database constantly, and every write there triggers a reload;
     /// re-reading 13k+ rows each time would pin a core.
-    db_cache: std::sync::Mutex<DbCache>,
+    db_cache: std::sync::Mutex<std::collections::HashMap<PathBuf, DbCache>>,
 }
 
 #[derive(Default)]
@@ -136,9 +167,39 @@ struct DbCache {
 
 impl OpenCodeAnalyzer {
     pub fn new() -> Self {
-        Self {
-            db_cache: Default::default(),
-        }
+        Self::for_flavor(OPENCODE)
+    }
+
+    pub fn for_flavor(flavor: Flavor) -> Self {
+        Self { flavor, db_cache: Default::default() }
+    }
+
+    fn data_dir(&self) -> Option<PathBuf> {
+        std::env::home_dir().map(|home| home.join(self.flavor.data_dir))
+    }
+
+    /// Whether `name` is one of this tool's databases: `opencode.db` or `opencode-<channel>.db`.
+    fn is_database_name(&self, name: &str) -> bool {
+        let stem = self.flavor.db_stem;
+        name == format!("{stem}.db")
+            || name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('-')).is_some_and(|rest| {
+                rest.strip_suffix(".db").is_some_and(|channel| !channel.is_empty())
+            })
+    }
+
+    /// The tool's SQLite databases, default channel first.
+    fn databases(&self) -> Vec<PathBuf> {
+        let Some(Ok(entries)) = self.data_dir().map(std::fs::read_dir) else {
+            return Vec::new();
+        };
+        let mut found: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| self.is_database_name(n)))
+            .collect();
+        let default = format!("{}.db", self.flavor.db_stem);
+        found.sort_by_key(|p| (p.file_name().and_then(|n| n.to_str()) != Some(default.as_str()), p.clone()));
+        found
     }
 
     /// Messages in the database, reading only rows changed since the last call.
@@ -152,9 +213,10 @@ impl OpenCodeAnalyzer {
                     .unwrap_or((0, None))
             })
             .collect();
-        let mut cache = self.db_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut caches = self.db_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = caches.entry(path.to_path_buf()).or_default();
         if cache.stamp.as_ref() != Some(&stamp) {
-            let (rows, v2, v1) = parse_database(path, cache.watermark_v2, cache.watermark_v1)?;
+            let (rows, v2, v1) = parse_database(self, path, cache.watermark_v2, cache.watermark_v1)?;
             for (id, msg) in rows {
                 cache.messages.insert(id, msg);
             }
@@ -171,33 +233,36 @@ impl OpenCodeAnalyzer {
 #[async_trait]
 impl Analyzer for OpenCodeAnalyzer {
     fn display_name(&self) -> &'static str {
-        "OpenCode"
+        self.flavor.display_name
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
         let mut patterns = Vec::new();
 
-        if let Some(home_dir) = std::env::home_dir() {
-            let home_str = home_dir.to_string_lossy();
+        if let Some(data_dir) = self.data_dir() {
+            let home_str = data_dir.to_string_lossy();
+            let stem = self.flavor.db_stem;
 
             // OPTIMIZED: Only read message files (contain all stats) and sessions (for project context)
             // Message files contain complete token counts, model info, and timing
             patterns.push(format!(
-                "{home_str}/.local/share/opencode/storage/message/*/msg_*.json"
+                "{home_str}/storage/message/*/msg_*.json"
             ));
 
             // Session metadata (read once for project context) - handle both directory structures
             patterns.push(format!(
-                "{home_str}/.local/share/opencode/storage/session/*/ses_*.json"
+                "{home_str}/storage/session/*/ses_*.json"
             ));
             patterns.push(format!(
-                "{home_str}/.local/share/opencode/storage/message/ses_*.json"
+                "{home_str}/storage/message/ses_*.json"
             ));
 
             // OpenCode 1.x+ keeps everything in SQLite; the WAL changes on every write, so watching
             // it surfaces new turns live.
-            patterns.push(format!("{home_str}/.local/share/opencode/opencode.db"));
-            patterns.push(format!("{home_str}/.local/share/opencode/opencode.db-wal"));
+            patterns.push(format!("{home_str}/{stem}.db"));
+            patterns.push(format!("{home_str}/{stem}.db-wal"));
+            patterns.push(format!("{home_str}/{stem}-*.db"));
+            patterns.push(format!("{home_str}/{stem}-*.db-wal"));
 
             // REMOVED: Part files - these are individual message fragments, text content not needed for stats
             // Part files are only necessary if we need to display actual conversation content
@@ -209,11 +274,9 @@ impl Analyzer for OpenCodeAnalyzer {
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
         // The database holds every message the legacy JSON files do (checked 2026-10-13: all
         // 13,564 present), so with it the JSON files are not read at all.
-        if let Some(db) = std::env::home_dir()
-            .map(|home| home.join(".local/share/opencode/opencode.db"))
-            .filter(|db| db.is_file())
-        {
-            return Ok(vec![DataSource { path: db }]);
+        let databases = self.databases();
+        if !databases.is_empty() {
+            return Ok(databases.into_iter().map(|path| DataSource { path }).collect());
         }
         let patterns = self.get_data_glob_patterns();
         let mut sources = Vec::new();
@@ -251,7 +314,8 @@ impl Analyzer for OpenCodeAnalyzer {
                     }
                 }
                 Err(e) => crate::utils::warn_once(format!(
-                    "OpenCode: could not read {}: {e:#}",
+                    "{}: could not read {}: {e:#}",
+                    self.flavor.display_name,
                     db.path.display()
                 )),
             }
@@ -486,19 +550,9 @@ impl Analyzer for OpenCodeAnalyzer {
     }
 
     fn is_available(&self) -> bool {
-        // Check if OpenCode is installed and has potential data directories
-        if let Some(home_dir) = std::env::home_dir() {
-            let home_str = home_dir.to_string_lossy();
-
-            // Check for OpenCode config or data directories
-            let config_path = format!("{home_str}/.config/opencode");
-            let local_share_path = format!("{home_str}/.local/share/opencode");
-
-            std::path::Path::new(&config_path).exists()
-                || std::path::Path::new(&local_share_path).exists()
-        } else {
-            false
-        }
+        // Installed: its config or data directory exists.
+        let config = std::env::home_dir().map(|home| home.join(".config").join(self.flavor.db_stem));
+        config.is_some_and(|c| c.exists()) || self.data_dir().is_some_and(|d| d.exists())
     }
 }
 
@@ -506,10 +560,8 @@ impl OpenCodeAnalyzer {
     /// Read text content from part files for a specific message
     fn read_message_text_content(&self, message_id: &str) -> Option<String> {
         // Find part directory for this message
-        if let Some(home_dir) = std::env::home_dir() {
-            let part_dir = home_dir
-                .join(".local/share/opencode/storage/part")
-                .join(message_id);
+        if let Some(data_dir) = self.data_dir() {
+            let part_dir = data_dir.join("storage/part").join(message_id);
 
             if !part_dir.exists() {
                 return None;
@@ -576,7 +628,7 @@ impl OpenCodeAnalyzer {
         let project_hash = effective_project_path.to_string();
         let conversation_hash = hash_text(&msg.session_id);
         let local_hash = Some(hash_text(&format!("{}-{}", msg.id, msg.time.created)));
-        let global_hash = hash_text(&format!("opencode-{}-{}", msg.id, msg.time.created));
+        let global_hash = hash_text(&format!("{}-{}-{}", self.flavor.hash_prefix, msg.id, msg.time.created));
 
         // Extract model information - FIXED: read from correct field
         let model = msg
@@ -622,7 +674,7 @@ impl OpenCodeAnalyzer {
             .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
 
         Some(ConversationMessage {
-            application: Application::OpenCode,
+            application: self.flavor.application.clone(),
             date: timestamp,
             project_hash,
             conversation_hash,
@@ -654,6 +706,7 @@ fn has_table(conn: &rusqlite::Connection, table: &str) -> bool {
 /// Rows whose `time_updated` is at or after the given watermarks, keyed by message id (a 2.x
 /// row wins over its 1.x copy), with the newest `time_updated` seen in each table.
 fn parse_database(
+    analyzer: &OpenCodeAnalyzer,
     path: &Path,
     since_v2: i64,
     since_v1: i64,
@@ -691,7 +744,6 @@ fn parse_database(
             .unwrap_or_else(|| "unknown".to_string())
     };
 
-    let analyzer = OpenCodeAnalyzer::new();
     let mut messages: Vec<(String, ConversationMessage)> = Vec::new();
     let mut v2_ids = std::collections::HashSet::new();
     let (mut max_v2, mut max_v1) = (since_v2, since_v1);
@@ -713,7 +765,7 @@ fn parse_database(
         })?;
         for (id, session, role, created, data, updated) in rows.flatten() {
             max_v2 = max_v2.max(updated);
-            if let Some(msg) = convert_v2_row(&analyzer, &id, &session, &role, created, &data, &directory(&session)) {
+            if let Some(msg) = convert_v2_row(analyzer, &id, &session, &role, created, &data, &directory(&session)) {
                 v2_ids.insert(id.clone());
                 messages.push((id, msg));
             }
@@ -1078,5 +1130,29 @@ mod tests {
         assert_eq!(msg.stats.cache_creation_tokens, 5);
         assert_eq!(msg.stats.tool_calls, 1);
         assert_eq!(msg.project_hash, "test-project");
+    }
+
+    #[test]
+    fn kilo_cli_reads_its_own_databases_under_its_own_name() {
+        let kilo = OpenCodeAnalyzer::for_flavor(KILO_CLI);
+        assert!(kilo.is_database_name("kilo.db"));
+        assert!(kilo.is_database_name("kilo-canary.db"));
+        for other in ["kilo.db-wal", "kilo-.db", "kilo-canary.db-shm", "opencode.db", "kilocode.db"] {
+            assert!(!kilo.is_database_name(other), "{other}");
+        }
+        assert!(OpenCodeAnalyzer::new().is_database_name("opencode.db"));
+        assert_eq!(kilo.display_name(), "Kilo CLI");
+
+        let msg = |analyzer: &OpenCodeAnalyzer| {
+            let data: OpenCodeMessageData = serde_json::from_value(serde_json::json!({
+                "id": "msg1", "sessionID": "s1", "role": "assistant", "time": {"created": 1760000000000u64},
+                "modelID": "kilo-auto/free", "tokens": {"input": 5, "output": 2, "reasoning": 0}
+            }))
+            .unwrap();
+            analyzer.convert_opencode_message_data(data, "proj", None).unwrap()
+        };
+        let (k, o) = (msg(&kilo), msg(&OpenCodeAnalyzer::new()));
+        assert_eq!(k.application, Application::KiloCli);
+        assert_ne!(k.global_hash, o.global_hash, "the same message id in both tools stays two messages");
     }
 }

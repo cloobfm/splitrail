@@ -382,6 +382,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     // registry.register(AmazonQAnalyzer::new()); // Replaced by Kiro CLI
     registry.register(KiroCliAnalyzer::new());
     registry.register(OpenCodeAnalyzer::new()); // Ready when OpenCode adds local data storage
+    registry.register(OpenCodeAnalyzer::for_flavor(analyzers::opencode::KILO_CLI));
     registry.register(WarpDevAnalyzer::new());
     registry.register(AntigravityAnalyzer::new()); // Fed by scripts/agy_statusline_capture.py
     registry.register(CursorAgentAnalyzer::new()); // Fed by scripts/cursor_hook_capture.py

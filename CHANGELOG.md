@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.78] - 2026-10-17
+
+### Added
+- **Kilo CLI column (BZL-133, upstream #118).** Kilo's OpenCode-based CLI keeps OpenCode's
+  storage under `~/.local/share/kilo` (`kilo.db`, channel databases like `kilo-canary.db`, and
+  legacy `storage/message` JSON). The OpenCode analyzer now takes a flavor (directory, database
+  name, application, hash prefix), and `Kilo CLI` is a second instance of it, so both get the
+  incremental SQLite reader. OpenCode also picks up `opencode-<channel>.db` databases. The old
+  `@kilocode/cli` (0.6, `~/.kilocode`) stays in the Kilo Code column; Kilo CLI appears once it is
+  upgraded. The 200 requests/hour free-model limit row is not included: plan limits have no
+  hourly window yet.
+
 ## [2.0.0-dash-0.77] - 2026-10-17
 
 ### Fixed

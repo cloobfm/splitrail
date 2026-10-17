@@ -308,6 +308,7 @@ fn application_for(tool: &str) -> Application {
         _ if name.starts_with("cursor") => Application::CursorAgent,
         _ if name.starts_with("antigravity") => Application::Antigravity,
         _ if name.starts_with("ollama") => Application::Ollama,
+        _ if name.starts_with("kilo cli") => Application::KiloCli,
         _ if name.starts_with("kilo") => Application::KiloCode,
         _ if name.starts_with("kiro") => Application::KiroCli,
         _ if name.starts_with("qwen") => Application::QwenCode,

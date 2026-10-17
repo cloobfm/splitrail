@@ -339,6 +339,7 @@ fn format_application(app: &Application) -> &'static str {
         Application::Cline => "Cline",
         Application::RooCode => "Roo",
         Application::KiloCode => "Kilo",
+        Application::KiloCli => "Kilo CLI",
         Application::Copilot => "Copilot",
         Application::AmazonQ => "Amazon Q",
         Application::KiroCli => "Kiro",

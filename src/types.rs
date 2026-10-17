@@ -13,6 +13,9 @@ pub enum Application {
     Cline,
     RooCode,
     KiloCode,
+    /// Kilo's OpenCode-based CLI (`~/.local/share/kilo`), as opposed to the extension and the
+    /// older CLI under `~/.kilocode` (`KiloCode`).
+    KiloCli,
     Copilot,
     AmazonQ,
     KiroCli,
