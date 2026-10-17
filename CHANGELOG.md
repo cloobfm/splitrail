@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.72] - 2026-10-17
+
+### Added
+- **Quota advisor: `splitrail-dashboard quotas` and an MCP server** (BZL-137). `quotas` lists
+  every plan window on every machine (5h, week, month for Claude per account, Codex, Droid,
+  Antigravity, Kiro, Cursor, Warp), with percent used, the exact reset time, the percent it is
+  on pace for by the reset, the share that would go unused, and when a fast pace runs it out
+  early, then ranks where to spend next: each plan's week or month by the share projected to
+  expire unused per day until its reset, with nearly full ones marked unavailable until their
+  window resets. Columns signed in to the same account (a devbox on the Mac's Claude login) are
+  merged. `--json` prints it for scripts. `splitrail-dashboard mcp` serves the same as MCP tools
+  (`quotas`, `where_to_spend`, `usage`) on stdio; register it with
+  `claude mcp add splitrail -- splitrail-dashboard mcp`. Both read the running dashboard's
+  `status.json`, so answers are instant and include the devboxes.
+
 ## [2.0.0-dash-0.71] - 2026-10-17
 
 ### Fixed

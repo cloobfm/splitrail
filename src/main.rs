@@ -9,6 +9,7 @@ use analyzers::{
     WarpDevAnalyzer,
 };
 
+mod advisor;
 mod analyzer;
 mod analyzers;
 mod config;
@@ -23,6 +24,7 @@ mod cursor_limits;
 mod droid_limits;
 mod warp_limits;
 mod kiro_limits;
+mod mcp_server;
 mod self_update;
 mod status_file;
 mod reqwest_simd_json;
@@ -74,6 +76,16 @@ enum Commands {
     /// Publish live stats to the MQTT broker in `[mqtt]`, without the dashboard (for launchd)
     #[command(about = "Publish live stats to MQTT / Home Assistant without the dashboard")]
     Mqtt,
+    /// MCP server on stdio: quotas, where to spend, usage (needs the dashboard running)
+    #[command(about = "Model Context Protocol server: plan quotas, where to spend tokens, usage")]
+    Mcp,
+    /// Every plan window, its reset and pace; `--json` for scripts
+    #[command(about = "Show every plan quota, when it resets and where to spend next")]
+    Quotas {
+        /// Print the answers as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Args)]
@@ -167,6 +179,8 @@ async fn main() {
             run_default(format_options, config).await;
         }
         Some(Commands::Mqtt) => run_mqtt(config).await,
+        Some(Commands::Mcp) => mcp_server::run(),
+        Some(Commands::Quotas { json }) => print_quotas(json),
         Some(Commands::Upload) => match run_upload().await.context("Failed to run upload") {
             Ok(_) => {}
             Err(e) => {
@@ -183,6 +197,47 @@ async fn main() {
         Some(Commands::Pricing(pricing_args)) => {
             handle_pricing_subcommand(pricing_args, config.pricing.feed_enabled).await;
         }
+    }
+}
+
+/// `quotas`: every window and the spending ranking, as a table or JSON.
+fn print_quotas(as_json: bool) {
+    let status = match advisor::read_status() {
+        Ok(status) => status,
+        Err(e) => {
+            eprintln!("{e:#}");
+            std::process::exit(1);
+        }
+    };
+    let now = chrono::Utc::now();
+    let quotas = advisor::quotas_answer(&status, now);
+    let spend = advisor::where_to_spend_answer(&status, now);
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"quotas": quotas, "where_to_spend": spend})).unwrap_or_default());
+        return;
+    }
+    if let Some(note) = quotas["stale"].as_str() {
+        println!("⚠️  {note}\n");
+    }
+    println!("{:<30} {:<6} {:>5} {:>6} {:>7}  {:<11} resets", "Tool / account", "Window", "Used", "Pace", "Unused", "Runs out");
+    for w in quotas["windows"].as_array().into_iter().flatten() {
+        let pct = |v: &serde_json::Value| v.as_f64().map_or("-".into(), |p| format!("{p:.0}%"));
+        println!(
+            "{:<30} {:<6} {:>5} {:>6} {:>7}  {:<11} {} ({})",
+            w["tool"].as_str().unwrap_or("?"),
+            w["window"].as_str().unwrap_or("?"),
+            pct(&w["used_percent"]),
+            pct(&w["projected_percent_at_reset"]),
+            pct(&w["unused_at_reset_percent"]),
+            w["runs_out_in"].as_str().unwrap_or("-"),
+            w["resets_in"].as_str().unwrap_or("?"),
+            w["resets_at"].as_str().map(|t| t.get(..16).unwrap_or(t).replace('T', " ")).unwrap_or_default(),
+        );
+    }
+    println!("\nWhere to spend next:");
+    for (i, pick) in spend["ranking"].as_array().into_iter().flatten().enumerate() {
+        let mark = if pick["available"].as_bool() == Some(true) { "" } else { " (unavailable)" };
+        println!("  {}. {}{mark}: {}", i + 1, pick["tool"].as_str().unwrap_or("?"), pick["reason"].as_str().unwrap_or(""));
     }
 }
 

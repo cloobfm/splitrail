@@ -29,7 +29,7 @@ use crate::types::MultiAnalyzerStats;
 const INTERVAL: Duration = Duration::from_secs(1);
 const MAX_SHARE: u32 = 20; // At most 1/20 of the time: 5%.
 
-fn path() -> Option<PathBuf> {
+pub fn path() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join(".config/splitrail/status.json"))
 }
 
