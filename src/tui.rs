@@ -205,6 +205,8 @@ pub struct TuiState {
     pub summary_verbose_mode: bool,
     /// `p` on the Summary tab: plan quotas instead of the summary.
     pub quotas_view: bool,
+    /// `r` on the Summary tab: personal bests instead of the summary.
+    pub records_view: bool,
     pub daily_stats_view_start: usize, // For daily stats pagination (0 = most recent 30 days)
     pub status_message: Option<String>, // Temporary status messages (Slack toggle, etc.)
     pub status_message_timer: Option<std::time::Instant>, // Auto-clear timer for status messages
@@ -732,6 +734,14 @@ async fn run_app(
 
                     if key.code == KeyCode::Char('p') && tui_state.selected_tab == 0 {
                         tui_state.quotas_view = !tui_state.quotas_view;
+                        tui_state.records_view = false;
+                        needs_redraw = true;
+                        continue;
+                    }
+
+                    if key.code == KeyCode::Char('r') && tui_state.selected_tab == 0 {
+                        tui_state.records_view = !tui_state.records_view;
+                        tui_state.quotas_view = false;
                         needs_redraw = true;
                         continue;
                     }
@@ -1100,6 +1110,53 @@ fn redraw_clock_only(
 /// output tk/s needed to use it all by the reset against the current rate, when a fast pace runs
 /// out and for how long the account would then be locked out, and the 5-hour window as a switch
 /// signal. The same answers as `splitrail quotas` and the MCP server.
+/// Personal bests (`records`), with where each stands now and the date it was set.
+fn draw_records_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCodingToolStats]) {
+    use crate::records::Kind;
+    let goal = crate::config::Config::load().ok().flatten().map(|c| c.goal.monthly_tks).unwrap_or(150.0);
+    let board = crate::records::cached().unwrap_or_else(|| crate::records::board(filtered_stats, goal));
+    let dim = Style::default().fg(Color::DarkGray);
+    let rows: Vec<Row> = Kind::ALL
+        .iter()
+        .map(|&kind| {
+            let best = board.best.get(&kind);
+            let now = board.now.get(&kind).copied().unwrap_or(0.0);
+            // How close now is to the record: gold when it is the record (or ties it).
+            let share = best.map(|b| now / b.value).unwrap_or(0.0);
+            let now_style = if share >= 0.999 {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else if share >= 0.75 {
+                Style::default().fg(Color::Green)
+            } else {
+                dim
+            };
+            let now_text = if now > 0.0 { format!("{} ({:.0}%)", kind.format(now), share * 100.0) } else { "-".into() };
+            Row::new(vec![
+                Cell::from(kind.label()).style(Style::default().add_modifier(Modifier::BOLD)),
+                Cell::from(best.map(|b| kind.format(b.value)).unwrap_or_else(|| "-".into()))
+                    .style(Style::default().fg(Color::Yellow)),
+                Cell::from(best.map(|b| b.when.clone()).unwrap_or_default()),
+                Cell::from(now_text).style(now_style),
+            ])
+        })
+        .collect();
+    let [_, table_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
+    let table = Table::new(
+        rows,
+        [Constraint::Length(23), Constraint::Length(12), Constraint::Length(62), Constraint::Min(16)],
+    )
+    .header(
+        Row::new(vec!["Record", "Best", "Set", "Now (of best)"])
+            .style(Style::default().add_modifier(Modifier::BOLD))
+            .bottom_margin(1),
+    )
+    .column_spacing(2)
+    .block(Block::default().borders(Borders::ALL).title(format!(
+        " 🏆 Records · every tool and machine · streak = days averaging ≥{goal:.0} tk/s · kept in records.json · r: back "
+    )));
+    frame.render_widget(table, table_area);
+}
+
 fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCodingToolStats]) {
     use crate::advisor::{human_secs, human_tokens};
     let status = crate::advisor::status_for_tools(filtered_stats);
@@ -1385,7 +1442,10 @@ fn draw_ui(
 
         frame.render_widget(tabs, chunks[1]);
 
-        if tui_state.selected_tab == 0 && tui_state.quotas_view {
+        if tui_state.selected_tab == 0 && tui_state.records_view {
+            draw_records_view(frame, chunks[2], filtered_stats);
+            draw_summary_stats(frame, chunks[3], filtered_stats, format_options, false);
+        } else if tui_state.selected_tab == 0 && tui_state.quotas_view {
             draw_quotas_view(frame, chunks[2], filtered_stats);
             draw_summary_stats(frame, chunks[3], filtered_stats, format_options, false);
         } else if tui_state.selected_tab == 0 {
@@ -1458,8 +1518,9 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, p: {}, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, U: update, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, p: {}, r: {}, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, U: update, q/Esc: quit",
                 if tui_state.quotas_view { "summary" } else { "quotas" },
+                if tui_state.records_view { "summary" } else { "records" },
                 mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))

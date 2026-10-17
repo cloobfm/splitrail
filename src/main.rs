@@ -19,6 +19,7 @@ mod mqtt;
 mod rollup;
 mod notifications;
 mod plan_limits;
+mod records;
 mod price_feed;
 mod cursor_limits;
 mod droid_limits;

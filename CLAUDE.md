@@ -45,6 +45,7 @@ Splitrail is a comprehensive agentic AI coding tool usage analyzer written in Ru
     - **MQTT Module** (`src/mqtt.rs`): live stats to an MQTT broker with Home Assistant discovery (`[mqtt]` config; `splitrail-dashboard mqtt` runs it headless)
     - **Roll-up Module** (`src/rollup.rs`): other machines' usage from the same broker as extra `Tool@host` columns; `scripts/install_mqtt_publisher.sh` sets up a Linux publisher; publishers report `version` and `publisher_rev` (`build.rs`) in their state topic, shown beside the version in the header, and `U` (`src/self_update.rs`) reinstalls ones that are behind, after updating the dashboard itself in place
     - **Quota advisor** (`src/advisor.rs`, `src/mcp_server.rs`): `splitrail-dashboard quotas [--json]` and the stdio MCP server `splitrail-dashboard mcp` (tools `quotas`, `where_to_spend`, `usage`), answered from `status.json`
+    - **Records** (`src/records.rs`): personal bests (peak tk/s, biggest day/week/month, goal streak, most sessions at once) in `~/.config/splitrail/records.json`, ratcheted up from the status-file loop with a macOS notification on a new one; `r` on the Summary tab shows them
     - **Status file** (`src/status_file.rs`): `~/.config/splitrail/status.json` every second for the streaming SwiftBar plugin (`scripts/swiftbar/splitrail.py`, which streams the title and menu to its own native status item, `menubar.swift`)
 15. **Config Module** (`src/config.rs`): Configuration file management
 16. **Types Module** (`src/types.rs`): Core data structures and enums

@@ -138,7 +138,13 @@ pub async fn run(mut stats_rx: watch::Receiver<MultiAnalyzerStats>, goal_tks: f6
             _ = tokio::time::sleep(wait) => {}
         }
         let started = std::time::Instant::now();
-        let payload = payload(&stats_rx.borrow_and_update(), goal_tks);
+        let payload = {
+            let stats = stats_rx.borrow_and_update();
+            // Keeps records.json current (and announces new records) even with the view closed.
+            let tools: Vec<&crate::types::AgenticCodingToolStats> = stats.analyzer_stats.iter().map(|s| s.as_ref()).collect();
+            crate::records::board(&tools, goal_tks);
+            payload(&stats, goal_tks)
+        };
         wait = INTERVAL.max(started.elapsed() * MAX_SHARE);
         if let Err(e) = tokio::task::spawn_blocking(move || write(&payload)).await.unwrap_or(Ok(())) {
             crate::utils::log_error(format!("Status file: {e}"));

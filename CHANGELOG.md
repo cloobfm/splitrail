@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.80] - 2026-10-17
+
+### Added
+- **🏆 Records (`r` on the Summary tab).** Personal bests across every tool and machine, each
+  with when it was set and where today stands against it (gold when you are on a record):
+  - peak tk/s over 15 minutes and over an hour;
+  - the biggest day by output and by $;
+  - the longest run of days averaging the monthly goal (`[goal] monthly_tks`);
+  - the best week and the best month;
+  - the most sessions running at once, with the tools they were in. Ollama requests are left
+    out, since each one is its own conversation.
+
+  Records are kept in `~/.config/splitrail/records.json` and only ever go up, so they outlive
+  the transcripts they came from. Beating one while the dashboard runs raises a macOS
+  notification, "🏆 New record". They are worked out at most every 30 s, and only when the
+  data changed.
+
 ## [2.0.0-dash-0.79] - 2026-10-17
 
 BZL-136. Evaluating which billing rules the LiteLLM feed misses turned up two real mispricings and

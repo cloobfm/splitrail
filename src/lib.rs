@@ -14,6 +14,7 @@ pub mod status_file;
 pub mod incremental;
 pub mod models;
 pub mod mqtt;
+pub mod records;
 pub mod rollup;
 pub mod plan_limits;
 pub mod price_feed;
