@@ -285,6 +285,10 @@ fn project_name(cwd: Option<&str>) -> String {
 pub struct CursorAgentAnalyzer {
     usage_file: Option<PathBuf>,
     charges_file: Option<PathBuf>,
+    /// Per-file parse cache (BZL-74). Each usage log is stamped together with the charges file,
+    /// because a message's cost comes from the charges index: when that moves, every entry has to
+    /// be priced again.
+    cache: crate::stamp_cache::StampCache,
 }
 
 impl CursorAgentAnalyzer {
@@ -297,6 +301,7 @@ impl CursorAgentAnalyzer {
                     .join("usage.jsonl")
             }),
             charges_file: crate::cursor_limits::charges_file(),
+            cache: crate::stamp_cache::StampCache::new(),
         }
     }
 }
@@ -341,14 +346,24 @@ impl Analyzer for CursorAgentAnalyzer {
             .and_then(|path| std::fs::read_to_string(path).ok())
             .map(|content| index_charges(&content))
             .unwrap_or_default();
-        let mut messages = Vec::new();
-        for source in sources {
-            if Some(&source.path) == self.charges_file.as_ref() {
-                continue;
-            }
-            let content = std::fs::read_to_string(&source.path)?;
-            messages.extend(parse_usage_log(&content, &source.path, &charges));
-        }
+
+        // The charges file is a source of prices, not of messages.
+        let logs: Vec<DataSource> = sources
+            .into_iter()
+            .filter(|s| Some(&s.path) != self.charges_file.as_ref())
+            .collect();
+
+        // Only logs whose own file, or the charges file they are priced against, moved are
+        // re-parsed (BZL-74).
+        let charges_path = self.charges_file.clone();
+        let (messages, _report) = self.cache.parse_all_stamping(
+            &logs,
+            |_| charges_path.iter().cloned().collect(),
+            |path| {
+                let content = std::fs::read_to_string(path)?;
+                Ok(parse_usage_log(&content, path, &charges))
+            },
+        );
         Ok(messages)
     }
 

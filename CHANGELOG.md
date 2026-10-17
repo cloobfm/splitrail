@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.86] - 2026-10-17
+
+BZL-74, second pass: Kiro CLI, Ollama and Cursor Agent, plus companion-file stamping.
+
+### Added
+- `StampCache::parse_all_stamping` stamps files a parse reads *beside* each source. A source is
+  often not the only file its result depends on, and stamping only the discovered path serves
+  stale messages whenever the companion is what moved.
+
+### Changed
+- **Kiro CLI** parses through the cache for both of its source kinds: a TUI session's `.json` is
+  stamped with the sibling `.jsonl` that carries its events, and the classic `.sqlite3` with its
+  `-wal`/`-shm`, since SQLite commits land in the WAL before the database file changes. Its
+  database and session parsing moved into `parse_database` / `parse_session_pair`.
+- **Ollama** keeps its parsed usage log against (size, mtime). `usage.jsonl` is append-only and
+  grows forever, so re-reading it every reload got steadily worse. Busy samples are cached beside
+  the messages rather than recomputed, because `plan_limits::record_busy` replaces the whole set
+  and `capacity_in` sums across all of it — handing it only a freshly parsed tail would quietly
+  understate throughput.
+- **Cursor Agent** stamps each usage log together with the charges file it is priced against, so a
+  change to charges re-prices every entry.
+- **Droid CLI** now stamps the sibling `.settings.json` too, closing the staleness gap noted in
+  0.81: settings carry the authoritative token counts, so a settings-only rewrite must invalidate.
+
+### Performance
+Real data, cold then warm parse of the same sources (release build):
+
+| analyzer | files | messages | cold | warm | speedup |
+| --- | --- | --- | --- | --- | --- |
+| Kiro CLI | 3 | 1,724 | 27.1 ms | 2.0 ms | 13.3x |
+| Ollama | 1 | 8,946 | 35.8 ms | 1.7 ms | 21.0x |
+| Cursor Agent | 1 | 44 | 2.1 ms | 1.8 ms | 1.2x |
+| Qwen Code | 81 | 5,861 | 17.4 ms | 2.3 ms | 7.4x |
+| Droid CLI | 64 | 3,498 | 22.1 ms | 1.0 ms | 21.1x |
+| Kilo Code | 112 | 3,164 | 37.6 ms | 1.6 ms | 23.7x |
+
+Totals identical across both passes for every analyzer. Cursor Agent's small factor is just its
+size — one file, 44 messages — not a cache miss.
+
+### Corrections to the BZL-74 audit
+- **Antigravity and Warp already cache** (`CachedConversation` per database; a stamped
+  `Arc<Vec<_>>` respectively). The audit's "none" for both was out of date, so no work was needed.
+- **True cursor mode for Ollama is still worth having** but is not a drop-in: busy samples are
+  derived from whole-file content, so an incremental reader has to accumulate them rather than
+  parse a tail. The stamp cache removes the idle-reload cost; the growing-file cost remains on a
+  first read.
+
+### Still open on BZL-74
+Spec item 4 (on-disk cache persistence) and the CPU acceptance run. Item 3 (coalescing reload
+triggers) landed in 0.85.
+
 ## [2.0.0-dash-0.85] - 2026-10-17
 
 ### Fixed

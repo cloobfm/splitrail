@@ -162,11 +162,62 @@ struct KiroRequestMetadata {
     tool_use_ids_and_names: Option<simd_json::OwnedValue>,
 }
 
-pub struct KiroCliAnalyzer;
+pub struct KiroCliAnalyzer {
+    /// Per-source parse cache (BZL-74). Covers both source kinds: a TUI session's `.json` is
+    /// stamped together with the sibling `.jsonl` that carries its events, and the classic
+    /// `.sqlite3` together with its `-wal`/`-shm`, since SQLite writes land there first.
+    cache: crate::stamp_cache::StampCache,
+}
 
 impl KiroCliAnalyzer {
     pub fn new() -> Self {
-        Self
+        Self {
+            cache: crate::stamp_cache::StampCache::new(),
+        }
+    }
+
+    /// Messages from a TUI session: metadata in the `.json`, events in the sibling `.jsonl`.
+    fn parse_session_pair(path: &Path) -> Result<Vec<ConversationMessage>> {
+        let meta = std::fs::read_to_string(path)?;
+        let events = std::fs::read_to_string(path.with_extension("jsonl")).unwrap_or_default();
+        Ok(super::kiro_sessions::parse_session(&meta, &events))
+    }
+
+    /// Every conversation in the classic SQLite database.
+    fn parse_database(db_path: &Path) -> Result<Vec<ConversationMessage>> {
+        let conn =
+            rusqlite::Connection::open(db_path).context("Failed to open Kiro CLI database")?;
+
+        // Conversations, in the original table and in `conversations_v2`, which newer classic
+        // chats write to instead (keyed by project path too, with the conversation id beside it).
+        let mut conversations: Vec<(String, String)> = Vec::new();
+        for query in [
+            "SELECT key, value FROM conversations",
+            "SELECT key, value FROM conversations_v2",
+        ] {
+            let Ok(mut stmt) = conn.prepare(query) else {
+                continue;
+            };
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                conversations.extend(rows.flatten());
+            }
+        }
+
+        Ok(conversations
+            .into_par_iter()
+            .flat_map(|(project_path, conversation_json)| {
+                match Self::parse_kiro_cli_conversation(&project_path, &conversation_json) {
+                    Ok(messages) => messages,
+                    Err(e) => {
+                        eprintln!("Kiro CLI parsing error for project {project_path}: {e}");
+                        eprintln!("Error chain: {:?}", e.chain().collect::<Vec<_>>());
+                        Vec::new()
+                    }
+                }
+            })
+            .collect())
     }
 
     // Parse a single Kiro CLI conversation
@@ -495,57 +546,32 @@ impl Analyzer for KiroCliAnalyzer {
         &self,
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
-        // The new TUI's sessions: any `.json` source.
-        let mut session_messages = Vec::new();
-        for source in sources.iter().filter(|s| s.path.extension().is_some_and(|e| e == "json")) {
-            if let Ok(meta) = std::fs::read_to_string(&source.path) {
-                let events = std::fs::read_to_string(source.path.with_extension("jsonl")).unwrap_or_default();
-                session_messages.extend(super::kiro_sessions::parse_session(&meta, &events));
-            }
-        }
-        let Some(db_path) = sources
-            .iter()
-            .map(|s| &s.path)
-            .find(|p| p.extension().is_some_and(|e| e == "sqlite3"))
-        else {
-            return Ok(session_messages);
-        };
-
-        // Open SQLite connection using rusqlite
-        let conn =
-            rusqlite::Connection::open(db_path).context("Failed to open Kiro CLI database")?;
-
-        // Conversations, in the original table and in `conversations_v2`, which newer classic
-        // chats write to instead (keyed by project path too, with the conversation id beside it).
-        let mut conversations: Vec<(String, String)> = Vec::new();
-        for query in ["SELECT key, value FROM conversations", "SELECT key, value FROM conversations_v2"] {
-            let Ok(mut stmt) = conn.prepare(query) else { continue };
-            if let Ok(rows) = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
-                conversations.extend(rows.flatten());
-            }
-        }
-
-        // Parse conversations in parallel using the Kiro CLI parser
-        let all_entries: Vec<ConversationMessage> = conversations
-            .into_par_iter()
-            .flat_map(|(project_path, conversation_json)| {
-                match Self::parse_kiro_cli_conversation(&project_path, &conversation_json) {
-                    Ok(messages) => messages,
-                    Err(e) => {
-                        // Log parsing errors for debugging with full details
-                        eprintln!("Kiro CLI parsing error for project {}: {}", project_path, e);
-                        eprintln!("Error chain: {:?}", e.chain().collect::<Vec<_>>());
-                        Vec::new()
-                    }
-                }
-            })
-            .collect();
+        // Only sources whose own file or a companion moved are re-parsed (BZL-74).
+        let (all_entries, _report) = self.cache.parse_all_stamping(
+            &sources,
+            |path| match path.extension().and_then(|e| e.to_str()) {
+                // SQLite commits land in the WAL before the database file itself changes.
+                Some("sqlite3") => ["-wal", "-shm"]
+                    .iter()
+                    .map(|suffix| {
+                        PathBuf::from(format!("{}{suffix}", path.display()))
+                    })
+                    .collect(),
+                // The session's events live beside its metadata and are what grow.
+                Some("json") => vec![path.with_extension("jsonl")],
+                _ => Vec::new(),
+            },
+            |path| match path.extension().and_then(|e| e.to_str()) {
+                Some("sqlite3") => Self::parse_database(path),
+                Some("json") => Self::parse_session_pair(path),
+                _ => Ok(Vec::new()),
+            },
+        );
 
         // Deduplicate by global hash
         let mut seen_hashes = HashSet::new();
         let deduplicated: Vec<ConversationMessage> = all_entries
             .into_iter()
-            .chain(session_messages)
             .filter(|msg| seen_hashes.insert(msg.global_hash.clone()))
             .collect();
 

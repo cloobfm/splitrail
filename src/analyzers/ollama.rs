@@ -14,11 +14,26 @@ pub struct OllamaAnalyzer {
     usage_file: Option<std::path::PathBuf>,
     /// Electricity pricing from `[ollama]` in the config.
     power: OllamaConfig,
+    /// Parsed usage log against its (size, mtime) (BZL-74). `usage.jsonl` is append-only and
+    /// grows forever, so re-reading it on every reload gets steadily worse.
+    ///
+    /// Busy samples are cached beside the messages rather than recomputed: `record_busy` replaces
+    /// the whole set and `capacity_in` sums across all of it, so handing it only the newly parsed
+    /// tail would quietly understate throughput.
+    cache: std::sync::Mutex<HashMap<std::path::PathBuf, CachedUsage>>,
+}
+
+struct CachedUsage {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    messages: std::sync::Arc<Vec<ConversationMessage>>,
+    busy: std::sync::Arc<Vec<crate::plan_limits::BusySample>>,
 }
 
 impl OllamaAnalyzer {
     pub fn new() -> Self {
         Self {
+            cache: Default::default(),
             power: crate::config::Config::load()
                 .ok()
                 .flatten()
@@ -314,9 +329,33 @@ impl Analyzer for OllamaAnalyzer {
         let mut messages = Vec::new();
         let mut busy = Vec::new();
         for source in sources {
-            let content = std::fs::read_to_string(&source.path)?;
-            messages.extend(parse_usage_log(&content, &source.path, &self.power));
-            busy.extend(busy_samples(&content));
+            let (len, modified) = std::fs::metadata(&source.path)
+                .map(|m| (m.len(), m.modified().ok()))
+                .unwrap_or((0, None));
+
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = match cache.get(&source.path) {
+                Some(hit) if hit.len == len && hit.modified == modified => hit,
+                _ => {
+                    let content = std::fs::read_to_string(&source.path)?;
+                    cache.insert(
+                        source.path.clone(),
+                        CachedUsage {
+                            len,
+                            modified,
+                            messages: std::sync::Arc::new(parse_usage_log(
+                                &content,
+                                &source.path,
+                                &self.power,
+                            )),
+                            busy: std::sync::Arc::new(busy_samples(&content)),
+                        },
+                    );
+                    &cache[&source.path]
+                }
+            };
+            messages.extend(entry.messages.iter().cloned());
+            busy.extend(entry.busy.iter().cloned());
         }
         crate::plan_limits::record_busy(self.display_name(), busy);
         Ok(messages)

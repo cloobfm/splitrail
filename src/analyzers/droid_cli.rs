@@ -74,9 +74,8 @@ struct DroidTokenUsage {
 pub struct DroidCliAnalyzer {
     /// Per-file parse cache: a reload only pays for sessions that changed (BZL-74).
     ///
-    /// Keyed on the session JSONL. A session's sibling `.settings.json` is written at session
-    /// start and the JSONL grows throughout, so a settings-only change with a byte-identical
-    /// session file would be served from cache — not a case that arises in practice.
+    /// Stamped on the session JSONL together with its sibling `.settings.json`, which carries
+    /// the authoritative token counts, so a settings-only rewrite still invalidates the entry.
     cache: crate::stamp_cache::StampCache,
 }
 
@@ -126,9 +125,11 @@ impl Analyzer for DroidCliAnalyzer {
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
         // Only sessions whose size or mtime moved are re-parsed (BZL-74).
-        let (messages, _report) = self
-            .cache
-            .parse_all(&sources, |path| self.parse_session_file(path));
+        let (messages, _report) = self.cache.parse_all_stamping(
+            &sources,
+            |path| vec![path.with_extension("settings.json")],
+            |path| self.parse_session_file(path),
+        );
 
         Ok(messages)
     }

@@ -23,9 +23,11 @@ use crate::types::ConversationMessage;
 /// One file's parsed messages, shared rather than copied out of the cache.
 type Parsed = Arc<Vec<ConversationMessage>>;
 
+/// Size and mtime of one file, or `None` where it does not exist.
+type Stamp = Vec<(u64, Option<SystemTime>)>;
+
 struct Entry {
-    len: u64,
-    modified: Option<SystemTime>,
+    stamp: Stamp,
     messages: Parsed,
 }
 
@@ -65,6 +67,25 @@ impl StampCache {
     where
         F: Fn(&Path) -> Result<Vec<ConversationMessage>> + Sync,
     {
+        self.parse_all_stamping(sources, |_| Vec::new(), parse)
+    }
+
+    /// Like [`Self::parse_all`], but also stamping files the parser reads *beside* each source.
+    ///
+    /// A source is often not the only file its parse depends on: a Kiro session's `.json` names
+    /// the session while the sibling `.jsonl` carries the events, and a Droid session's
+    /// `.settings.json` carries the authoritative token counts. Stamping only the discovered path
+    /// would serve stale messages whenever the companion is the file that moved.
+    pub fn parse_all_stamping<F, C>(
+        &self,
+        sources: &[DataSource],
+        companions: C,
+        parse: F,
+    ) -> (Vec<ConversationMessage>, StampReport)
+    where
+        F: Fn(&Path) -> Result<Vec<ConversationMessage>> + Sync,
+        C: Fn(&Path) -> Vec<PathBuf> + Sync,
+    {
         // Overlapping glob patterns can list the same file twice; parse it once.
         let mut seen = HashSet::new();
         let paths: Vec<&Path> = sources
@@ -75,7 +96,7 @@ impl StampCache {
 
         let results: Vec<(Option<Parsed>, Outcome)> = paths
             .par_iter()
-            .map(|path| self.parse_one(path, &parse))
+            .map(|path| self.parse_one(path, &companions, &parse))
             .collect();
 
         let mut report = StampReport::default();
@@ -107,21 +128,28 @@ impl StampCache {
         (messages, report)
     }
 
-    fn parse_one<F>(&self, path: &Path, parse: &F) -> (Option<Parsed>, Outcome)
+    fn parse_one<F, C>(&self, path: &Path, companions: &C, parse: &F) -> (Option<Parsed>, Outcome)
     where
         F: Fn(&Path) -> Result<Vec<ConversationMessage>>,
+        C: Fn(&Path) -> Vec<PathBuf>,
     {
         // Stat before reading, so a write landing mid-parse shows up as a change next pass rather
         // than being silently absorbed into a stamp that claims to cover it.
-        let Ok(meta) = std::fs::metadata(path) else {
+        if std::fs::metadata(path).is_err() {
             self.lock().remove(path);
             return (None, Outcome::Failed);
-        };
-        let len = meta.len();
-        let modified = meta.modified().ok();
+        }
+        let stamp: Stamp = std::iter::once(path.to_path_buf())
+            .chain(companions(path))
+            .map(|file| {
+                std::fs::metadata(file)
+                    .map(|m| (m.len(), m.modified().ok()))
+                    .unwrap_or((0, None))
+            })
+            .collect();
 
         if let Some(entry) = self.lock().get(path) {
-            if entry.len == len && entry.modified == modified {
+            if entry.stamp == stamp {
                 return (Some(Arc::clone(&entry.messages)), Outcome::Unchanged);
             }
         }
@@ -132,8 +160,7 @@ impl StampCache {
                 self.lock().insert(
                     path.to_path_buf(),
                     Entry {
-                        len,
-                        modified,
+                        stamp,
                         messages: Arc::clone(&messages),
                     },
                 );
@@ -312,6 +339,65 @@ mod tests {
         let (second, report) = cache.parse_all(&src(&[&file]), &flaky);
         assert_eq!(tags(&second), ["one"]);
         assert_eq!(report.parsed, 1);
+    }
+
+    /// A parse that reads a companion file must be invalidated when the companion moves, not
+    /// only when the discovered path does. Kiro's session `.json` is static while the sibling
+    /// `.jsonl` of events is the file that grows, so stamping the `.json` alone serves stale data.
+    #[test]
+    fn a_changed_companion_invalidates_the_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = dir.path().join("s.json");
+        let events = dir.path().join("s.jsonl");
+        std::fs::write(&meta, "m1\n").unwrap();
+        std::fs::write(&events, "e1\n").unwrap();
+
+        let calls = AtomicUsize::new(0);
+        let cache = StampCache::new();
+        let companions = |p: &Path| vec![p.with_extension("jsonl")];
+        let parse = |p: &Path| -> Result<Vec<ConversationMessage>> {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let mut out: Vec<ConversationMessage> =
+                std::fs::read_to_string(p)?.lines().map(msg).collect();
+            out.extend(
+                std::fs::read_to_string(p.with_extension("jsonl"))
+                    .unwrap_or_default()
+                    .lines()
+                    .map(msg),
+            );
+            Ok(out)
+        };
+
+        let (first, _) = cache.parse_all_stamping(&src(&[&meta]), companions, &parse);
+        assert_eq!(tags(&first), ["e1", "m1"]);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Only the companion grows; the discovered path is byte-identical.
+        std::fs::write(&events, "e1\ne2\n").unwrap();
+        let (after, report) = cache.parse_all_stamping(&src(&[&meta]), companions, &parse);
+
+        assert_eq!(report.parsed, 1, "the companion moved, so re-parse");
+        assert_eq!(tags(&after), ["e1", "e2", "m1"]);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// With the companion unchanged too, nothing is re-read.
+    #[test]
+    fn unchanged_companion_keeps_the_entry_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = dir.path().join("s.json");
+        std::fs::write(&meta, "m1\n").unwrap();
+        std::fs::write(dir.path().join("s.jsonl"), "e1\n").unwrap();
+        let calls = AtomicUsize::new(0);
+        let cache = StampCache::new();
+        let companions = |p: &Path| vec![p.with_extension("jsonl")];
+
+        cache.parse_all_stamping(&src(&[&meta]), companions, counting_parser(&calls));
+        let (_, report) =
+            cache.parse_all_stamping(&src(&[&meta]), companions, counting_parser(&calls));
+
+        assert_eq!(report.unchanged, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
