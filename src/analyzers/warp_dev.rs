@@ -81,7 +81,19 @@ pub fn run_messages(run: &Value, cents_per_credit: f64) -> Vec<ConversationMessa
     let Some(started) = started else {
         return Vec::new();
     };
-    let ended = rfc3339(run.get("finished_at")).or_else(|| rfc3339(run.get("updated_at"))).unwrap_or(started);
+    // A run still going (`warp-run` saves it every 30 s) is dated when it was last saved, so the
+    // column shows it active; a finished one when it finished.
+    let finished = run.get("state").and_then(Value::as_str).is_some_and(|s| {
+        ["SUCCEEDED", "FAILED", "ERROR", "CANCELLED", "BLOCKED"].contains(&s)
+    });
+    let saved = run
+        .get("recorded_at")
+        .and_then(Value::as_f64)
+        .and_then(|t| DateTime::from_timestamp(t as i64, 0));
+    let ended = rfc3339(run.get("finished_at"))
+        .or_else(|| if finished { rfc3339(run.get("updated_at")) } else { saved.or_else(|| rfc3339(run.get("updated_at"))) })
+        .unwrap_or(started)
+        .max(started);
     let conversation = run.get("conversation_id").and_then(Value::as_str).unwrap_or(run_id);
     let project = project_name(run.get("cwd").and_then(Value::as_str));
     let mut by_model: Vec<(String, f64)> = Vec::new();
@@ -569,6 +581,11 @@ mod tests {
         });
         let messages = run_messages(&run, 1.8);
         assert_eq!(messages.len(), 3);
+        // Still running: dated when warp-run last saved it.
+        run["state"] = "IN_PROGRESS".into();
+        run["recorded_at"] = 1_792_210_000.0.into();
+        let messages = run_messages(&run, 1.8);
+        assert_eq!(messages[1].date.timestamp(), 1_792_210_000);
         let total: f64 = messages.iter().map(|m| m.stats.cost).sum();
         assert!((total - 4.98725 * 0.018).abs() < 1e-9);
     }

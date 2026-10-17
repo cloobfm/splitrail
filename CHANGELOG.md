@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.63] - 2026-10-16
+
+### Fixed
+- **Warp CLI runs show while they run, not only once they end.** `warp-run` saves the run's
+  usage so far every 30 seconds, and a run still going is dated when it was last saved, so the
+  Warp column shows it active (instead of idle for the whole run) with its cost rising.
+
 ## [2.0.0-dash-0.62] - 2026-10-16
 
 ### Added

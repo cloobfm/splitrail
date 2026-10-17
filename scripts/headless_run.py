@@ -37,6 +37,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 CONFIG = os.path.expanduser("~/.config/splitrail")
@@ -209,9 +210,9 @@ def warp_fetch(real, run_id, attempts=6, wait=5.0):
     return run
 
 
-def warp_save(real, run_id, cwd):
+def warp_save(real, run_id, cwd, attempts=6):
     try:
-        run = warp_fetch(real, run_id)
+        run = warp_fetch(real, run_id, attempts)
         if not run:
             return False
         runs = os.path.join(CONFIG, "warp", "runs")
@@ -238,6 +239,18 @@ def without_option(args, name):
     return out
 
 
+WARP_PROGRESS_SECS = 30
+
+
+def warp_progress(real, events, cwd, done):
+    """While the run goes on, save its usage so far every `WARP_PROGRESS_SECS`, so the dashboard
+    sees it working (and its cost rise) rather than only once it ends."""
+    while not done.wait(WARP_PROGRESS_SECS):
+        run_id = warp_run_id(events)
+        if run_id:
+            warp_save(real, run_id, cwd, attempts=1)
+
+
 def run_warp(real, args):
     if args[:1] == ["--record"] and len(args) >= 2:
         cwd = option_value(args, "--cwd") or option_value(args, "-C") or os.getcwd()
@@ -252,6 +265,8 @@ def run_warp(real, args):
         signal.signal(sig, lambda s, _f: child.send_signal(s))
     out = sys.stdout.buffer
     events, raw_lines = [], []
+    done = threading.Event()
+    threading.Thread(target=warp_progress, args=(real, events, cwd, done), daemon=True).start()
     for raw in child.stdout:
         raw_lines.append(raw.decode("utf-8", "replace"))
         try:
@@ -268,6 +283,7 @@ def run_warp(real, args):
             out.write(warp_text(event).encode())
         out.flush()
     code = child.wait()
+    done.set()
     if fmt == "json":
         out.write(json.dumps(events, indent=2).encode() + b"\n")
         out.flush()
