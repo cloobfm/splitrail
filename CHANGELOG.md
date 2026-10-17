@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.69] - 2026-10-17
+
+### Security
+- **Dependency advisories cleared** (BZL-131). rustls 0.23.29 -> 0.23.46 (RUSTSEC-2026-0285,
+  0346-0349) with rustls-webpki 0.103.15; quinn-proto 0.11.12 -> 0.11.19 (six advisories,
+  including remote panics and memory exhaustion); bytes 1.12.1 (RUSTSEC-2026-0007);
+  crossbeam-epoch 0.9.21 (RUSTSEC-2026-0204); anyhow 1.0.104 (unsound `downcast_mut`).
+  `cargo audit` now reports no vulnerabilities; what remains is `paste` (unmaintained) and
+  `lru` (unsound) through ratatui 0.29, which need a ratatui upgrade.
+
 ## [2.0.0-dash-0.68] - 2026-10-16
 
 ### Fixed
