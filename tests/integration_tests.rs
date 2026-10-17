@@ -7,38 +7,9 @@ use std::io::Write;
 use std::sync::Mutex;
 use tempfile::TempDir;
 
-/// Tests that read or override `$HOME` must hold this lock. Cargo runs tests in parallel
+/// Tests that read `$HOME` must hold this lock. Cargo runs tests in parallel
 /// threads within one process, and the environment is process-wide.
 static HOME_LOCK: Mutex<()> = Mutex::new(());
-
-/// Overrides `$HOME` for the lifetime of the guard and restores the previous value on drop,
-/// including on panic, so a failing test cannot poison the ones that run after it.
-struct HomeOverride {
-    previous: Option<std::ffi::OsString>,
-}
-
-impl HomeOverride {
-    fn new(path: &std::path::Path) -> Self {
-        let previous = std::env::var_os("HOME");
-        // Mutating the environment is `unsafe` in the 2024 edition because other threads may
-        // be reading it concurrently; HOME_LOCK serializes the tests that care.
-        unsafe {
-            std::env::set_var("HOME", path);
-        }
-        Self { previous }
-    }
-}
-
-impl Drop for HomeOverride {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.previous {
-                Some(prev) => std::env::set_var("HOME", prev),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-    }
-}
 
 #[tokio::test]
 async fn test_analyzer_registry_creation() {
@@ -85,49 +56,31 @@ async fn test_analyzer_stats_loading() {
 
 #[tokio::test]
 async fn test_claude_code_analyzer_with_test_data() {
-    let _home = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let temp_dir = TempDir::new().unwrap();
-    let analyzer = ClaudeCodeAnalyzer::new();
-    
-    // Create test data directory structure
-    let claude_dir = temp_dir.path().join(".claude").join("projects").join("test_project");
+    let config_dir = temp_dir.path().join(".claude");
+    let claude_dir = config_dir.join("projects").join("test_project");
     std::fs::create_dir_all(&claude_dir).unwrap();
-    
-    // Create test JSONL file
-    let jsonl_file = claude_dir.join("conversations.jsonl");
-    create_test_claude_file(&jsonl_file).await;
-    
-    // Point the analyzer at the temp dir; restored when `_override` drops.
-    let _override = HomeOverride::new(temp_dir.path());
-    
-    // Test data discovery
-    let sources = analyzer.discover_data_sources();
-    assert!(sources.is_ok());
-    
-    let sources = sources.unwrap();
-    if !sources.is_empty() {
-        // Test conversation parsing
-        let messages = analyzer.parse_conversations(sources).await;
-        assert!(messages.is_ok());
-        
-        let messages = messages.unwrap();
-        assert!(!messages.is_empty());
-        
-        // Verify message structure
-        for msg in &messages {
-            assert!(!msg.project_hash.is_empty());
-            assert!(!msg.conversation_hash.is_empty());
-            assert!(!msg.global_hash.is_empty());
-        }
-        
-        // Test stats generation
-        let stats = analyzer.get_stats().await;
-        assert!(stats.is_ok());
-        
-        let stats = stats.unwrap();
-        assert_eq!(stats.analyzer_name, "Claude Code");
-        assert_eq!(stats.messages.len(), messages.len());
+    create_test_claude_file(&claude_dir.join("conversations.jsonl")).await;
+
+    // The config directory is given explicitly rather than through `$HOME`: `new()` reads HOME
+    // when it is constructed, so an override set afterwards left discovery on the real
+    // ~/.claude, and two parses of a live corpus disagreed whenever a session was writing.
+    let analyzer = ClaudeCodeAnalyzer::for_account(None, config_dir);
+
+    let sources = analyzer.discover_data_sources().unwrap();
+    assert_eq!(sources.len(), 1, "only the temp corpus is discovered");
+
+    let messages = analyzer.parse_conversations(sources).await.unwrap();
+    assert!(!messages.is_empty());
+    for msg in &messages {
+        assert!(!msg.project_hash.is_empty());
+        assert!(!msg.conversation_hash.is_empty());
+        assert!(!msg.global_hash.is_empty());
     }
+
+    let stats = analyzer.get_stats().await.unwrap();
+    assert_eq!(stats.analyzer_name, "Claude Code");
+    assert_eq!(stats.messages.len(), messages.len());
 }
 
 #[tokio::test]

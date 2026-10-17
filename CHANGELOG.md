@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.83] - 2026-10-17
+
+### Fixed
+- **`test_claude_code_analyzer_with_test_data` no longer reads the real `~/.claude`.** It built
+  the analyzer before overriding `$HOME`, and `ClaudeCodeAnalyzer::new()` reads HOME when it is
+  constructed, so discovery scanned the live corpus. Two parses of it disagreed whenever a
+  session was writing. The test now passes its temp config directory to `for_account` and
+  asserts that only that corpus is found. The unused `HomeOverride` helper is gone.
+
 ## [2.0.0-dash-0.82] - 2026-10-17
 
 ### Added
