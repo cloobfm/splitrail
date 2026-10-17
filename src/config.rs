@@ -141,6 +141,14 @@ impl ClaudeCodeConfig {
     }
 }
 
+/// `dir` with a leading `~` expanded to the home directory.
+pub fn expand_tilde(dir: &str) -> PathBuf {
+    match std::env::home_dir() {
+        Some(home) => expand_home(dir, &home),
+        None => PathBuf::from(dir),
+    }
+}
+
 fn expand_home(dir: &str, home: &std::path::Path) -> PathBuf {
     match dir.strip_prefix("~/") {
         Some(rest) => home.join(rest),
@@ -168,6 +176,15 @@ pub fn detect_claude_accounts(home: &std::path::Path) -> Vec<(String, PathBuf)> 
         .collect();
     extra.sort();
     accounts.extend(extra);
+    // `CLAUDE_CONFIG_DIR` (Claude Code's own setting) names a config directory anywhere.
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        let dir = expand_home(&dir.to_string_lossy(), home);
+        if dir.join("projects").is_dir() && !accounts.iter().any(|(_, known)| *known == dir) {
+            let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let label = name.trim_start_matches('.').trim_start_matches("claude-").to_string();
+            accounts.push((if label.is_empty() || label == "claude" { "env".into() } else { label }, dir));
+        }
+    }
     accounts
 }
 

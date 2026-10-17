@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.71] - 2026-10-17
+
+### Fixed
+- **`CODEX_HOME` and `CLAUDE_CONFIG_DIR` are honoured** (BZL-134, upstream #224). Codex sessions
+  are read from `$CODEX_HOME` when it is set, as Codex itself does, instead of always
+  `~/.codex`; a Claude Code config directory named by `CLAUDE_CONFIG_DIR` is added as an account
+  when it is not one already detected or configured. The other two upstream fixes in BZL-134
+  (sub-cent cost rounding, new sessions in the live view) are bugs in structures upstream added
+  after the fork; costs here are exact `f64` and new session files are picked up by the
+  recursive watcher.
+
 ## [2.0.0-dash-0.70] - 2026-10-17
 
 ### Fixed

@@ -48,16 +48,16 @@ impl Analyzer for CodexCliAnalyzer {
     fn get_data_glob_patterns(&self) -> Vec<String> {
         let mut patterns = Vec::new();
 
-        if let Some(home_dir) = std::env::home_dir() {
-            let home_str = home_dir.to_string_lossy();
+        if let Some(codex_dir) = codex_home() {
+            let home_str = codex_dir.to_string_lossy();
 
             // Codex CLI history file contains summary commands sent via the CLI prompt
-            patterns.push(format!("{home_str}/.codex/history.jsonl"));
+            patterns.push(format!("{home_str}/history.jsonl"));
 
             // Watch today's session directory directly for real-time updates (no deep recursion!)
             let today = chrono::Local::now();
             let today_dir = format!(
-                "{home_str}/.codex/sessions/{}/{:02}/{:02}/*.jsonl",
+                "{home_str}/sessions/{}/{:02}/{:02}/*.jsonl",
                 today.format("%Y"),
                 today.format("%m"),
                 today.format("%d")
@@ -67,7 +67,7 @@ impl Analyzer for CodexCliAnalyzer {
             // Also watch yesterday's directory for edge cases around midnight
             let yesterday = today - chrono::Duration::days(1);
             let yesterday_dir = format!(
-                "{home_str}/.codex/sessions/{}/{:02}/{:02}/*.jsonl",
+                "{home_str}/sessions/{}/{:02}/{:02}/*.jsonl",
                 yesterday.format("%Y"),
                 yesterday.format("%m"),
                 yesterday.format("%d")
@@ -81,11 +81,11 @@ impl Analyzer for CodexCliAnalyzer {
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
         let mut sources = Vec::new();
 
-        if let Some(home_dir) = std::env::home_dir() {
-            let home_str = home_dir.to_string_lossy();
+        if let Some(codex_dir) = codex_home() {
+            let home_str = codex_dir.to_string_lossy();
 
             // Add history file
-            let history_path = format!("{home_str}/.codex/history.jsonl");
+            let history_path = format!("{home_str}/history.jsonl");
             if std::path::Path::new(&history_path).exists() {
                 sources.push(DataSource {
                     path: std::path::PathBuf::from(history_path),
@@ -93,7 +93,7 @@ impl Analyzer for CodexCliAnalyzer {
             }
 
             // Add ALL historical session files (not just today/yesterday)
-            let historical_pattern = format!("{home_str}/.codex/sessions/**/*.jsonl");
+            let historical_pattern = format!("{home_str}/sessions/**/*.jsonl");
             for entry in glob::glob(&historical_pattern)? {
                 let path = entry?;
                 if path.is_file() {
@@ -826,10 +826,36 @@ fn parse_codex_cli_history_file(path: &Path) -> Result<Vec<ConversationMessage>>
     Ok(messages)
 }
 
+/// Codex's data directory: `$CODEX_HOME` when set (as Codex itself honours it), else `~/.codex`.
+pub fn codex_home() -> Option<std::path::PathBuf> {
+    codex_home_from(std::env::var_os("CODEX_HOME"))
+}
+
+fn codex_home_from(var: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    match var.filter(|v| !v.is_empty()) {
+        Some(dir) => Some(crate::config::expand_tilde(&dir.to_string_lossy())),
+        None => Some(std::env::home_dir()?.join(".codex")),
+    }
+}
+
+#[cfg(test)]
+mod codex_home_tests {
+    use super::*;
+
+    #[test]
+    fn codex_home_follows_the_variable() {
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(codex_home_from(None), Some(home.join(".codex")));
+        assert_eq!(codex_home_from(Some("".into())), Some(home.join(".codex")));
+        assert_eq!(codex_home_from(Some("~/work/codex".into())), Some(home.join("work/codex")));
+        assert_eq!(codex_home_from(Some("/srv/codex".into())), Some("/srv/codex".into()));
+    }
+}
+
 fn rollout_exists_for_session(session_id: &str) -> bool {
-    std::env::home_dir().map_or(false, |home| {
+    codex_home().map_or(false, |home| {
         let home_str = home.to_string_lossy();
-        let pattern = format!("{home_str}/.codex/sessions/*/*/*/*{session_id}.jsonl");
+        let pattern = format!("{home_str}/sessions/*/*/*/*{session_id}.jsonl");
         glob::glob(&pattern)
             .ok()
             .and_then(|mut paths| paths.next())
