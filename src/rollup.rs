@@ -575,9 +575,12 @@ pub struct Publisher {
 }
 
 impl Publisher {
-    /// Running different publishing code from this build's.
+    /// Running different publishing code from this build's, or another version: a release that
+    /// changes only the dashboard still updates the publishers, so every machine shows the
+    /// same version.
     pub fn behind(&self) -> bool {
         self.rev.as_deref() != Some(crate::mqtt::PUBLISHER_REV)
+            || self.version.as_deref() != Some(env!("CARGO_PKG_VERSION"))
     }
 }
 
@@ -850,14 +853,22 @@ mod tests {
 
     #[test]
     fn publishers_report_version_rev_and_status() {
-        let state = format!(r#"{{"version": "2.0.0-dash-0.53", "publisher_rev": "{}", "tks": 1.0}}"#, crate::mqtt::PUBLISHER_REV);
+        let state = format!(
+            r#"{{"version": "{}", "publisher_rev": "{}", "tks": 1.0}}"#,
+            env!("CARGO_PKG_VERSION"),
+            crate::mqtt::PUBLISHER_REV
+        );
         apply("splitrail/pub_test/state", state.as_bytes(), "me");
         apply("splitrail/pub_test/status", b"online", "me");
         apply("splitrail/pub_old/state", br#"{"tks": 0.0}"#, "me");
         let all = publishers();
         let current = all.iter().find(|p| p.slug == "pub_test").unwrap();
-        assert_eq!((current.host.as_str(), current.version.as_deref(), current.online), ("pub-test", Some("2.0.0-dash-0.53"), true));
+        assert_eq!((current.host.as_str(), current.version.as_deref(), current.online), ("pub-test", Some(env!("CARGO_PKG_VERSION")), true));
         assert!(!current.behind());
+        // Same code, older version: still updated, so the versions match.
+        let older = format!(r#"{{"version": "2.0.0-dash-0.1", "publisher_rev": "{}"}}"#, crate::mqtt::PUBLISHER_REV);
+        apply("splitrail/pub_ver/state", older.as_bytes(), "me");
+        assert!(publishers().iter().find(|p| p.slug == "pub_ver").unwrap().behind());
         let old = all.iter().find(|p| p.slug == "pub_old").unwrap();
         assert!(old.behind() && !old.online, "no fingerprint: an older build");
         apply("splitrail/pub_test/status", b"offline", "me");

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.67] - 2026-10-16
+
+### Fixed
+- **Devboxes update whenever the version changes.** A publisher counted as behind only when its
+  publishing code differed, so a release that changed only the dashboard or a Mac-side script
+  (0.66) left the devboxes on the old version label and `U` skipped them. A different version now
+  counts as behind too, so every machine ends on the dashboard's version.
+- **Decision-model transcripts in the Ollama activity** (BZL-129). `/v1/systemone` calls were
+  logged with empty previews: the request carries `state` and `questions` rather than messages,
+  and the reply carries `answers` rather than text. The prompt preview is now the state plus each
+  question's instructions, the reply preview each answer with its confidence
+  (`sky: blue (100%)`), checked against a live call.
+
 ## [2.0.0-dash-0.66] - 2026-10-16
 
 ### Fixed

@@ -106,6 +106,16 @@ def prompt_preview(path, body):
         return ""
     if not isinstance(payload, dict):
         return ""
+    if path in DECISION:
+        # `state` (text or JSON) and each question's instructions.
+        state = payload.get("state")
+        state = state if isinstance(state, str) else json.dumps(state) if state is not None else ""
+        questions = payload.get("questions")
+        asked = [
+            f"{key}: {q.get('instructions')}" if isinstance(q, dict) and isinstance(q.get("instructions"), str) else key
+            for key, q in (questions.items() if isinstance(questions, dict) else [])
+        ]
+        return " · ".join(filter(None, [state.strip(), *asked]))[:PREVIEW_CHARS]
     if path in ("/api/generate", "/v1/completions"):
         prompt = payload.get("prompt")
         text = prompt[-1] if isinstance(prompt, list) and prompt else prompt
@@ -127,10 +137,27 @@ def request_model(body):
     return model if isinstance(model, str) else ""
 
 
+def decision_text(answers):
+    """A decision model's answers as `key: answer (confidence)`."""
+    parts = []
+    for key, answer in answers.items():
+        if not isinstance(answer, dict):
+            continue
+        value = next((answer[k] for k in ("choice", "score", "answer", "value") if k in answer), None)
+        if value is None:
+            value = {k: v for k, v in answer.items() if k not in ("type", "probabilities", "confidence")}
+        confidence = answer.get("confidence")
+        tail = f" ({confidence:.0%})" if isinstance(confidence, (int, float)) else ""
+        parts.append(f"{key}: {value}{tail}")
+    return " · ".join(parts)
+
+
 def reply_text(obj):
     """Reply text carried by one response object, in any of Ollama's dialects."""
     if not isinstance(obj, dict):
         return ""
+    if isinstance(obj.get("answers"), dict):
+        return decision_text(obj["answers"])  # /v1/systemone
     if isinstance(obj.get("response"), str):
         return obj["response"]  # /api/generate
     message = obj.get("message")

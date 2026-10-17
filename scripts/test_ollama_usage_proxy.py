@@ -81,8 +81,10 @@ class FakeOllama(BaseHTTPRequestHandler):
                 self._json({"model": "qwen3:8b", "choices": [], "usage": usage})
         elif path == "/v1/systemone":
             # Decision models answer without naming the model.
-            self._json({"decision": "yes", "usage": {"input_tokens": 1002, "output_tokens": 3},
-                        "prompt_eval_cached_count": 640})
+            # The shape a real call returned (Ollama 0.40.4), without the model.
+            self._json({"answers": {"sky": {"type": "choice", "choice": "blue", "confidence": 0.9986,
+                                            "probabilities": {"blue": 0.9999, "green": 0.0001}}},
+                        "usage": {"input_tokens": 1002, "output_tokens": 3}, "prompt_eval_cached_count": 640})
         elif path == "/api/fail":
             self._json({"error": "boom"}, 500)
         else:
@@ -181,14 +183,19 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(self.logged()[0]["completion_tokens"], 7)
 
     def test_decision_model_calls_are_logged(self):
-        conn, resp = self.request("POST", "/v1/systemone", {"model": "decide:1b", "input": "x"})
-        self.assertEqual(json.loads(resp.read())["decision"], "yes")
+        body = {"model": "decide:1b", "state": "The sky is blue on a clear day.",
+                "questions": {"sky": {"type": "choice", "instructions": "What colour is the sky?",
+                                      "criteria": {"blue": None, "green": None}}}}
+        conn, resp = self.request("POST", "/v1/systemone", body)
+        self.assertEqual(json.loads(resp.read())["answers"]["sky"]["choice"], "blue")
         conn.close()
         [line] = self.logged()
         self.assertEqual(
             (line["endpoint"], line["model"], line["prompt_tokens"], line["cached_tokens"], line["completion_tokens"]),
             ("/v1/systemone", "decide:1b", 1002, 640, 3),
         )
+        self.assertEqual(line["prompt_preview"], "The sky is blue on a clear day. · sky: What colour is the sky?")
+        self.assertEqual(line["reply_preview"], "sky: blue (100%)")
 
     def test_other_paths_and_errors_pass_through_unlogged(self):
         conn, resp = self.request("GET", "/api/tags")
