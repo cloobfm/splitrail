@@ -265,20 +265,157 @@ fn save(records: &BTreeMap<Kind, Record>) -> std::io::Result<()> {
     std::fs::rename(tmp, path)
 }
 
-fn notify(kind: Kind, new: &Record, old: &Record) {
-    if !cfg!(target_os = "macos") {
-        return;
+/// How a new record reaches the desktop.
+///
+/// Implementations *build* the command rather than running it, so the platform logic is unit
+/// testable without spawning anything (BZL-12).
+trait Notifier {
+    /// The command and arguments that post this notification, or `None` where the platform has
+    /// no way to (or its notifier is not installed), in which case nothing is posted.
+    fn command(&self, title: &str, body: &str) -> Option<(String, Vec<String>)>;
+}
+
+/// macOS posts through AppleScript, which is always present.
+struct MacNotifier;
+
+impl Notifier for MacNotifier {
+    fn command(&self, title: &str, body: &str) -> Option<(String, Vec<String>)> {
+        let script = format!(
+            "display notification {} with title {} sound name \"Glass\"",
+            serde_json::to_string(body).unwrap_or_default(),
+            serde_json::to_string(title).unwrap_or_default(),
+        );
+        Some(("osascript".to_string(), vec!["-e".to_string(), script]))
     }
-    let text = format!("{}: {} (was {})", kind.label(), kind.format(new.value), kind.format(old.value));
-    let script = format!(
-        "display notification {} with title \"🏆 New record\" sound name \"Glass\"",
-        serde_json::to_string(&text).unwrap_or_default()
+}
+
+/// Linux posts through `notify-send` from libnotify, which is not always installed. `installed`
+/// is passed in rather than probed here so the decision is testable.
+struct LinuxNotifier {
+    installed: bool,
+}
+
+impl Notifier for LinuxNotifier {
+    fn command(&self, title: &str, body: &str) -> Option<(String, Vec<String>)> {
+        self.installed.then(|| {
+            (
+                "notify-send".to_string(),
+                vec![
+                    // Records are not urgent and should not stay on screen.
+                    "--urgency=low".to_string(),
+                    "--app-name=splitrail".to_string(),
+                    title.to_string(),
+                    body.to_string(),
+                ],
+            )
+        })
+    }
+}
+
+/// Anywhere else: no desktop notification, and no attempt to find one.
+struct NullNotifier;
+
+impl Notifier for NullNotifier {
+    fn command(&self, _title: &str, _body: &str) -> Option<(String, Vec<String>)> {
+        None
+    }
+}
+
+/// Whether a command exists on `PATH`, for deciding if `notify-send` is available.
+fn on_path(command: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
+    })
+}
+
+fn platform_notifier() -> Box<dyn Notifier> {
+    if cfg!(target_os = "macos") {
+        Box::new(MacNotifier)
+    } else if cfg!(target_os = "linux") {
+        Box::new(LinuxNotifier {
+            installed: on_path("notify-send"),
+        })
+    } else {
+        Box::new(NullNotifier)
+    }
+}
+
+fn notify(kind: Kind, new: &Record, old: &Record) {
+    let body = format!(
+        "{}: {} (was {})",
+        kind.label(),
+        kind.format(new.value),
+        kind.format(old.value)
     );
-    let _ = std::process::Command::new("osascript")
-        .args(["-e", &script])
+    let Some((program, args)) = platform_notifier().command("🏆 New record", &body) else {
+        return;
+    };
+    // Best effort: a missing or unhappy notifier must never disturb the dashboard.
+    let _ = std::process::Command::new(program)
+        .args(args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+#[cfg(test)]
+mod notifier_tests {
+    use super::{LinuxNotifier, MacNotifier, NotifierTestExt, NullNotifier};
+
+    #[test]
+    fn macos_posts_through_osascript_with_escaped_text() {
+        let (program, args) = MacNotifier.must_command("🏆 New record", "Cost: $1 (was $2)");
+        assert_eq!(program, "osascript");
+        assert_eq!(args[0], "-e");
+        // Both strings go through serde_json, so a quote in the text cannot break the script.
+        let (_, tricky) = MacNotifier.must_command("t", "has \"quotes\" in it");
+        assert!(
+            tricky[1].contains("\\\"quotes\\\""),
+            "quotes must be escaped, not interpolated raw: {}",
+            tricky[1]
+        );
+    }
+
+    #[test]
+    fn linux_posts_through_notify_send_when_installed() {
+        let (program, args) = LinuxNotifier { installed: true }
+            .must_command("🏆 New record", "Cost: $1 (was $2)");
+        assert_eq!(program, "notify-send");
+        assert!(args.contains(&"--urgency=low".to_string()));
+        assert_eq!(args[args.len() - 2], "🏆 New record", "title before body");
+        assert_eq!(args[args.len() - 1], "Cost: $1 (was $2)");
+    }
+
+    /// Without libnotify there is nothing to call, and nothing should be spawned.
+    #[test]
+    fn linux_without_notify_send_posts_nothing() {
+        use super::Notifier;
+        assert!(
+            LinuxNotifier { installed: false }
+                .command("t", "b")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn other_platforms_post_nothing() {
+        use super::Notifier;
+        assert!(NullNotifier.command("t", "b").is_none());
+    }
+}
+
+#[cfg(test)]
+/// Test convenience: unwrap the command a notifier builds.
+trait NotifierTestExt {
+    fn must_command(&self, title: &str, body: &str) -> (String, Vec<String>);
+}
+
+#[cfg(test)]
+impl<T: Notifier> NotifierTestExt for T {
+    fn must_command(&self, title: &str, body: &str) -> (String, Vec<String>) {
+        self.command(title, body)
+            .expect("this notifier should produce a command")
+    }
 }
 
 struct Cache {

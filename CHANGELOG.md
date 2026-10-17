@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.89] - 2026-10-17
+
+BZL-12, second pass: the behaviour Linux needs, not just the build.
+
+### Added
+- **Linux desktop notifications.** A new record posts through `notify-send` (libnotify) on Linux,
+  AppleScript on macOS, and nothing anywhere else. The platform choice sits behind a `Notifier`
+  trait whose implementations *build* the command rather than run it, so each is unit tested
+  without spawning a process — including that Linux posts nothing when `notify-send` is not on
+  `PATH`, and that macOS escapes the text through `serde_json` so a quote in a record cannot break
+  the AppleScript.
+- **Polling fallback when the OS runs out of file watches.** Linux caps inotify watches per user
+  (`fs.inotify.max_user_watches`), and a tree the size of `~/.claude/projects` can exhaust it —
+  after which every further watch fails and the dashboard sits there looking live while seeing
+  nothing. `notify` reports that as `ErrorKind::MaxFilesWatch`; hitting it now switches to
+  `PollWatcher` at a 5-second interval and prints the `sysctl` command that fixes it properly.
+  `FileWatcher` holds a `Box<dyn Watcher + Send>` so the kind can be chosen at runtime.
+- GitHub Copilot's analyzer offers Linux (`~/.config/...`), VSCode-server and Windows (`%APPDATA%`)
+  paths, matching the shape Cline, Kilo Code and Roo already had. Still unregistered, so this is
+  groundwork rather than a live fix.
+
+### Note
+- The watch-limit *detection* is unit tested (`MaxFilesWatch` triggers the fallback; a missing path
+  or generic IO error does not, so one bad directory cannot demote the whole watcher to polling).
+  The fallback *itself* has not been exercised against a real exhausted inotify — that needs a
+  Linux box with the limit lowered.
+- 408 tests pass. Linux target still reports zero Rust errors.
+
 ## [2.0.0-dash-0.88] - 2026-10-17
 
 BZL-12, first pass: the build blockers, re-audited against 0.87 rather than the 0.16 audit in the

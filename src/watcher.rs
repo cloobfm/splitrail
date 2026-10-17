@@ -1,5 +1,5 @@
 use anyhow::Result;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{RecursiveMode, Watcher};
 use notify_types::event::{Event, EventKind};
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -20,9 +20,24 @@ pub enum WatcherEvent {
 }
 
 pub struct FileWatcher {
-    _watcher: RecommendedWatcher,
+    /// Boxed because the kind is chosen at runtime: the native backend normally, or a polling
+    /// one when the OS refuses more watches (BZL-12).
+    _watcher: Box<dyn Watcher + Send>,
     event_rx: Receiver<WatcherEvent>,
 }
+
+/// Whether this error is the OS refusing further watches.
+///
+/// On Linux `fs.inotify.max_user_watches` caps watches per user, and `notify` reports the
+/// resulting ENOSPC as [`notify::ErrorKind::MaxFilesWatch`]. Every later watch fails too, so
+/// without noticing this the dashboard would look live while seeing nothing (BZL-12).
+fn is_watch_limit_reached(error: &notify::Error) -> bool {
+    matches!(error.kind, notify::ErrorKind::MaxFilesWatch)
+}
+
+/// How often the polling fallback re-stats the watched trees. Long enough not to undo the parse
+/// caches' CPU savings, short enough that the dashboard still feels live.
+const POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 struct WatchDebugConfig {
@@ -94,16 +109,16 @@ impl FileWatcher {
             .map(|entry| entry.watch_dir.clone())
             .collect();
 
-        // Use RecommendedWatcher (FSEvents on macOS) with default config
-        let mut watcher =
-            notify::recommended_watcher(move |res: Result<Event, notify::Error>| match res {
+        // The handler is built per watcher, because a fallback needs its own copy.
+        let make_handler = || {
+            let event_tx = event_tx.clone();
+            let dir_to_analyzer = dir_to_analyzer.clone();
+            let debug_config = debug_config_for_handler.clone();
+            move |res: Result<Event, notify::Error>| match res {
                 Ok(event) => {
-                    if let Err(e) = handle_fs_event(
-                        event,
-                        &event_tx,
-                        &dir_to_analyzer,
-                        debug_config_for_handler.as_ref(),
-                    ) {
+                    if let Err(e) =
+                        handle_fs_event(event, &event_tx, &dir_to_analyzer, debug_config.as_ref())
+                    {
                         let _ = event_tx
                             .send(WatcherEvent::Error(format!("Event handling error: {e}")));
                     }
@@ -111,17 +126,48 @@ impl FileWatcher {
                 Err(e) => {
                     let _ = event_tx.send(WatcherEvent::Error(format!("Watch error: {e}")));
                 }
-            })?;
+            }
+        };
 
-        // Start watching all directories
+        // The native backend first: FSEvents on macOS, inotify on Linux.
+        let mut watcher: Box<dyn Watcher + Send> =
+            Box::new(notify::recommended_watcher(make_handler())?);
+        let mut exhausted = false;
+
         for dir in &watched_dirs {
             if let Err(e) = watcher.watch(dir, RecursiveMode::Recursive) {
+                // Linux caps inotify watches per user (fs.inotify.max_user_watches). Watching a
+                // tree the size of ~/.claude/projects can exhaust it, and every later watch then
+                // fails too -- so the dashboard would sit there looking live while seeing nothing.
+                if is_watch_limit_reached(&e) {
+                    exhausted = true;
+                    break;
+                }
                 crate::utils::report(format!(
                     "Warning: Could not watch directory {}: {}",
                     dir.display(),
                     e
                 ));
             }
+        }
+
+        if exhausted {
+            crate::utils::report(format!(
+                "Warning: the OS file-watch limit was reached, so changes are polled every {}s                  instead of watched. Raise it with `sudo sysctl fs.inotify.max_user_watches=524288`                  (persist in /etc/sysctl.conf) for instant updates.",
+                POLL_INTERVAL.as_secs()
+            ));
+            let config = notify::Config::default().with_poll_interval(POLL_INTERVAL);
+            let mut poller = notify::PollWatcher::new(make_handler(), config)?;
+            for dir in &watched_dirs {
+                if let Err(e) = poller.watch(dir, RecursiveMode::Recursive) {
+                    crate::utils::report(format!(
+                        "Warning: Could not poll directory {}: {}",
+                        dir.display(),
+                        e
+                    ));
+                }
+            }
+            watcher = Box::new(poller);
         }
 
         Ok(Self {
@@ -616,5 +662,29 @@ mod coalesce_tests {
         manager.process_pending_batches().await.unwrap();
         assert_eq!(manager.reloads, 2);
         assert_eq!(loads.load(Ordering::SeqCst), 3);
+    }
+}
+
+#[cfg(test)]
+mod watch_limit_tests {
+    use super::is_watch_limit_reached;
+
+    #[test]
+    fn the_os_watch_limit_is_recognised() {
+        let hit = notify::Error::new(notify::ErrorKind::MaxFilesWatch);
+        assert!(
+            is_watch_limit_reached(&hit),
+            "ENOSPC from inotify must trigger the polling fallback"
+        );
+    }
+
+    /// Anything else is a per-directory problem (a path that vanished, a permission error) and
+    /// must not demote the whole watcher to polling.
+    #[test]
+    fn other_watch_errors_do_not_trigger_the_fallback() {
+        let missing = notify::Error::new(notify::ErrorKind::PathNotFound);
+        let io = notify::Error::new(notify::ErrorKind::Io(std::io::Error::other("nope")));
+        assert!(!is_watch_limit_reached(&missing));
+        assert!(!is_watch_limit_reached(&io));
     }
 }

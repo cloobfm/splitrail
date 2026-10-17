@@ -388,12 +388,38 @@ impl Analyzer for CopilotAnalyzer {
             "Code - Insiders",
         ];
 
+        // VSCode CLI (server) installs, which is what a headless remote box uses.
+        let vscode_cli_forks = ["vscode-server-insiders", "vscode-server"];
+
         if let Some(home_dir) = std::env::home_dir() {
             let home_str = home_dir.to_string_lossy();
+
+            // Linux paths for all VSCode forks
+            for fork in &vscode_forks {
+                patterns.push(format!(
+                    "{home_str}/.config/{fork}/User/workspaceStorage/*/chatSessions/*.json"
+                ));
+            }
+
+            // Linux paths for VSCode CLI (server) forks
+            for fork in &vscode_cli_forks {
+                patterns.push(format!(
+                    "{home_str}/.{fork}/data/User/workspaceStorage/*/chatSessions/*.json"
+                ));
+            }
 
             // macOS paths for all VSCode forks
             for fork in &vscode_forks {
                 patterns.push(format!("{home_str}/Library/Application Support/{fork}/User/workspaceStorage/*/chatSessions/*.json"));
+            }
+        }
+
+        // Windows paths for all VSCode forks
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            for fork in &vscode_forks {
+                patterns.push(format!(
+                    "{appdata}\\{fork}\\User\\workspaceStorage\\*\\chatSessions\\*.json"
+                ));
             }
         }
 
