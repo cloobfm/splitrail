@@ -29,8 +29,11 @@ pub struct ClaudeCodeAnalyzer {
 }
 
 /// Fold state for one `local_hash`. Claude Code writes a single assistant turn as several JSONL
-/// rows that repeat the same usage; dedup folds them back together. Those rows can land in
-/// different refreshes, so the fold has to survive between them.
+/// rows; dedup folds them back together. Their `usage` is a cumulative snapshot of the one billed
+/// request (input and cache repeat, output only grows, the last row is the bill), so the tokens
+/// are the largest seen, never the sum (BZL-132, upstream #222). Activity counted from each row's
+/// own content still adds up. Those rows can land in different refreshes, so the fold has to
+/// survive between them.
 struct FoldState {
     /// Token tuples already folded in. A repeat means a redundant row, not a new part.
     fingerprints: HashSet<TokenFingerprint>,
@@ -103,11 +106,13 @@ impl Accumulator {
                 apply_max_activity(&mut state.stats, &message.stats);
                 crate::utils::add_stats_delta_into_day(day, &delta, 0.0);
             } else {
-                // A distinct part of a split message: its tokens and activity add to the whole,
-                // and the cost is recomputed from the combined tokens.
+                // Another snapshot of the same request: tokens rise to its larger counts, its own
+                // activity adds, and the cost is recomputed from the tokens.
                 state.fingerprints.insert(fp);
                 let previous_cost = state.stats.cost;
-                add_stats(&mut state.stats, &message.stats);
+                let mut delta = max_tokens_delta(&state.stats, &message.stats);
+                add_activity(&mut delta, &message.stats);
+                add_stats(&mut state.stats, &delta);
                 if let Some(model) = &state.model {
                     state.stats.cost = calculate_total_cost(
                         model,
@@ -117,11 +122,7 @@ impl Accumulator {
                         state.stats.cache_read_tokens,
                     );
                 }
-                crate::utils::add_stats_delta_into_day(
-                    day,
-                    &message.stats,
-                    state.stats.cost - previous_cost,
-                );
+                crate::utils::add_stats_delta_into_day(day, &delta, state.stats.cost - previous_cost);
             }
             return;
         }
@@ -203,7 +204,36 @@ fn apply_max_activity(into: &mut Stats, from: &Stats) {
     into.todos_in_progress = into.todos_in_progress.max(from.todos_in_progress);
 }
 
-/// Sum the parts of a split message.
+/// How much each token count rises if `from`, a later snapshot of the same request, is taken at
+/// its maximum.
+fn max_tokens_delta(current: &Stats, from: &Stats) -> Stats {
+    Stats {
+        input_tokens: from.input_tokens.saturating_sub(current.input_tokens),
+        output_tokens: from.output_tokens.saturating_sub(current.output_tokens),
+        cache_creation_tokens: from.cache_creation_tokens.saturating_sub(current.cache_creation_tokens),
+        cache_read_tokens: from.cache_read_tokens.saturating_sub(current.cache_read_tokens),
+        cached_tokens: from.cached_tokens.saturating_sub(current.cached_tokens),
+        ..Default::default()
+    }
+}
+
+/// `from`'s activity counters (not its tokens) added into `into`.
+fn add_activity(into: &mut Stats, from: &Stats) {
+    into.tool_calls += from.tool_calls;
+    into.files_read += from.files_read;
+    into.files_edited += from.files_edited;
+    into.files_added += from.files_added;
+    into.terminal_commands += from.terminal_commands;
+    into.file_searches += from.file_searches;
+    into.file_content_searches += from.file_content_searches;
+    into.todo_writes += from.todo_writes;
+    into.todo_reads += from.todo_reads;
+    into.todos_created += from.todos_created;
+    into.todos_completed += from.todos_completed;
+    into.todos_in_progress += from.todos_in_progress;
+}
+
+/// Add a delta's tokens and activity into a message's stats.
 fn add_stats(into: &mut Stats, from: &Stats) {
     into.input_tokens += from.input_tokens;
     into.output_tokens += from.output_tokens;
@@ -1051,16 +1081,16 @@ pub(crate) fn dedup_messages<'a>(
                 // Mark this distinct tuple as seen and aggregate its values
                 set.insert(fp);
 
-                // This is a split message with different/partial token counts.
-                // Aggregate all stats together.
+                // Another snapshot of the same request (see `FoldState`): tokens are the
+                // largest seen, not the sum; this row's own activity adds.
                 let existing = &mut deduplicated_entries[existing_index];
 
-                // Aggregate token counts
-                existing.stats.input_tokens += message.stats.input_tokens;
-                existing.stats.output_tokens += message.stats.output_tokens;
-                existing.stats.cache_creation_tokens += message.stats.cache_creation_tokens;
-                existing.stats.cache_read_tokens += message.stats.cache_read_tokens;
-                existing.stats.cached_tokens += message.stats.cached_tokens;
+                existing.stats.input_tokens = existing.stats.input_tokens.max(message.stats.input_tokens);
+                existing.stats.output_tokens = existing.stats.output_tokens.max(message.stats.output_tokens);
+                existing.stats.cache_creation_tokens =
+                    existing.stats.cache_creation_tokens.max(message.stats.cache_creation_tokens);
+                existing.stats.cache_read_tokens = existing.stats.cache_read_tokens.max(message.stats.cache_read_tokens);
+                existing.stats.cached_tokens = existing.stats.cached_tokens.max(message.stats.cached_tokens);
 
                 // Aggregate tool stats
                 existing.stats.tool_calls += message.stats.tool_calls;
@@ -1120,7 +1150,8 @@ mod tests {
 
     #[test]
     fn test_deduplicate_partial_split_messages() {
-        // Test the new format (Oct 18+ 2025): Split messages with DIFFERENT partial tokens
+        // One request written as three rows with differing usage: cumulative snapshots, so the
+        // message's tokens are the largest seen (BZL-132), while each row's activity adds.
         let hash = "test_partial_split".to_string();
 
         let messages = vec![
@@ -1182,13 +1213,13 @@ mod tests {
         // Should have exactly 1 message (all 3 merged)
         assert_eq!(deduplicated.len(), 1);
 
-        // Output tokens should be summed: 2 + 2 + 447 = 451
-        assert_eq!(deduplicated[0].stats.output_tokens, 451);
+        // The final snapshot's output, not 2 + 2 + 447.
+        assert_eq!(deduplicated[0].stats.output_tokens, 447);
 
-        // Input tokens should be summed: 10 + 5 + 0 = 15
-        assert_eq!(deduplicated[0].stats.input_tokens, 15);
+        // The largest input seen, not 10 + 5 + 0.
+        assert_eq!(deduplicated[0].stats.input_tokens, 10);
 
-        // Tool calls should be summed too
+        // Tool calls come from each row's own content, so they add
         assert_eq!(deduplicated[0].stats.tool_calls, 1);
     }
 
@@ -1366,7 +1397,7 @@ mod tests {
         assert_eq!(deduplicated.len(), 1);
         // Should include A once and B once
         assert_eq!(deduplicated[0].stats.input_tokens, 10);
-        assert_eq!(deduplicated[0].stats.output_tokens, 2 + 447);
+        assert_eq!(deduplicated[0].stats.output_tokens, 447);
         assert_eq!(deduplicated[0].stats.tool_calls, 1);
     }
 }

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.70] - 2026-10-17
+
+### Fixed
+- **Claude Code no longer double-counts replies written as several records** (BZL-132, upstream
+  #222). Records sharing a request and message id are cumulative snapshots of one billed request
+  (input and cache repeat, output only grows), but rows with differing counts were added
+  together. Tokens are now the largest seen per field, in both the batch dedup and the live fold;
+  activity counted from each row's own content still adds. Across both accounts' history that
+  removes 6,539 replies' worth of double counting: 898M cache-read and 29M cache-write tokens,
+  roughly $600 at Opus rates. Output was barely affected (33k tokens), so tk/s is unchanged.
+
 ## [2.0.0-dash-0.69] - 2026-10-17
 
 ### Security

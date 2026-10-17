@@ -119,8 +119,8 @@ fn test_dedup_messages() {
     // Deduplication now aggregates messages with the same local_hash
     assert_eq!(deduplicated.len(), 1);
 
-    // Should sum the tokens from both entries: 10 + 15 = 25
-    assert_eq!(deduplicated[0].stats.input_tokens, 25);
+    // Snapshots of one request: the larger count, not 10 + 15 (BZL-132).
+    assert_eq!(deduplicated[0].stats.input_tokens, 15);
 
     // Test with manually created messages that should be deduplicated
     let mut test_messages = Vec::new();
@@ -165,14 +165,11 @@ fn test_dedup_messages() {
     let deduplicated_test = dedup_messages(test_messages.iter());
     // Aggregation logic merges messages with the same local_hash
     assert_eq!(deduplicated_test.len(), 1);
-    // Should keep the first message's metadata but aggregate the tokens
+    // Keeps the first message's metadata, with each token count at its largest snapshot
     assert_eq!(deduplicated_test[0].global_hash, "global1");
-    // Should sum the tokens from both entries: 10 + 15 = 25
-    assert_eq!(deduplicated_test[0].stats.input_tokens, 25);
-    // Should sum output tokens: 5 + 8 = 13
-    assert_eq!(deduplicated_test[0].stats.output_tokens, 13);
-    // Should sum cache tokens: 3 + 5 = 8
-    assert_eq!(deduplicated_test[0].stats.cached_tokens, 8);
+    assert_eq!(deduplicated_test[0].stats.input_tokens, 15);
+    assert_eq!(deduplicated_test[0].stats.output_tokens, 8);
+    assert_eq!(deduplicated_test[0].stats.cached_tokens, 5);
 }
 
 #[test]
