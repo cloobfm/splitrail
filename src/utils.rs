@@ -336,6 +336,8 @@ pub fn aggregate_by_date_incremental(
                 daily_stats_entry.stats.output_tokens += entry.stats.output_tokens;
                 daily_stats_entry.stats.reasoning_tokens += entry.stats.reasoning_tokens;
                 daily_stats_entry.stats.cache_creation_tokens += entry.stats.cache_creation_tokens;
+                daily_stats_entry.stats.cache_creation_1h_tokens +=
+                    entry.stats.cache_creation_1h_tokens;
                 daily_stats_entry.stats.cache_read_tokens += entry.stats.cache_read_tokens;
                 daily_stats_entry.stats.cached_tokens += entry.stats.cached_tokens;
                 daily_stats_entry.stats.tool_calls += entry.stats.tool_calls;
@@ -460,6 +462,7 @@ pub fn fold_entry_into_day(day: &mut DailyStats, entry: &ConversationMessage) {
             day.stats.output_tokens += entry.stats.output_tokens;
             day.stats.reasoning_tokens += entry.stats.reasoning_tokens;
             day.stats.cache_creation_tokens += entry.stats.cache_creation_tokens;
+            day.stats.cache_creation_1h_tokens += entry.stats.cache_creation_1h_tokens;
             day.stats.cache_read_tokens += entry.stats.cache_read_tokens;
             day.stats.cached_tokens += entry.stats.cached_tokens;
             day.stats.tool_calls += entry.stats.tool_calls;
@@ -513,6 +516,7 @@ pub fn add_stats_delta_into_day(day: &mut DailyStats, delta: &Stats, cost_delta:
     day.stats.output_tokens += delta.output_tokens;
     day.stats.reasoning_tokens += delta.reasoning_tokens;
     day.stats.cache_creation_tokens += delta.cache_creation_tokens;
+    day.stats.cache_creation_1h_tokens += delta.cache_creation_1h_tokens;
     day.stats.cache_read_tokens += delta.cache_read_tokens;
     day.stats.cached_tokens += delta.cached_tokens;
     day.stats.tool_calls += delta.tool_calls;

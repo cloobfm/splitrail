@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use crate::analyzer::{Analyzer, DataSource};
 use crate::incremental::{ChunkResult, IncrementalJsonlCache, RefreshReport};
-use crate::models::calculate_total_cost;
 use crate::types::{
     AgenticCodingToolStats, Application, ConversationMessage, DailyStats, MessageRole, Stats,
 };
@@ -114,11 +113,12 @@ impl Accumulator {
                 add_activity(&mut delta, &message.stats);
                 add_stats(&mut state.stats, &delta);
                 if let Some(model) = &state.model {
-                    state.stats.cost = calculate_total_cost(
+                    state.stats.cost = crate::models::calculate_total_cost_with_cache_ttl(
                         model,
                         state.stats.input_tokens,
                         state.stats.output_tokens,
                         state.stats.cache_creation_tokens,
+                        state.stats.cache_creation_1h_tokens,
                         state.stats.cache_read_tokens,
                     );
                 }
@@ -238,6 +238,7 @@ fn add_stats(into: &mut Stats, from: &Stats) {
     into.input_tokens += from.input_tokens;
     into.output_tokens += from.output_tokens;
     into.cache_creation_tokens += from.cache_creation_tokens;
+    into.cache_creation_1h_tokens += from.cache_creation_1h_tokens;
     into.cache_read_tokens += from.cache_read_tokens;
     into.cached_tokens += from.cached_tokens;
     into.tool_calls += from.tool_calls;
@@ -491,6 +492,19 @@ pub struct Usage {
     pub cache_creation_input_tokens: u64,
     #[serde(default)]
     pub cache_read_input_tokens: u64,
+    /// Breakdown of `cache_creation_input_tokens` by entry lifetime. Absent on older sessions,
+    /// in which case everything is treated as the 5-minute default.
+    #[serde(default)]
+    pub cache_creation: Option<CacheCreation>,
+}
+
+/// Anthropic reports cache writes split by TTL; the 1-hour tier costs more (BZL-136).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CacheCreation {
+    #[serde(default)]
+    pub ephemeral_5m_input_tokens: u64,
+    #[serde(default)]
+    pub ephemeral_1h_input_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -672,11 +686,16 @@ pub fn extract_tool_stats(
 }
 
 pub fn calculate_cost_from_tokens(usage: &Usage, model_name: &str) -> f64 {
-    calculate_total_cost(
+    crate::models::calculate_total_cost_with_cache_ttl(
         model_name,
         usage.input_tokens,
         usage.output_tokens,
         usage.cache_creation_input_tokens,
+        usage
+            .cache_creation
+            .as_ref()
+            .map(|c| c.ephemeral_1h_input_tokens)
+            .unwrap_or(0),
         usage.cache_read_input_tokens,
     )
 }
@@ -921,6 +940,11 @@ where
                 stats.input_tokens = usage.input_tokens;
                 stats.output_tokens = usage.output_tokens;
                 stats.cache_creation_tokens = usage.cache_creation_input_tokens;
+                stats.cache_creation_1h_tokens = usage
+                    .cache_creation
+                    .as_ref()
+                    .map(|c| c.ephemeral_1h_input_tokens)
+                    .unwrap_or(0);
                 stats.cache_read_tokens = usage.cache_read_input_tokens;
                 stats.cached_tokens =
                     usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
@@ -1089,6 +1113,10 @@ pub(crate) fn dedup_messages<'a>(
                 existing.stats.output_tokens = existing.stats.output_tokens.max(message.stats.output_tokens);
                 existing.stats.cache_creation_tokens =
                     existing.stats.cache_creation_tokens.max(message.stats.cache_creation_tokens);
+                existing.stats.cache_creation_1h_tokens = existing
+                    .stats
+                    .cache_creation_1h_tokens
+                    .max(message.stats.cache_creation_1h_tokens);
                 existing.stats.cache_read_tokens = existing.stats.cache_read_tokens.max(message.stats.cache_read_tokens);
                 existing.stats.cached_tokens = existing.stats.cached_tokens.max(message.stats.cached_tokens);
 
@@ -1108,11 +1136,12 @@ pub(crate) fn dedup_messages<'a>(
 
                 // Recalculate cost with the aggregated tokens
                 if let Some(model) = &existing.model {
-                    existing.stats.cost = calculate_total_cost(
+                    existing.stats.cost = crate::models::calculate_total_cost_with_cache_ttl(
                         model,
                         existing.stats.input_tokens,
                         existing.stats.output_tokens,
                         existing.stats.cache_creation_tokens,
+                        existing.stats.cache_creation_1h_tokens,
                         existing.stats.cache_read_tokens,
                     );
                 }

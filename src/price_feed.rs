@@ -69,6 +69,34 @@ impl ModelPrice {
             + per_1m(read_tokens, self.cache_read_per_1m.unwrap_or(0.0))
     }
 
+    /// Like [`Self::cache_cost`], but charging the portion of cache writes that used Anthropic's
+    /// 1-hour TTL at its higher rate.
+    ///
+    /// Anthropic prices a cache write by how long the entry lives: 1.25x base input for the
+    /// 5-minute default, 2x base input for the 1-hour TTL. The LiteLLM feed publishes a single
+    /// `cache_creation_input_token_cost`, which is the 5-minute rate, so charging every write at
+    /// it understates anything using the longer TTL. Claude Code reports the split in
+    /// `usage.cache_creation` as `ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`.
+    ///
+    /// Only Anthropic reports 1h tokens, so a zero `creation_1h_tokens` leaves every other
+    /// vendor's cost exactly where it was.
+    pub fn cache_cost_split(
+        &self,
+        creation_5m_tokens: u64,
+        creation_1h_tokens: u64,
+        read_tokens: u64,
+    ) -> f64 {
+        let five_minute = self.cache_write_per_1m.unwrap_or(0.0);
+        // Derive the 1h rate from the 5m one rather than the base input price: an override or a
+        // feed entry may set a cache-write rate that is not exactly 1.25x base, and scaling it
+        // keeps that relationship intact. Vendors with no cache-write price stay at zero.
+        let one_hour = five_minute / CACHE_WRITE_5M_MULTIPLIER * CACHE_WRITE_1H_MULTIPLIER;
+
+        per_1m(creation_5m_tokens, five_minute)
+            + per_1m(creation_1h_tokens, one_hour)
+            + per_1m(read_tokens, self.cache_read_per_1m.unwrap_or(0.0))
+    }
+
     fn tiered_cost(&self, tokens: u64, base_rate: f64, rate: impl Fn(&PriceTier) -> f64) -> f64 {
         let mut cost = 0.0;
         let mut floor = 0u64;
@@ -84,6 +112,11 @@ impl ModelPrice {
         cost + per_1m(tokens - floor, current_rate)
     }
 }
+
+/// Anthropic's cache-write multipliers over base input, by entry lifetime.
+/// Source: Anthropic prompt-caching pricing (5-minute default, optional 1-hour TTL).
+pub const CACHE_WRITE_5M_MULTIPLIER: f64 = 1.25;
+pub const CACHE_WRITE_1H_MULTIPLIER: f64 = 2.0;
 
 fn per_1m(tokens: u64, rate: f64) -> f64 {
     (tokens as f64 / 1_000_000.0) * rate
@@ -512,6 +545,62 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod one_hour_cache_tests {
+    use super::ModelPrice;
+
+    fn opus() -> ModelPrice {
+        // claude-opus-5 as the LiteLLM feed reports it: base input $5/1M, and a single
+        // cache-creation rate of $6.25/1M, which is the 5-minute rate (1.25x base).
+        ModelPrice {
+            input_per_1m: 5.0,
+            output_per_1m: 25.0,
+            cache_write_per_1m: Some(6.25),
+            cache_read_per_1m: Some(0.5),
+            tiers: Vec::new(),
+        }
+    }
+
+    /// Anthropic bills a 1-hour cache write at 2x base input, against 1.25x for the 5-minute
+    /// default. The feed publishes only the 5-minute rate, so charging every cache write at it
+    /// understates any session using the 1h TTL — which is ~all of them in practice (BZL-136).
+    #[test]
+    fn one_hour_cache_writes_cost_more_than_five_minute_ones() {
+        let price = opus();
+        let one_million = 1_000_000;
+
+        let five_minute = price.cache_cost_split(one_million, 0, 0);
+        let one_hour = price.cache_cost_split(0, one_million, 0);
+
+        assert!((five_minute - 6.25).abs() < 1e-9, "5m write is 1.25x base: {five_minute}");
+        assert!((one_hour - 10.0).abs() < 1e-9, "1h write is 2x base: {one_hour}");
+    }
+
+    /// The split must agree with the old flat call when nothing used the 1h TTL, so existing
+    /// numbers for other vendors do not move.
+    #[test]
+    fn split_matches_flat_cost_when_no_one_hour_tokens() {
+        let price = opus();
+        assert!(
+            (price.cache_cost_split(3_000, 0, 7_000) - price.cache_cost(3_000, 7_000)).abs() < 1e-12
+        );
+    }
+
+    /// A vendor with no cache-write price (OpenAI, Google) still charges nothing for creation,
+    /// and never emits 1h tokens.
+    #[test]
+    fn vendors_without_cache_write_pricing_are_unaffected() {
+        let price = ModelPrice {
+            input_per_1m: 2.0,
+            output_per_1m: 8.0,
+            cache_write_per_1m: None,
+            cache_read_per_1m: Some(0.5),
+            tiers: Vec::new(),
+        };
+        assert_eq!(price.cache_cost_split(1_000, 0, 1_000), price.cache_cost(1_000, 1_000));
+    }
 }
 
 #[cfg(test)]

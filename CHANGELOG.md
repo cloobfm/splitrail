@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.79] - 2026-10-17
+
+BZL-136. Evaluating which billing rules the LiteLLM feed misses turned up two real mispricings and
+ruled out two of the four upstream items as no-ops here.
+
+### Fixed
+- **1-hour cache writes were priced as 5-minute ones.** Anthropic bills a cache write by how long
+  the entry lives: 1.25x base input for the 5-minute default, 2x for the 1-hour TTL. The feed
+  publishes a single `cache_creation_input_token_cost` (the 5-minute rate), and every cache write
+  was charged at it. Claude Code reports the split in `usage.cache_creation`, which was not parsed.
+  Measured over the 30 most recent sessions: 655.7M of 658.1M cache-creation tokens (99.6%) used
+  the 1h TTL, understating cache-write cost by **$2,617 (+59.6%)**. `Stats` gains
+  `cache_creation_1h_tokens` (a subset of `cache_creation_tokens`, `#[serde(default)]`, so older
+  records read 0), and `calculate_total_cost_with_cache_ttl` / `cache_cost_split` charge it
+  correctly. The old signatures stay, delegating with a zero 1h count, so no other analyzer moves.
+- **The Codex fallback model was hardcoded to `gpt-5`** (upstream #178). Sessions whose metadata
+  never names a model are priced against the fallback; it now comes from Codex's own
+  `config.toml` (honouring `CODEX_HOME`), falling back to `gpt-5` only when that is missing,
+  empty, or malformed. On this machine the configured model is `gpt-6.1-sol`, affecting 3,423
+  usage rows — worth $39.56 (+1%), small only because nearly all of that input is cached.
+
+### Evaluated, not ported
+- **Long-context surcharges** are already handled: `price_feed` parses
+  `input_cost_per_token_above_{N}k_tokens` into `PriceTier` (BZL-62).
+- **External pricing TOML** (#140) is already covered by `[pricing.overrides]`.
+- **Priority/fast tiers** (#172, #260): the fields exist in the data (`usage.speed`,
+  `usage.service_tier`) but are `"standard"` on all 55,391 assistant messages scanned, so there is
+  nothing to price yet. Left alone rather than adding an unexercised code path.
+- **Peak/off-peak** (#258) applies to providers not in use here (no DeepSeek-class model appears
+  in any analyzer's data).
+
+### Known issue
+- `test_claude_code_analyzer_with_test_data` is flaky and fails on `55124a2` too: it compares the
+  message count from two separate parses while the live corpus is being written, and its
+  `HomeOverride` does not isolate discovery (it reads the real `~/.claude`). Needs its own ticket.
+
 ## [2.0.0-dash-0.78] - 2026-10-17
 
 ### Added

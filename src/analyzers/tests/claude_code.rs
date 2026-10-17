@@ -172,6 +172,49 @@ fn test_dedup_messages() {
     assert_eq!(deduplicated_test[0].stats.cached_tokens, 5);
 }
 
+/// A 1-hour cache write costs 2x base input, against 1.25x for the 5-minute default. Pricing
+/// every write at the feed's single (5-minute) rate understated real sessions by ~60% on cache
+/// writes, since Claude Code uses the 1h TTL for almost all of them (BZL-136).
+#[test]
+fn one_hour_cache_writes_are_priced_above_five_minute_ones() {
+    use crate::analyzers::claude_code::{CacheCreation, Usage};
+
+    let five_minute = Usage {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 1_000_000,
+        cache_read_input_tokens: 0,
+        cache_creation: Some(CacheCreation {
+            ephemeral_5m_input_tokens: 1_000_000,
+            ephemeral_1h_input_tokens: 0,
+        }),
+    };
+    let one_hour = Usage {
+        cache_creation: Some(CacheCreation {
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 1_000_000,
+        }),
+        ..five_minute.clone()
+    };
+
+    let model = "claude-opus-5";
+    let cheap = calculate_cost_from_tokens(&five_minute, model);
+    let dear = calculate_cost_from_tokens(&one_hour, model);
+
+    assert!(cheap > 0.0, "the 5m write must cost something");
+    assert!(
+        (dear / cheap - 2.0 / 1.25).abs() < 1e-6,
+        "1h should be 2x base against 5m's 1.25x: 5m={cheap}, 1h={dear}"
+    );
+
+    // Absent breakdown (older sessions) is treated as all-5-minute, so nothing moves.
+    let legacy = Usage {
+        cache_creation: None,
+        ..five_minute.clone()
+    };
+    assert!((calculate_cost_from_tokens(&legacy, model) - cheap).abs() < 1e-12);
+}
+
 #[test]
 fn test_calculate_cost_from_tokens() {
     use crate::analyzers::claude_code::Usage;
@@ -181,6 +224,7 @@ fn test_calculate_cost_from_tokens() {
         output_tokens: 500,
         cache_creation_input_tokens: 200,
         cache_read_input_tokens: 100,
+        cache_creation: None,
     };
 
     let cost = calculate_cost_from_tokens(&usage, "claude-sonnet-4-20250514");

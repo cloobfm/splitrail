@@ -93,6 +93,11 @@ pub struct Stats {
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
     pub cache_creation_tokens: u64,
+    /// The portion of `cache_creation_tokens` written with Anthropic's 1-hour TTL, which bills at
+    /// 2x base input instead of the 5-minute default's 1.25x (BZL-136). A subset, not an addition:
+    /// never add this to `cache_creation_tokens`.
+    #[serde(default)]
+    pub cache_creation_1h_tokens: u64,
     pub cache_read_tokens: u64,
     pub cached_tokens: u64,
     pub cost: f64,

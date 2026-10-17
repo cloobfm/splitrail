@@ -182,12 +182,16 @@ fn test_parse_codex_cli_missing_model() {
         .find(|msg| matches!(msg.role, crate::types::MessageRole::Assistant))
         .unwrap();
 
-    assert_eq!(assistant_msg.model, Some("gpt-5".to_string()));
+    // A session with no model metadata is priced against the configured fallback, which comes
+    // from Codex's own config.toml rather than a hardcoded name (BZL-136, upstream #178). Assert
+    // against that value so the test does not depend on this machine's configuration.
+    let fallback = crate::analyzers::codex_cli::configured_fallback_model();
+    assert_eq!(assistant_msg.model.as_deref(), Some(fallback));
     assert_eq!(assistant_msg.stats.input_tokens, 600); // 1000 - 400 cached
     assert_eq!(assistant_msg.stats.output_tokens, 20);
     assert_eq!(assistant_msg.stats.reasoning_tokens, 10);
     assert_eq!(assistant_msg.stats.cached_tokens, 400);
-    let expected_cost = calculate_total_cost("gpt-5", 600, 20, 0, 400);
+    let expected_cost = calculate_total_cost(fallback, 600, 20, 0, 400);
     assert!((assistant_msg.stats.cost - expected_cost).abs() < f64::EPSILON);
 }
 

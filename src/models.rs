@@ -1,7 +1,9 @@
 use phf::phf_map;
 use serde::{Deserialize, Serialize};
 
-use crate::price_feed::{self, ModelPrice, PriceSource};
+use crate::price_feed::{
+    self, CACHE_WRITE_1H_MULTIPLIER, CACHE_WRITE_5M_MULTIPLIER, ModelPrice, PriceSource,
+};
 use crate::utils::warn_once;
 
 /// Represents different pricing tier structures for various models
@@ -1999,11 +2001,27 @@ pub fn calculate_cache_cost(
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
 ) -> f64 {
+    calculate_cache_cost_with_ttl(model_name, cache_creation_tokens, 0, cache_read_tokens)
+}
+
+/// Like [`calculate_cache_cost`], but charging `cache_creation_1h_tokens` — the subset of cache
+/// writes that used Anthropic's 1-hour TTL — at 2x base input instead of the 5-minute 1.25x
+/// (BZL-136). Pass 0 for vendors that do not report a TTL split and nothing changes.
+pub fn calculate_cache_cost_with_ttl(
+    model_name: &str,
+    cache_creation_tokens: u64,
+    cache_creation_1h_tokens: u64,
+    cache_read_tokens: u64,
+) -> f64 {
     if cache_creation_tokens == 0 && cache_read_tokens == 0 {
         return 0.0;
     }
+    // The 1h count is a subset of the total, so the 5-minute remainder is the difference. A
+    // malformed record claiming more 1h than total is clamped rather than underflowing.
+    let one_hour = cache_creation_1h_tokens.min(cache_creation_tokens);
+    let five_minute = cache_creation_tokens - one_hour;
     if let Some(price) = live_price(model_name) {
-        return price.cache_cost(cache_creation_tokens, cache_read_tokens);
+        return price.cache_cost_split(five_minute, one_hour, cache_read_tokens);
     }
     match get_model_info(model_name) {
         Some(model_info) => {
@@ -2019,8 +2037,11 @@ pub fn calculate_cache_cost(
                     cache_write_per_1m,
                     cache_read_per_1m,
                 } => {
-                    let creation_cost =
-                        (cache_creation_tokens as f64 / 1_000_000.0) * cache_write_per_1m;
+                    // The table's rate is the 5-minute one; scale it for the 1h portion.
+                    let one_hour_per_1m =
+                        cache_write_per_1m / CACHE_WRITE_5M_MULTIPLIER * CACHE_WRITE_1H_MULTIPLIER;
+                    let creation_cost = (five_minute as f64 / 1_000_000.0) * cache_write_per_1m
+                        + (one_hour as f64 / 1_000_000.0) * one_hour_per_1m;
                     let read_cost = (cache_read_tokens as f64 / 1_000_000.0) * cache_read_per_1m;
                     creation_cost + read_cost
                 }
@@ -2031,7 +2052,7 @@ pub fn calculate_cache_cost(
             }
         }
         None => match loose_price(model_name) {
-            Some(price) => price.cache_cost(cache_creation_tokens, cache_read_tokens),
+            Some(price) => price.cache_cost_split(five_minute, one_hour, cache_read_tokens),
             None => {
                 warn_unknown(model_name);
                 0.0
@@ -2048,6 +2069,26 @@ pub fn calculate_total_cost(
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
 ) -> f64 {
+    calculate_total_cost_with_cache_ttl(
+        model_name,
+        input_tokens,
+        output_tokens,
+        cache_creation_tokens,
+        0,
+        cache_read_tokens,
+    )
+}
+
+/// Like [`calculate_total_cost`], but charging the 1-hour-TTL share of cache writes at its higher
+/// rate (BZL-136). Callers that have no TTL breakdown should use [`calculate_total_cost`].
+pub fn calculate_total_cost_with_cache_ttl(
+    model_name: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_creation_1h_tokens: u64,
+    cache_read_tokens: u64,
+) -> f64 {
     // Zero-token records (sessions that never ran a model) cost nothing whatever the model, and
     // must not raise "No price for model" for names that will never be priced.
     if input_tokens == 0
@@ -2057,15 +2098,22 @@ pub fn calculate_total_cost(
     {
         return 0.0;
     }
+    let one_hour = cache_creation_1h_tokens.min(cache_creation_tokens);
+    let five_minute = cache_creation_tokens - one_hour;
     // One lookup instead of three on the hot path.
     if let Some(price) = live_price(model_name) {
         return price.input_cost(input_tokens)
             + price.output_cost(output_tokens)
-            + price.cache_cost(cache_creation_tokens, cache_read_tokens);
+            + price.cache_cost_split(five_minute, one_hour, cache_read_tokens);
     }
     let input_cost = calculate_input_cost(model_name, input_tokens);
     let output_cost = calculate_output_cost(model_name, output_tokens);
-    let cache_cost = calculate_cache_cost(model_name, cache_creation_tokens, cache_read_tokens);
+    let cache_cost = calculate_cache_cost_with_ttl(
+        model_name,
+        cache_creation_tokens,
+        cache_creation_1h_tokens,
+        cache_read_tokens,
+    );
 
     input_cost + output_cost + cache_cost
 }

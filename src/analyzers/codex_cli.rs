@@ -17,6 +17,66 @@ use crate::utils::{deserialize_utc_timestamp, hash_text, warn_once};
 
 const DEFAULT_FALLBACK_MODEL: &str = "gpt-5";
 
+/// The model to price a session against when its own metadata does not name one.
+///
+/// Codex writes the configured model into `~/.codex/config.toml`, and sessions that never record
+/// model metadata were being priced as [`DEFAULT_FALLBACK_MODEL`] regardless of what the user
+/// actually runs (BZL-136, upstream #178). Read once per process.
+pub fn configured_fallback_model() -> &'static str {
+    static MODEL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    MODEL.get_or_init(|| {
+        // Codex itself honours CODEX_HOME, so follow it rather than assuming ~/.codex.
+        std::env::var_os("CODEX_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::home_dir().map(|home| home.join(".codex")))
+            .map(|dir| dir.join("config.toml"))
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .as_deref()
+            .and_then(fallback_model_from_toml)
+            .unwrap_or_else(|| DEFAULT_FALLBACK_MODEL.to_string())
+    })
+}
+
+/// Pull the top-level `model` out of a Codex `config.toml`. Only the root key counts: a `model`
+/// nested under a profile or provider table is not what a session without metadata would have run.
+fn fallback_model_from_toml(contents: &str) -> Option<String> {
+    let parsed: toml::Table = toml::from_str(contents).ok()?;
+    let model = parsed.get("model")?.as_str()?.trim();
+    (!model.is_empty()).then(|| model.to_string())
+}
+
+#[cfg(test)]
+mod fallback_model_tests {
+    use super::{DEFAULT_FALLBACK_MODEL, fallback_model_from_toml};
+
+    #[test]
+    fn reads_the_top_level_model() {
+        let cfg = r#"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "low"
+"#;
+        assert_eq!(fallback_model_from_toml(cfg).as_deref(), Some("gpt-6.1-sol"));
+    }
+
+    /// A `model` inside a profile is not the default the session ran, so it must not be picked up.
+    #[test]
+    fn ignores_a_model_nested_in_a_table() {
+        let cfg = r#"
+[profiles.work]
+model = "o3-pro"
+"#;
+        assert_eq!(fallback_model_from_toml(cfg), None);
+    }
+
+    #[test]
+    fn missing_empty_or_malformed_config_falls_through_to_the_default() {
+        assert_eq!(fallback_model_from_toml(""), None);
+        assert_eq!(fallback_model_from_toml("model = \"\""), None);
+        assert_eq!(fallback_model_from_toml("this is not toml ["), None);
+        assert_eq!(DEFAULT_FALLBACK_MODEL, "gpt-5", "the documented last resort");
+    }
+}
+
 /// A parsed session file, kept until the file's size or modification time changes.
 struct CachedFile {
     len: u64,
@@ -441,7 +501,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                             if let Some(content) = content {
                                 let model_state = session_model.clone().unwrap_or_else(|| {
                                     let fallback = SessionModel::inferred(
-                                        DEFAULT_FALLBACK_MODEL.to_string(),
+                                        configured_fallback_model().to_string(),
                                     );
                                     warn_once(format!(
                                         "WARNING: session {file_path_str} missing model metadata; using fallback model {} for cost estimation.",
@@ -498,7 +558,7 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                         if let Some(token_usage) = usage {
                             let model_state = session_model.clone().unwrap_or_else(|| {
                                 let fallback = SessionModel::inferred(
-                                    DEFAULT_FALLBACK_MODEL.to_string(),
+                                    configured_fallback_model().to_string(),
                                 );
                                 warn_once(format!(
                                     "WARNING: session {file_path_str} missing model metadata; using fallback model {} for cost estimation.",
