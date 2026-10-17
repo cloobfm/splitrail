@@ -515,17 +515,29 @@ pub fn account_for_analyzer(analyzer_name: &str) -> Option<String> {
 fn short_hostname() -> Option<String> {
     static NAME: OnceLock<Option<String>> = OnceLock::new();
     NAME.get_or_init(|| {
-        let mut buf = [0u8; 256];
-        // SAFETY: the buffer is valid for its length; gethostname NUL-terminates on success.
-        if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
-            return None;
-        }
-        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-        let name = String::from_utf8_lossy(&buf[..end]);
+        let name = raw_hostname()?;
         let short = name.split('.').next().unwrap_or_default().to_string();
         (!short.is_empty()).then_some(short)
     })
     .clone()
+}
+
+/// This machine's name as the OS reports it, possibly fully qualified.
+#[cfg(unix)]
+fn raw_hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: the buffer is valid for its length; gethostname NUL-terminates on success.
+    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    Some(String::from_utf8_lossy(&buf[..end]).into_owned())
+}
+
+/// Windows has no `gethostname` in libc; `COMPUTERNAME` is what the OS sets for this.
+#[cfg(windows)]
+fn raw_hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok()
 }
 
 fn parse_login(content: &str) -> Option<String> {

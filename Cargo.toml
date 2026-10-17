@@ -1,6 +1,6 @@
 [package]
 name = "splitrail-dashboard"
-version = "2.0.0-dash-0.87"
+version = "2.0.0-dash-0.88"
 edition = "2024"
 license = "MIT"
 authors = ["Piebald LLC <support@piebald.ai>"]
@@ -25,7 +25,7 @@ phf = { version = "0.12.1", features = ["macros"] }
 serde_bytes = "0.11.17"
 simd-json = { version = "0.15.1", features = ["serde"] }
 tiktoken-rs = "0.6"
-rusqlite = "0.33"
+rusqlite = { version = "0.33", features = ["bundled"] }
 dirs = "5.0.1"
 regex = "1.12.2"
 libc = "0.2"

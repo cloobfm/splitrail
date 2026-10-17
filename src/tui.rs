@@ -414,6 +414,9 @@ impl TerminalGuard {
         crate::utils::set_tui_active(false);
         let _ = set_mouse(false);
         std::thread::sleep(Duration::from_millis(30));
+        // Discard mouse reports already in flight so none reach the shell prompt. POSIX only;
+        // Windows has no tcflush, and the console is left as crossterm restores it.
+        #[cfg(unix)]
         // SAFETY: tcflush only discards the terminal's pending input; stdin is fd 0.
         unsafe {
             libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);

@@ -321,15 +321,34 @@ fn start_publishers() {
     });
 }
 
-/// Replace this process with the newly built binary, same arguments. Only returns on failure.
-pub fn exec_new_binary() -> std::io::Error {
-    use std::os::unix::process::CommandExt;
-    // The path this process was started from, which the build just replaced.
-    let binary = std::env::current_exe().unwrap_or_else(|_| {
+/// The path this process was started from, which a build will have replaced.
+fn new_binary_path() -> std::path::PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| {
         let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
         source_dir().join("target").join(profile).join(BINARY)
-    });
-    std::process::Command::new(binary).args(std::env::args_os().skip(1)).exec()
+    })
+}
+
+/// Replace this process with the newly built binary, same arguments. Only returns on failure.
+#[cfg(unix)]
+pub fn exec_new_binary() -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    std::process::Command::new(new_binary_path())
+        .args(std::env::args_os().skip(1))
+        .exec()
+}
+
+/// Windows has no `exec`: the closest is to start the replacement and leave, so this spawns the
+/// new binary and exits rather than returning into a process whose executable has been swapped.
+#[cfg(windows)]
+pub fn exec_new_binary() -> std::io::Error {
+    match std::process::Command::new(new_binary_path())
+        .args(std::env::args_os().skip(1))
+        .spawn()
+    {
+        Ok(_) => std::process::exit(0),
+        Err(e) => e,
+    }
 }
 
 #[cfg(test)]

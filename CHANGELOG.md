@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.88] - 2026-10-17
+
+BZL-12, first pass: the build blockers, re-audited against 0.87 rather than the 0.16 audit in the
+ticket.
+
+### Fixed
+- **SQLite is bundled.** `rusqlite` had no `bundled` feature, so `libsqlite3-sys` linked against
+  the system library via pkg-config/vcpkg: Ubuntu needed `libsqlite3-dev` present, musl would not
+  link at all, and Windows needed a vcpkg sqlite3. It now builds SQLite from source.
+- **Three unix-only call sites are gated**, each with a Windows path rather than a hole:
+  `plan_limits::short_hostname` used `libc::gethostname` (Windows reads `COMPUTERNAME`);
+  `tui::TerminalGuard::restore` used `libc::tcflush` (POSIX only — the console is left as crossterm
+  restores it); `self_update::exec_new_binary` used `std::os::unix::process::CommandExt::exec`
+  (Windows has no exec, so it spawns the replacement and exits).
+- **CI no longer requests `rustc-codegen-cranelift-preview`.** Nothing sets `codegen-backend`, so
+  the component was never used — but it was requested on every leg including `windows-2025`,
+  where the preview component is not reliably published, making it a build failure for no benefit.
+- **`.cargo/config.toml` no longer pins `lld-link`** for `x86_64-pc-windows-msvc`, which required
+  LLVM on the builder. CI already overrode it with `link.exe`, so the pin only affected local
+  Windows builds, where the default MSVC linker needs no extra installs.
+
+### Added
+- `tests/cross_platform_paths.rs` discovers Linux (`~/.config/...`) and macOS
+  (`Library/Application Support/...`) layouts from a fake home, asserts an `APPDATA` pattern is
+  offered for Windows, and checks Kilo Code still offers the `vscode-server` layout a headless
+  Ubuntu box uses. Analyzers emit every platform's patterns unconditionally and let the filesystem
+  decide, which is what makes this testable from a Mac.
+
+### Verification status
+- **Linux: the Rust code compiles.** `cargo check --target x86_64-unknown-linux-musl` reports zero
+  Rust errors; it stops only at the bundled-SQLite C step, which wants a musl cross-gcc that macOS
+  does not have. A native Ubuntu build has `cc`, so this is a cross-compilation limit, not a code
+  problem.
+- **Windows: unverified.** The cfg gates are mechanical but no Windows target can be checked from
+  here (same C-toolchain wall). CI is the first real test.
+- **No Ubuntu smoke run.** `devbox-a` is reachable and is Ubuntu 6.8.0, but has no cargo, and
+  installing a Rust toolchain on it was not something to do unasked.
+
+### Still open on BZL-12
+- Warp credits need macOS: `warp_limits` shells out to `defaults` for the cached
+  `AIRequestLimitInfo`. It fails cleanly off macOS (the error propagates, nothing panics), so Warp
+  simply reports no credit limit on Linux. A real fix needs another source for that number.
+- `records.rs` posts notifications via `osascript`; the spawn is ignored on failure, so it is a
+  silent no-op elsewhere. Linux would want `notify-send`.
+- GitHub Copilot's analyzer is still macOS-only in its paths, but remains unregistered.
+- inotify watch limits on Linux, and the Windows console/glyph questions, are untested.
+
 ## [2.0.0-dash-0.87] - 2026-10-17
 
 BZL-14 phase 4.

@@ -1,2 +1,6 @@
-[target.x86_64-pc-windows-msvc]
-linker = "lld-link"
+# Nothing platform-specific is pinned here on purpose.
+#
+# This used to set `linker = "lld-link"` for x86_64-pc-windows-msvc, which requires LLVM to be
+# installed on the builder. CI already overrides the linker with link.exe via
+# CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER, so the pin only affected local Windows builds, where
+# the default MSVC linker works with no extra installs (BZL-12).
