@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.81] - 2026-10-17
+
+BZL-74, first pass: the shared whole-file cache, and the four analyzers whose sources are replaced
+rather than appended to.
+
+### Added
+- `src/stamp_cache.rs` — `StampCache`, a per-file parse cache keyed on (path, size, mtime) for
+  analyzers whose sources are rewritten rather than appended to. Parses only files that changed,
+  shares each file's messages via `Arc` rather than re-parsing, drops entries for files no longer
+  discovered, parses a path listed twice only once, and deliberately does **not** cache a parse
+  failure so a half-written file is retried instead of remembered as empty.
+  `IncrementalJsonlCache` stays the right choice for append-only JSONL, where only new bytes need
+  parsing.
+
+### Changed
+- Qwen Code, Droid CLI, Cline and Kilo Code parse through `StampCache`. A reload now pays only for
+  sessions that changed, where before each one re-parsed every source it had.
+- `DroidCliAnalyzer::parse_session_file` is no longer `async`: it contained no awaits.
+
+### Performance
+- Real data, cold then warm parse of the same sources (release build):
+
+  | analyzer | files | messages | cold | warm | speedup |
+  | --- | --- | --- | --- | --- | --- |
+  | Qwen Code | 81 | 5,861 | 21.5 ms | 2.7 ms | 7.9x |
+  | Droid CLI | 64 | 3,498 | 25.8 ms | 1.0 ms | 26.6x |
+  | Kilo Code | 112 | 3,164 | 30.6 ms | 1.2 ms | 24.6x |
+
+  Totals identical across both passes for each analyzer.
+
+### Still to do on BZL-74
+- Kiro CLI (SQLite — needs a db+WAL stamp plus a row watermark, as OpenCode got in 0.35).
+- Ollama, Cursor Agent, Antigravity and Warp (append-only JSONL — want cursor mode, not a stamp).
+- Coalescing reload triggers so a file event and the Codex poll in one window cause one reload.
+- Optionally persisting caches under `~/.config/splitrail/cache/` to cut the first draw.
+
+### Note
+- Cline has no data on this machine, so its wiring is mechanical but unverified against real files.
+
 ## [2.0.0-dash-0.80] - 2026-10-17
 
 ### Added

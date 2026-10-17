@@ -10,18 +10,22 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use glob::glob;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
 use std::path::Path;
 
-pub struct QwenCodeAnalyzer;
+pub struct QwenCodeAnalyzer {
+    /// Per-file parse cache: a reload only pays for sessions that changed (BZL-74).
+    cache: crate::stamp_cache::StampCache,
+}
 
 impl QwenCodeAnalyzer {
     pub fn new() -> Self {
-        Self
+        Self {
+            cache: crate::stamp_cache::StampCache::new(),
+        }
     }
 }
 
@@ -815,40 +819,18 @@ impl Analyzer for QwenCodeAnalyzer {
         &self,
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
-        // Parse all session files in parallel, handling both JSON and JSONL formats
-        let all_entries: Vec<ConversationMessage> = sources
-            .into_par_iter()
-            .flat_map(|source| {
-                if source.path.extension().map_or(false, |ext| ext == "json") {
-                    // Handle traditional JSON chat files
-                    match parse_json_session_file(&source.path) {
-                        Ok(messages) => messages,
-                        Err(e) => {
-                            crate::utils::report(format!(
-                                "Failed to parse Qwen Code session file {}: {e:#}",
-                                source.path.display(),
-                            ));
-                            Vec::new()
-                        }
-                    }
-                } else if source.path.extension().map_or(false, |ext| ext == "jsonl") {
-                    // Handle auto-stats JSONL files (requests and stats)
-                    match parse_jsonl_stats_file(&source.path) {
-                        Ok(messages) => messages,
-                        Err(e) => {
-                            crate::utils::report(format!(
-                                "Failed to parse Qwen Code stats file {}: {e:#}",
-                                source.path.display(),
-                            ));
-                            Vec::new()
-                        }
-                    }
-                } else {
-                    // Unknown file type
-                    Vec::new()
-                }
-            })
-            .collect();
+        // Only files whose size or mtime moved are re-parsed; the rest come from the cache.
+        let (all_entries, _report) = self.cache.parse_all(&sources, |path| {
+            if path.extension().is_some_and(|ext| ext == "json") {
+                // Traditional JSON chat files
+                parse_json_session_file(path)
+            } else if path.extension().is_some_and(|ext| ext == "jsonl") {
+                // Auto-stats JSONL files (requests and stats)
+                parse_jsonl_stats_file(path)
+            } else {
+                Ok(Vec::new())
+            }
+        });
 
         // Deduplicate based on global hash to avoid duplicates from overlapping data sources
         let mut seen_global_hashes = HashSet::new();

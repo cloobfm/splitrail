@@ -6,17 +6,21 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use glob::glob;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use std::collections::HashSet;
 use std::path::Path;
 
-pub struct KiloCodeAnalyzer;
+pub struct KiloCodeAnalyzer {
+    /// Per-file parse cache: a reload only pays for tasks that changed (BZL-74).
+    cache: crate::stamp_cache::StampCache,
+}
 
 impl KiloCodeAnalyzer {
     pub fn new() -> Self {
-        Self
+        Self {
+            cache: crate::stamp_cache::StampCache::new(),
+        }
     }
 }
 
@@ -558,22 +562,10 @@ impl Analyzer for KiloCodeAnalyzer {
         &self,
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
-        // Parse all task directories in parallel
-        let all_entries: Vec<ConversationMessage> = sources
-            .into_par_iter()
-            .flat_map(
-                |source| match parse_kilo_code_task_directory(&source.path) {
-                    Ok(messages) => messages,
-                    Err(e) => {
-                        eprintln!(
-                            "Failed to parse Kilo Code task directory {:?}: {}",
-                            source.path, e
-                        );
-                        Vec::new()
-                    }
-                },
-            )
-            .collect();
+        // Only task files whose size or mtime moved are re-parsed (BZL-74).
+        let (all_entries, _report) = self
+            .cache
+            .parse_all(&sources, |path| parse_kilo_code_task_directory(path));
 
         // Deduplicate by global hash
         let mut seen_hashes = HashSet::new();

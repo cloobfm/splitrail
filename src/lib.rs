@@ -12,6 +12,7 @@ pub mod kiro_limits;
 pub mod self_update;
 pub mod status_file;
 pub mod incremental;
+pub mod stamp_cache;
 pub mod models;
 pub mod mqtt;
 pub mod records;

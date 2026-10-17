@@ -14,6 +14,7 @@ mod analyzer;
 mod analyzers;
 mod config;
 mod incremental;
+mod stamp_cache;
 mod models;
 mod mqtt;
 mod rollup;

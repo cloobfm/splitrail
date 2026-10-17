@@ -71,11 +71,20 @@ struct DroidTokenUsage {
 }
 
 /// Droid CLI analyzer for Factory AI Droid CLI data
-pub struct DroidCliAnalyzer;
+pub struct DroidCliAnalyzer {
+    /// Per-file parse cache: a reload only pays for sessions that changed (BZL-74).
+    ///
+    /// Keyed on the session JSONL. A session's sibling `.settings.json` is written at session
+    /// start and the JSONL grows throughout, so a settings-only change with a byte-identical
+    /// session file would be served from cache — not a case that arises in practice.
+    cache: crate::stamp_cache::StampCache,
+}
 
 impl DroidCliAnalyzer {
     pub fn new() -> Self {
-        Self
+        Self {
+            cache: crate::stamp_cache::StampCache::new(),
+        }
     }
 }
 
@@ -116,12 +125,10 @@ impl Analyzer for DroidCliAnalyzer {
         &self,
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
-        let mut messages = Vec::new();
-
-        for source in sources {
-            let session_messages = self.parse_session_file(&source.path).await?;
-            messages.extend(session_messages);
-        }
+        // Only sessions whose size or mtime moved are re-parsed (BZL-74).
+        let (messages, _report) = self
+            .cache
+            .parse_all(&sources, |path| self.parse_session_file(path));
 
         Ok(messages)
     }
@@ -181,7 +188,7 @@ impl Analyzer for DroidCliAnalyzer {
 }
 
 impl DroidCliAnalyzer {
-    async fn parse_session_file(&self, file_path: &Path) -> Result<Vec<ConversationMessage>> {
+    fn parse_session_file(&self, file_path: &Path) -> Result<Vec<ConversationMessage>> {
         let content = fs::read_to_string(file_path)?;
         let mut messages = Vec::new();
         let mut last_timestamp: Option<DateTime<Utc>> = None;
@@ -628,8 +635,8 @@ mod tests {
 }}"#
         ).unwrap();
 
-        let analyzer = DroidCliAnalyzer;
-        let messages = analyzer.parse_session_file(&session_file).await.unwrap();
+        let analyzer = DroidCliAnalyzer::new();
+        let messages = analyzer.parse_session_file(&session_file).unwrap();
 
         // Two conversation messages plus one synthetic "session-total" message that carries the
         // authoritative token counts from settings.json (commit 2dc0ed6). Per-message tokens are
