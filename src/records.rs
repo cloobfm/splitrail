@@ -347,7 +347,11 @@ fn notify(kind: Kind, new: &Record, old: &Record) {
         kind.format(new.value),
         kind.format(old.value)
     );
-    let Some((program, args)) = platform_notifier().command("🏆 New record", &body) else {
+    notify_text("🏆 New record", &body);
+}
+
+fn notify_text(title: &str, body: &str) {
+    let Some((program, args)) = platform_notifier().command(title, body) else {
         return;
     };
     // Best effort: a missing or unhappy notifier must never disturb the dashboard.
@@ -433,6 +437,7 @@ pub fn board(stats: &[&AgenticCodingToolStats], goal_tks: f64) -> Board {
         stats.iter().map(|s| s.messages.len()).sum(),
         stats.iter().flat_map(|s| s.daily_stats.values()).map(|d| d.stats.output_tokens).sum(),
     );
+    observe_plans(stats);
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(c) = cache.as_ref()
         && (c.key == key || c.at.elapsed() < MIN_INTERVAL)
@@ -457,6 +462,135 @@ pub fn board(stats: &[&AgenticCodingToolStats], goal_tks: f64) -> Board {
     board.best = merged;
     *cache = Some(Cache { at: Instant::now(), key, board: board.clone() });
     board
+}
+
+/// How full each plan window got before it reset: the highest figure seen for it, per account.
+/// Sessions keep re-reporting the figure from their last API call, so the latest report can be
+/// lower than the real end; the highest one is the honest close.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanWindow {
+    /// The signed-in account (`ambertyeung@gmail.com (personal)`), else the column name.
+    pub account: String,
+    /// A column it was seen in, for display.
+    pub tool: String,
+    /// `week` or `month`.
+    pub window: String,
+    pub resets_at: i64,
+    pub peak: f64,
+    /// Set once the close has been announced.
+    #[serde(default)]
+    pub announced: bool,
+}
+
+/// Windows kept per account and plan.
+const PLAN_HISTORY: usize = 26;
+/// Reset times drift by seconds between reports; they are compared at this granularity.
+const RESET_ROUNDING_SECS: i64 = 15 * 60;
+
+pub fn plans_path() -> Option<PathBuf> {
+    Some(std::env::home_dir()?.join(".config/splitrail/plan_closes.json"))
+}
+
+fn load_plans() -> Vec<PlanWindow> {
+    plans_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_default()
+}
+
+/// `seen` (account, tool, window, used, resets_at) folded into `plans`: the peak per window
+/// kept, a new window added, old ones trimmed. Returns the windows that have now reset and were
+/// not announced yet (marking them announced).
+pub fn fold_plans(plans: &mut Vec<PlanWindow>, seen: &[(String, String, &str, f64, i64)], now: i64) -> Vec<PlanWindow> {
+    let round = |t: i64| (t + RESET_ROUNDING_SECS / 2).div_euclid(RESET_ROUNDING_SECS);
+    for (account, tool, window, used, resets_at) in seen {
+        match plans
+            .iter_mut()
+            .find(|p| &p.account == account && p.window == *window && round(p.resets_at) == round(*resets_at))
+        {
+            Some(p) => p.peak = p.peak.max(*used),
+            None => plans.push(PlanWindow {
+                account: account.clone(),
+                tool: tool.clone(),
+                window: window.to_string(),
+                resets_at: *resets_at,
+                peak: *used,
+                announced: false,
+            }),
+        }
+    }
+    plans.sort_by(|a, b| (&a.account, &a.window, a.resets_at).cmp(&(&b.account, &b.window, b.resets_at)));
+    let mut kept: Vec<PlanWindow> = Vec::new();
+    for p in plans.drain(..).rev() {
+        if kept.iter().filter(|k| k.account == p.account && k.window == p.window).count() < PLAN_HISTORY {
+            kept.push(p);
+        }
+    }
+    kept.reverse();
+    *plans = kept;
+    let mut closed = Vec::new();
+    for p in plans.iter_mut().filter(|p| p.resets_at <= now && !p.announced) {
+        p.announced = true;
+        closed.push(p.clone());
+    }
+    closed
+}
+
+static PLANS_CHECKED: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Note every plan window's current figure (Claude, Codex, Cursor...), at most every 30 s, and
+/// announce windows that have just reset with how full they closed.
+fn observe_plans(stats: &[&AgenticCodingToolStats]) {
+    {
+        let mut checked = PLANS_CHECKED.lock().unwrap_or_else(|e| e.into_inner());
+        if checked.is_some_and(|at| at.elapsed() < MIN_INTERVAL) {
+            return;
+        }
+        *checked = Some(Instant::now());
+    }
+    let now = Utc::now().timestamp();
+    let mut seen = Vec::new();
+    for tool in stats {
+        let Some(limits) = crate::plan_limits::limits_for_analyzer(&tool.analyzer_name) else { continue };
+        let account = crate::plan_limits::account_for_analyzer(&tool.analyzer_name)
+            .unwrap_or_else(|| tool.analyzer_name.clone());
+        for (window, status) in [("week", limits.seven_day), ("month", limits.monthly)] {
+            if let Some(w) = status
+                && let Some(secs) = w.resets_in_secs.filter(|s| *s > 0)
+            {
+                seen.push((account.clone(), tool.analyzer_name.clone(), window, w.used_percentage, now + secs));
+            }
+        }
+    }
+    let first = !plans_path().is_some_and(|p| p.exists());
+    let mut plans = load_plans();
+    let before = plans.clone();
+    let closed = fold_plans(&mut plans, &seen, now);
+    if plans != before
+        && let Some(path) = plans_path()
+    {
+        let tmp = path.with_extension("json.tmp");
+        let written = serde_json::to_vec_pretty(&plans)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| std::fs::write(&tmp, bytes))
+            .and_then(|_| std::fs::rename(&tmp, &path));
+        if let Err(e) = written {
+            crate::utils::log_error(format!("Plan closes: {e}"));
+        }
+    }
+    if !first {
+        for p in closed {
+            notify_text(
+                &format!("📅 {} {} closed", p.tool, p.window),
+                &format!("{:.0}% used, {:.0}% left unused", p.peak, (100.0 - p.peak).max(0.0)),
+            );
+        }
+    }
+}
+
+/// Every plan window seen, closed and still open, oldest first, for the Records view.
+pub fn plan_windows() -> Vec<PlanWindow> {
+    load_plans()
 }
 
 /// The last board `board` worked out, if any, without recomputing.
@@ -535,6 +669,24 @@ mod tests {
         assert_eq!(merged[&Kind::GoalStreak].value, 3.0);
         assert_eq!(beaten.len(), 1);
         assert_eq!(beaten[0].0, Kind::DayOutput);
+    }
+
+    #[test]
+    fn a_plan_window_keeps_its_peak_and_is_announced_once_after_it_resets() {
+        let mut plans = Vec::new();
+        let seen = |used: f64, resets_at: i64| vec![("me@x.com".to_string(), "Claude (main)".to_string(), "week", used, resets_at)];
+        assert!(fold_plans(&mut plans, &seen(90.0, 10_000), 1_000).is_empty());
+        // An idle session re-reports an older, lower figure with a reset a few seconds off.
+        fold_plans(&mut plans, &seen(93.0, 10_005), 2_000);
+        fold_plans(&mut plans, &seen(79.0, 9_990), 3_000);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].peak, 93.0);
+        // The next week starts; the old one is now closed and announced, once.
+        let closed = fold_plans(&mut plans, &seen(2.0, 10_000 + 7 * 86_400), 10_100);
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].peak, 93.0);
+        assert!(fold_plans(&mut plans, &[], 10_200).is_empty());
+        assert_eq!(plans.len(), 2);
     }
 
     use chrono::TimeZone;

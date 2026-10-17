@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.90] - 2026-10-17
+
+### Added
+- **📅 Plan closes, in the Records view (`r`).** How full each plan's week or month was when it
+  reset, per account. Claude's two machines on one login count as one account.
+  - Columns: the last close, the best one, the average of the last four, and the current window
+    so far.
+  - Each figure is the **highest** one seen in that window. Idle sessions keep re-reporting the
+    figure from their last API call, so the latest report can be lower than where the week
+    really ended. Claude (main)'s week ending Oct 17 read 90% that way, when it was about 93%.
+  - Kept in `~/.config/splitrail/plan_closes.json` (26 windows per account and plan).
+  - A notification when a window closes: "📅 Claude (main) week closed · 93% used, 7% left
+    unused".
+
 ## [2.0.0-dash-0.89] - 2026-10-17
 
 BZL-12, second pass: the behaviour Linux needs, not just the build.

@@ -1234,7 +1234,8 @@ fn draw_records_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCo
             ])
         })
         .collect();
-    let [_, table_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
+    let [_, table_area, plans_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(13), Constraint::Min(4)]).areas(area);
     let table = Table::new(
         rows,
         [Constraint::Length(23), Constraint::Length(12), Constraint::Length(62), Constraint::Min(16)],
@@ -1249,6 +1250,93 @@ fn draw_records_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCo
         " 🏆 Records · every tool and machine · streak = days averaging ≥{goal:.0} tk/s · kept in records.json · r: back "
     )));
     frame.render_widget(table, table_area);
+    draw_plan_closes(frame, plans_area);
+}
+
+/// How full each plan's past weeks and months closed, per account (`records::plan_windows`).
+fn draw_plan_closes(frame: &mut Frame, area: Rect) {
+    let now = chrono::Utc::now().timestamp();
+    let windows = crate::records::plan_windows();
+    let mut groups: Vec<(String, String)> = Vec::new();
+    for w in &windows {
+        let key = (w.account.clone(), w.window.clone());
+        if !groups.contains(&key) {
+            groups.push(key);
+        }
+    }
+    let dim = Style::default().fg(Color::DarkGray);
+    let fullness = |peak: f64| {
+        Style::default().fg(if peak >= 95.0 {
+            Color::Green
+        } else if peak >= 80.0 {
+            Color::Yellow
+        } else {
+            Color::Red
+        })
+    };
+    let date = |t: i64| {
+        chrono::DateTime::from_timestamp(t, 0)
+            .map(|d| d.with_timezone(&chrono::Local).format("%b %-d").to_string())
+            .unwrap_or_default()
+    };
+    let rows: Vec<Row> = groups
+        .iter()
+        .map(|(account, window)| {
+            let own: Vec<&crate::records::PlanWindow> =
+                windows.iter().filter(|w| &w.account == account && &w.window == window).collect();
+            let closed: Vec<&&crate::records::PlanWindow> = own.iter().filter(|w| w.resets_at <= now).collect();
+            let open = own.iter().find(|w| w.resets_at > now);
+            let tool = own.last().map(|w| w.tool.clone()).unwrap_or_default();
+            let last = closed.last().map(|w| {
+                Cell::from(format!("{:.0}% ({})", w.peak, date(w.resets_at))).style(fullness(w.peak))
+            });
+            let best = closed.iter().max_by(|a, b| a.peak.total_cmp(&b.peak)).map(|w| {
+                Cell::from(format!("{:.0}% ({})", w.peak, date(w.resets_at))).style(fullness(w.peak))
+            });
+            let recent: Vec<f64> = closed.iter().rev().take(4).map(|w| w.peak).collect();
+            let average = (!recent.is_empty()).then(|| {
+                let avg = recent.iter().sum::<f64>() / recent.len() as f64;
+                Cell::from(format!("{avg:.0}% (last {})", recent.len())).style(fullness(avg))
+            });
+            let now_cell = open.map(|w| Cell::from(format!("{:.0}% → {}", w.peak, date(w.resets_at))));
+            Row::new(vec![
+                Cell::from(tool).style(Style::default().add_modifier(Modifier::BOLD)),
+                Cell::from(account.replace(" (personal)", "")).style(Style::default().fg(Color::Cyan)),
+                Cell::from(window.clone()),
+                last.unwrap_or_else(|| Cell::from("-").style(dim)),
+                best.unwrap_or_else(|| Cell::from("-").style(dim)),
+                average.unwrap_or_else(|| Cell::from("-").style(dim)),
+                now_cell.unwrap_or_else(|| Cell::from("-").style(dim)),
+            ])
+        })
+        .collect();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" 📅 Plan closes · how full each week/month was when it reset (highest figure seen) · kept in plan_closes.json ");
+    if rows.is_empty() {
+        frame.render_widget(Paragraph::new("No plan windows seen yet; the first close is recorded at its reset.").dim().block(block), area);
+        return;
+    }
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(22),
+            Constraint::Length(24),
+            Constraint::Length(6),
+            Constraint::Length(14),
+            Constraint::Length(14),
+            Constraint::Length(16),
+            Constraint::Min(14),
+        ],
+    )
+    .header(
+        Row::new(vec!["Tool", "Account", "Plan", "Last closed", "Best", "Average", "This one so far"])
+            .style(Style::default().add_modifier(Modifier::BOLD))
+            .bottom_margin(1),
+    )
+    .column_spacing(1)
+    .block(block);
+    frame.render_widget(table, area);
 }
 
 fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCodingToolStats]) {
