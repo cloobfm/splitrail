@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.85] - 2026-10-17
+
+### Fixed
+- **One reload per change, and none lost (BZL-74 item 3).**
+  - The 5-second Codex poll used to reload Codex itself. A write that both it and the file
+    watcher saw was parsed twice. The poll now queues Codex into the same batch as file events,
+    and a Codex reload refreshes the poll's fingerprint, so the next poll finds nothing new.
+  - An analyzer reloaded within the last 2 s used to have its event dropped. The final write of
+    a burst then stayed unseen until some unrelated write came along. It is now kept pending and
+    reloaded once the debounce passes.
+
 ## [2.0.0-dash-0.84] - 2026-10-17
 
 ### Added

@@ -186,6 +186,8 @@ pub struct RealtimeStatsManager {
     batch_start_time: Option<Instant>,
     /// How long to wait for more events before processing batch
     batch_window: Duration,
+    /// Analyzer reloads done, for tests and the CPU acceptance run.
+    reloads: u64,
 }
 
 impl RealtimeStatsManager {
@@ -214,6 +216,7 @@ impl RealtimeStatsManager {
             pending_events: HashSet::new(),
             batch_start_time: None,
             batch_window: Duration::from_millis(500), // Wait 500ms for more events
+            reloads: 0,
         })
     }
 
@@ -254,22 +257,22 @@ impl RealtimeStatsManager {
             return Ok(()); // Nothing on disk changed; skip the re-parse.
         }
 
+        // Queued with the file events rather than reloaded here, so a Codex write that both the
+        // watcher and this poll notice in the same window costs one reload, not two.
         self.last_codex_fingerprint = current;
-        let _ = self.reload_analyzer_stats("Codex CLI", false).await;
+        self.queue_reload("Codex CLI".to_string());
         Ok(())
+    }
+
+    /// Ask for `analyzer_name` to be reloaded with the current batch.
+    fn queue_reload(&mut self, analyzer_name: String) {
+        self.pending_events.insert(analyzer_name);
+        self.batch_start_time.get_or_insert_with(Instant::now);
     }
 
     pub async fn handle_watcher_event(&mut self, event: WatcherEvent) -> Result<()> {
         match event {
-            WatcherEvent::DataChanged(analyzer_name) => {
-                // Add to pending batch
-                self.pending_events.insert(analyzer_name);
-
-                // Start batch timer if this is the first event
-                if self.batch_start_time.is_none() {
-                    self.batch_start_time = Some(Instant::now());
-                }
-            }
+            WatcherEvent::DataChanged(analyzer_name) => self.queue_reload(analyzer_name),
             WatcherEvent::Error(err) => {
                 crate::utils::report(format!("❌ Watcher error: {err}"));
             }
@@ -282,27 +285,30 @@ impl RealtimeStatsManager {
         if let Some(batch_start) = self.batch_start_time {
             let now = Instant::now();
             if now.duration_since(batch_start) >= self.batch_window {
-                // Process all pending events
                 let events_to_process: Vec<_> = self.pending_events.drain().collect();
+                self.batch_start_time = None;
 
                 for analyzer_name in events_to_process {
-                    // Check debounce
-                    if let Some(last_reload) = self.last_reload_times.get(&analyzer_name) {
-                        if now.duration_since(*last_reload) < self.reload_debounce {
-                            continue; // Skip, too soon
-                        }
+                    // Reloaded too recently: keep it pending for a later batch. Dropping it lost
+                    // the last write of a burst until some unrelated write came along.
+                    if let Some(last_reload) = self.last_reload_times.get(&analyzer_name)
+                        && now.duration_since(*last_reload) < self.reload_debounce
+                    {
+                        self.queue_reload(analyzer_name);
+                        continue;
                     }
 
-                    // Update last reload time
                     self.last_reload_times.insert(analyzer_name.clone(), now);
+                    if analyzer_name == "Codex CLI" {
+                        // This reload covers whatever the poll would find next.
+                        self.last_codex_fingerprint = Self::codex_fingerprint(&self.registry);
+                    }
 
                     if let Err(e) = self.reload_analyzer_stats(&analyzer_name, true).await {
                         crate::utils::report(format!("❌ Error reloading {analyzer_name}: {e}"));
                     }
+                    self.reloads += 1;
                 }
-
-                // Reset batch timer
-                self.batch_start_time = None;
             }
         }
         Ok(())
@@ -536,5 +542,83 @@ impl RealtimeStatsManager {
 
         self.last_upload_time = Some(Instant::now());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod coalesce_tests {
+    use super::*;
+    use crate::analyzer::{Analyzer, DataSource};
+    use crate::types::{AgenticCodingToolStats, ConversationMessage};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A "Codex CLI" whose single source file the test rewrites, counting full loads.
+    struct FakeCodex {
+        file: std::path::PathBuf,
+        loads: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Analyzer for FakeCodex {
+        fn display_name(&self) -> &'static str {
+            "Codex CLI"
+        }
+        fn get_data_glob_patterns(&self) -> Vec<String> {
+            vec![]
+        }
+        fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
+            Ok(vec![DataSource { path: self.file.clone() }])
+        }
+        async fn parse_conversations(&self, _: Vec<DataSource>) -> Result<Vec<ConversationMessage>> {
+            Ok(vec![])
+        }
+        async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+            Ok(AgenticCodingToolStats {
+                daily_stats: Default::default(),
+                num_conversations: 0,
+                messages: vec![],
+                analyzer_name: "Codex CLI".into(),
+            })
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn a_file_event_and_the_poll_for_one_write_reload_once_and_nothing_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("rollout.jsonl");
+        std::fs::write(&file, "a").unwrap();
+        let loads = Arc::new(AtomicUsize::new(0));
+        let mut registry = AnalyzerRegistry::new();
+        registry.register(FakeCodex { file: file.clone(), loads: loads.clone() });
+        let mut manager = RealtimeStatsManager::new(registry).await.unwrap();
+        assert_eq!(loads.load(Ordering::SeqCst), 1, "initial load");
+        manager.batch_window = Duration::ZERO;
+        manager.poll_interval = Duration::ZERO;
+
+        // One write, seen by both the watcher and the poll before the batch runs.
+        std::fs::write(&file, "ab").unwrap();
+        manager.handle_watcher_event(WatcherEvent::DataChanged("Codex CLI".into())).await.unwrap();
+        manager.poll_codex_if_needed().await.unwrap();
+        manager.process_pending_batches().await.unwrap();
+        assert_eq!(manager.reloads, 1);
+        // The reload refreshed the fingerprint, so the next poll finds nothing new.
+        manager.poll_codex_if_needed().await.unwrap();
+        manager.process_pending_batches().await.unwrap();
+        assert_eq!(manager.reloads, 1);
+
+        // A second write inside the debounce is deferred, not dropped.
+        std::fs::write(&file, "abc").unwrap();
+        manager.handle_watcher_event(WatcherEvent::DataChanged("Codex CLI".into())).await.unwrap();
+        manager.process_pending_batches().await.unwrap();
+        assert_eq!(manager.reloads, 1, "debounced");
+        assert!(manager.pending_events.contains("Codex CLI"));
+        manager.reload_debounce = Duration::ZERO;
+        manager.process_pending_batches().await.unwrap();
+        assert_eq!(manager.reloads, 2);
+        assert_eq!(loads.load(Ordering::SeqCst), 3);
     }
 }
