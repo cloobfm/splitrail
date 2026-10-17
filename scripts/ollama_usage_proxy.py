@@ -45,6 +45,9 @@ HOP_BY_HOP = {
 }
 NATIVE = {"/api/generate", "/api/chat"}
 OPENAI = {"/v1/chat/completions", "/v1/completions"}
+# Decision models (Ollama 0.35+): `usage` is {"input_tokens", "output_tokens"}, with the cached
+# prompt count beside it as `prompt_eval_cached_count`.
+DECISION = {"/v1/systemone"}
 # Largest non-streamed body kept in memory to read its usage; bigger ones pass through unlogged.
 MAX_BODY_SCAN = 16 * 1024 * 1024
 # Transcript previews for the dashboard's Activity section: the caller's last message and the
@@ -114,6 +117,16 @@ def prompt_preview(path, body):
     return text.strip()[:PREVIEW_CHARS]
 
 
+def request_model(body):
+    """The model a request names, for responses that do not say."""
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        return ""
+    model = payload.get("model") if isinstance(payload, dict) else None
+    return model if isinstance(model, str) else ""
+
+
 def reply_text(obj):
     """Reply text carried by one response object, in any of Ollama's dialects."""
     if not isinstance(obj, dict):
@@ -152,6 +165,14 @@ def usage_from_object(path, obj):
     usage = obj.get("usage")
     if not isinstance(usage, dict):
         return None
+    if path in DECISION:
+        return {
+            "model": obj.get("model") or "",
+            "prompt_tokens": int(usage.get("input_tokens") or 0),
+            "cached_tokens": int(obj.get("prompt_eval_cached_count") or 0),
+            "completion_tokens": int(usage.get("output_tokens") or 0),
+            "duration_ms": 0,
+        }
     details = usage.get("prompt_tokens_details")
     cached = details.get("cached_tokens") if isinstance(details, dict) else 0
     return {
@@ -337,8 +358,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.started = time.monotonic()
         path = urlparse(self.path).path
         body = self._read_request_body()
-        logged = self.command == "POST" and (path in NATIVE or path in OPENAI)
+        logged = self.command == "POST" and (path in NATIVE or path in OPENAI or path in DECISION)
         self.prompt = ""
+        self.request_model = request_model(body) if logged else ""
         self.power_key = self.power.start() if logged and self.power else None
         if logged:
             self.prompt = prompt_preview(path, body)
@@ -418,6 +440,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             energy = self.power.stop(self.power_key)
             self.power_key = None
         if usage:
+            usage["model"] = usage.get("model") or self.request_model
             if energy is not None:
                 usage["energy_j"] = round(energy, 2)
             size = self.sizes.get(usage["model"]) if self.sizes and usage.get("model") else None

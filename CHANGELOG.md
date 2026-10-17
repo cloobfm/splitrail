@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.66] - 2026-10-16
+
+### Fixed
+- **Ollama decision-model calls (`/v1/systemone`) are logged** (BZL-129). The usage proxy only
+  logged `/api/generate`, `/api/chat`, `/v1/chat/completions` and `/v1/completions`, so decision
+  models (Ollama 0.35+) passed through unrecorded. Their `usage.input_tokens` / `output_tokens`
+  and top-level `prompt_eval_cached_count` are now read, with the request's model when the reply
+  names none; timing and energy apply as for the other endpoints.
+
 ## [2.0.0-dash-0.65] - 2026-10-16
 
 ### Fixed

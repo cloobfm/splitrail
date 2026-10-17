@@ -79,6 +79,10 @@ class FakeOllama(BaseHTTPRequestHandler):
                 self._chunks("text/event-stream", sse + [b"data: [DONE]\n\n"])
             else:
                 self._json({"model": "qwen3:8b", "choices": [], "usage": usage})
+        elif path == "/v1/systemone":
+            # Decision models answer without naming the model.
+            self._json({"decision": "yes", "usage": {"input_tokens": 1002, "output_tokens": 3},
+                        "prompt_eval_cached_count": 640})
         elif path == "/api/fail":
             self._json({"error": "boom"}, 500)
         else:
@@ -175,6 +179,16 @@ class ProxyTests(unittest.TestCase):
         conn.close()
         self.assertNotIn("stream_options", FakeOllama.seen_bodies[-1])
         self.assertEqual(self.logged()[0]["completion_tokens"], 7)
+
+    def test_decision_model_calls_are_logged(self):
+        conn, resp = self.request("POST", "/v1/systemone", {"model": "decide:1b", "input": "x"})
+        self.assertEqual(json.loads(resp.read())["decision"], "yes")
+        conn.close()
+        [line] = self.logged()
+        self.assertEqual(
+            (line["endpoint"], line["model"], line["prompt_tokens"], line["cached_tokens"], line["completion_tokens"]),
+            ("/v1/systemone", "decide:1b", 1002, 640, 3),
+        )
 
     def test_other_paths_and_errors_pass_through_unlogged(self):
         conn, resp = self.request("GET", "/api/tags")
