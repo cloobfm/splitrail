@@ -38,6 +38,8 @@ const FULL: f64 = 95.0;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Window {
     pub tool: String,
+    /// The signed-in account (email and organisation, or plan), when known.
+    pub account: Option<String>,
     pub window: &'static str,
     pub used: f64,
     pub resets_at: Option<DateTime<Utc>>,
@@ -69,6 +71,7 @@ impl Window {
     pub fn to_json(&self) -> Value {
         json!({
             "tool": self.tool,
+            "account": self.account,
             "window": self.window,
             "used_percent": round1(self.used),
             "resets_at": self.resets_at.map(|t| t.with_timezone(&Local).to_rfc3339()),
@@ -106,6 +109,7 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
     let mut out = Vec::new();
     for tool in status.get("tools").and_then(Value::as_array).into_iter().flatten() {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("?");
+        let account = tool.get("account").and_then(Value::as_str).map(str::to_string);
         for key in ["five_hour", "seven_day", "monthly"] {
             let Some(w) = tool.get("limits").and_then(|l| l.get(key)).filter(|w| !w.is_null()) else {
                 continue;
@@ -123,6 +127,7 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
             });
             out.push(Window {
                 tool: name.to_string(),
+                account: account.clone(),
                 window: window_label(key),
                 used,
                 resets_at: resets_in.map(|s| now + Duration::seconds(s)),
@@ -169,7 +174,9 @@ fn merge_shared_accounts(windows: Vec<Window>) -> Vec<Window> {
     groups
         .into_iter()
         .flat_map(|group| {
-            let name = group.join(" = ");
+            // `Claude (main), dev-a`: the others by host when they are remote columns.
+            let others: Vec<&str> = group[1..].iter().map(|t| t.rsplit('@').next().unwrap_or(t)).collect();
+            let name = if others.is_empty() { group[0].clone() } else { format!("{}, {}", group[0], others.join(", ")) };
             windows
                 .iter()
                 .filter(|w| w.tool == group[0])
@@ -183,6 +190,7 @@ fn merge_shared_accounts(windows: Vec<Window>) -> Vec<Window> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pick {
     pub tool: String,
+    pub account: Option<String>,
     pub available: bool,
     pub reason: String,
     /// Higher first.
@@ -204,6 +212,7 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                 let back = full.resets_in_secs.map(human_secs).unwrap_or_else(|| "?".into());
                 return Pick {
                     tool: tool.to_string(),
+                    account: own.iter().find_map(|w| w.account.clone()),
                     available: false,
                     reason: format!("{} window {:.0}% used; back in {back}", full.window, full.used),
                     score: -1.0 - full.resets_in_secs.unwrap_or(0) as f64 / 86_400.0,
@@ -228,6 +237,7 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                     let resets = w.resets_in_secs.map(human_secs).unwrap_or_else(|| "?".into());
                     Pick {
                         tool: tool.to_string(),
+                        account: w.account.clone(),
                         available: true,
                         reason: format!(
                             "{} window {:.0}% used, {pace}; about {:.0}% would go unused at its reset in {resets}",
@@ -238,7 +248,7 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                         score,
                     }
                 }
-                None => Pick { tool: tool.to_string(), available: true, reason: "no window data".into(), score: 0.0 },
+                None => Pick { tool: tool.to_string(), account: None, available: true, reason: "no window data".into(), score: 0.0 },
             }
         })
         .collect();
@@ -256,7 +266,7 @@ pub fn status_for_tools(names: &[&str]) -> Value {
         .iter()
         .filter_map(|name| {
             let limits = crate::plan_limits::limits_for_analyzer(name)?;
-            Some(json!({"name": name, "limits": {
+            Some(json!({"name": name, "account": crate::plan_limits::account_for_analyzer(name), "limits": {
                 "five_hour": window(limits.five_hour),
                 "seven_day": window(limits.seven_day),
                 "monthly": window(limits.monthly),
@@ -310,7 +320,7 @@ pub fn where_to_spend_answer(status: &Value, now: DateTime<Utc>) -> Value {
         "stale": freshness(status, now),
         "how": "Each tool's plan is judged by its longest window (week or month): the share projected to go unused at that reset at the pace so far, per day until the reset. A 5-hour window only gates availability: any window at 95%+ makes the tool unavailable until it resets. Shares are of each plan's own allowance, so a large share of a small plan can rank above a smaller share of a large one. Tools without plan limits (pay-per-token, local) are not ranked.",
         "ranking": picks.iter().map(|p| json!({
-            "tool": p.tool, "available": p.available, "reason": p.reason, "score": round1(p.score),
+            "tool": p.tool, "account": p.account, "available": p.available, "reason": p.reason, "score": round1(p.score),
         })).collect::<Vec<_>>(),
     })
 }
@@ -361,8 +371,8 @@ mod tests {
         assert_eq!(week.resets_at, Some(now + Duration::days(1)));
         assert!(all.iter().all(|w| w.tool != "Ollama"), "no limits, no windows");
         assert!(all.iter().all(|w| w.tool != "Droid CLI"), "empty window with no reset");
-        assert!(all.iter().any(|w| w.tool == "Claude (main) = Claude@dev-b"), "{all:?}");
-        assert_eq!(all.iter().filter(|w| w.tool.contains("Claude@dev-b")).count(), 1);
+        assert!(all.iter().any(|w| w.tool == "Claude (main), dev-b"), "{all:?}");
+        assert_eq!(all.iter().filter(|w| w.tool.contains("dev-b")).count(), 1, "one row for the shared account");
     }
 
     #[test]
@@ -373,7 +383,7 @@ mod tests {
         let last = picks.last().unwrap();
         assert_eq!((last.tool.as_str(), last.available), ("Claude@dev-a", false));
         assert!(last.reason.contains("back in 30m"));
-        let main = picks.iter().find(|p| p.tool == "Claude (main) = Claude@dev-b").unwrap();
+        let main = picks.iter().find(|p| p.tool == "Claude (main), dev-b").unwrap();
         assert!(main.score < picks[0].score, "on pace to use its week: little expires");
     }
 
@@ -389,7 +399,7 @@ mod tests {
     fn a_fast_pace_says_when_it_runs_out() {
         // 70% of a week used in 3.5 days: 20%/day, so the last 30% lasts 1.5 days.
         let w = Window {
-            tool: "t".into(), window: "week", used: 70.0, resets_at: None,
+            tool: "t".into(), account: None, window: "week", used: 70.0, resets_at: None,
             resets_in_secs: Some(302_400), projected: Some(140.0),
         };
         assert_eq!(w.runs_out_in_secs(), Some(129_600));

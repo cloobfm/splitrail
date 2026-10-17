@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.74] - 2026-10-17
+
+### Changed
+- **Quotas view: an Account column and room to breathe.** Each row shows the account the tool is
+  signed in to (the email with its organisation for Claude, Warp and Antigravity; the plan where
+  that is all a tool reports, `chatgpt·plus`, `Kiro Free`), also in `splitrail quotas`, the MCP
+  answers and the ranking. Columns sharing a login read `Claude (main), dev-a` rather than
+  `Claude (main) = Claude@dev-a`. A blank line now sits under the tabs and under the header, with
+  wider column spacing.
+
 ## [2.0.0-dash-0.73] - 2026-10-17
 
 ### Added

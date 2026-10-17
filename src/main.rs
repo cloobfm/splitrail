@@ -219,12 +219,13 @@ fn print_quotas(as_json: bool) {
     if let Some(note) = quotas["stale"].as_str() {
         println!("⚠️  {note}\n");
     }
-    println!("{:<30} {:<6} {:>5} {:>6} {:>7}  {:<11} resets", "Tool / account", "Window", "Used", "Pace", "Unused", "Runs out");
+    println!("{:<24} {:<34} {:<6} {:>5} {:>6} {:>7}  {:<11} resets", "Tool", "Account", "Window", "Used", "Pace", "Unused", "Runs out");
     for w in quotas["windows"].as_array().into_iter().flatten() {
         let pct = |v: &serde_json::Value| v.as_f64().map_or("-".into(), |p| format!("{p:.0}%"));
         println!(
-            "{:<30} {:<6} {:>5} {:>6} {:>7}  {:<11} {} ({})",
+            "{:<24} {:<34} {:<6} {:>5} {:>6} {:>7}  {:<11} {} ({})",
             w["tool"].as_str().unwrap_or("?"),
+            w["account"].as_str().unwrap_or("-"),
             w["window"].as_str().unwrap_or("?"),
             pct(&w["used_percent"]),
             pct(&w["projected_percent_at_reset"]),

@@ -438,6 +438,25 @@ pub fn login_for_analyzer(analyzer_name: &str) -> Option<String> {
     parse_login(&content)
 }
 
+/// The full account a column is signed in to, for the Quotas view: the email with its
+/// organisation (`ambertyeung@gmail.com (personal)`), else the plan or short name.
+pub fn account_for_analyzer(analyzer_name: &str) -> Option<String> {
+    let full = |content: &str| {
+        let file = serde_json::from_str::<SnapshotFile>(content).ok()?;
+        file.login.filter(|l| !l.is_empty()).or(file.login_name.filter(|n| !n.is_empty()))
+    };
+    if let Some(content) = remote_column_snapshot(analyzer_name) {
+        return full(&content);
+    }
+    if let Some(content) = account_label(analyzer_name)
+        .and_then(|label| std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok())
+        && let Some(account) = full(&content)
+    {
+        return Some(account);
+    }
+    login_for_analyzer(analyzer_name)
+}
+
 /// This machine's name without the domain (`Amberts-MacBook-Pro`), like `hostname -s`.
 fn short_hostname() -> Option<String> {
     static NAME: OnceLock<Option<String>> = OnceLock::new();

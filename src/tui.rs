@@ -1130,6 +1130,8 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             let runs_out = w.runs_out_in_secs().map(crate::advisor::human_secs);
             Row::new(vec![
                 Cell::from(w.tool.clone()),
+                Cell::from(w.account.clone().unwrap_or_else(|| "-".into()))
+                    .style(Style::default().fg(if w.account.is_some() { Color::Cyan } else { Color::DarkGray })),
                 Cell::from(w.window),
                 Cell::from(format!("{:>4.0}%", w.used)).style(Style::default().fg(used_color(w.used))),
                 Cell::from(w.projected.map_or("    -".into(), |p| format!("{:>4.0}%", p.min(999.0)))),
@@ -1140,13 +1142,15 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             ])
         })
         .collect();
-    let table_height = (rows.len() as u16 + 3).min(area.height.saturating_sub(4).max(3));
-    let [table_area, picks_area] =
-        Layout::vertical([Constraint::Length(table_height), Constraint::Min(3)]).areas(area);
+    let table_height = (rows.len() as u16 + 4).min(area.height.saturating_sub(5).max(3));
+    // A blank line under the tabs, as the other views have.
+    let [_, table_area, picks_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(table_height), Constraint::Min(3)]).areas(area);
     let table = Table::new(
         rows,
         [
-            Constraint::Length(30),
+            Constraint::Length(24),
+            Constraint::Length(34),
             Constraint::Length(6),
             Constraint::Length(6),
             Constraint::Length(6),
@@ -1156,9 +1160,11 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
         ],
     )
     .header(
-        Row::new(vec!["Tool / account", "Window", "Used", "Pace", "Unused", "Runs out", "Resets"])
-            .style(Style::default().add_modifier(Modifier::BOLD)),
+        Row::new(vec!["Tool", "Account", "Window", "Used", "Pace", "Unused", "Runs out", "Resets"])
+            .style(Style::default().add_modifier(Modifier::BOLD))
+            .bottom_margin(1),
     )
+    .column_spacing(2)
     .block(Block::default().borders(Borders::ALL).title(" ⏱ Plan quotas · p: back to summary "));
     frame.render_widget(table, table_area);
 
@@ -1172,6 +1178,10 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
                 let style = if pick.available { Style::default() } else { Style::default().add_modifier(Modifier::DIM) };
                 Line::from(vec![
                     Span::styled(format!("{}. {}", i + 1, pick.tool), style.add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        pick.account.as_ref().map(|a| format!(" ({a})")).unwrap_or_default(),
+                        style.fg(Color::Cyan),
+                    ),
                     Span::styled(if pick.available { String::new() } else { " (unavailable)".into() }, style),
                     Span::styled(format!(": {}", pick.reason), style),
                 ])
