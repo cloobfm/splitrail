@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.64] - 2026-10-16
+
+### Fixed
+- **Menu bar tk/s in the right colour on every display.** With two displays whose menu bars
+  differ (light on one, dark on the other), SwiftBar shows one fixed image on both, so the title
+  was white on the light one. The item is now a native status item of its own
+  (`scripts/swiftbar/menubar.swift`, replacing `render_title.swift`), drawn at display time in
+  each menu bar's text colour, never faded on the inactive display, like iStat-style meters. The
+  SwiftBar plugin still starts it and streams it the title and menu, and prints nothing to
+  SwiftBar while it runs (a plain text item if the helper cannot be built).
+
 ## [2.0.0-dash-0.63] - 2026-10-16
 
 ### Fixed

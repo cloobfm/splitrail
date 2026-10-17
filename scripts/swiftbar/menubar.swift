@@ -1,101 +1,193 @@
-// Draws the menu bar title the way iStat-style items look: a small label over a number, at a
-// fixed width so the number does not shift the menu bar as it changes. The PNG is returned as
-// base64 for SwiftBar's `image=`, already in the menu bar's text colour: a template image would
-// be faded by macOS on every display but the active one, which iStat-style meters are not.
+// The Splitrail menu bar item: a small `tk/s` label over the number at a fixed width, like
+// iStat-style meters, with the pace dot beside the label, and the dropdown under it.
 //
-// The colour follows the menu bar, not Dark Mode (a light wallpaper gives dark menu bar text even
-// in Dark Mode): a zero-width status item of our own reports the menu bar's appearance.
+// It is its own status item rather than SwiftBar's because only a status item that draws at
+// display time gets each display's menu bar colour: SwiftBar shows one fixed image on every
+// display (white text on a light menu bar beside a dark one), and its template images are faded
+// by macOS on every display but the active one. The text here is `labelColor`, resolved per
+// display as it is drawn.
 //
-// Beside the label, an optional pace dot: `dot` is a hex colour, filled or a ring.
+// `splitrail.py` (the SwiftBar plugin, which prints nothing to SwiftBar while this runs) starts
+// it and writes one block per change to stdin:
 //
-// Long-running, so AppKit starts once: each stdin line `label<TAB>value<TAB>alpha<TAB>dot<TAB>filled`
-// (the last two optional, `filled` 1 or 0) gets one line back, the base64 PNG (empty if it could not be drawn). Images are cached, so asking every
-// second costs only the pipe.
+//     TITLE<TAB>label<TAB>value<TAB>alpha<TAB>dot colour (#rrggbb or empty)<TAB>filled (1/0)
+//     …menu lines in SwiftBar's format: `text | color=… font=… size=… bash=…`, `---` for a
+//     separator, a leading `--` for a submenu item…
+//     ~~~
+//
+// When stdin closes (the plugin stopped) it exits and the item goes away.
 import AppKit
 
 let labelFont = NSFont.systemFont(ofSize: 8.5, weight: .semibold)
 let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
 let height: CGFloat = 22
-let scale: CGFloat = 2
 
 // As wide as the widest value it will show, so the width never changes.
 let widest = ["888", "88.8", "8.8k"]
     .map { ($0 as NSString).size(withAttributes: [.font: valueFont]).width }
     .max() ?? 30
 
-/// `#rrggbb` as a colour.
-func hexColor(_ hex: String) -> NSColor? {
-    guard hex.hasPrefix("#"), hex.count == 7, let v = UInt32(hex.dropFirst(), radix: 16) else { return nil }
+/// `#rrggbb` or a few names as a colour.
+func color(_ text: String) -> NSColor? {
+    switch text.lowercased() {
+    case "gray", "grey": return .secondaryLabelColor
+    case "red": return .systemRed
+    case "green": return .systemGreen
+    default: break
+    }
+    guard text.hasPrefix("#"), text.count == 7, let v = UInt32(text.dropFirst(), radix: 16) else { return nil }
     return NSColor(srgbRed: CGFloat(v >> 16 & 0xff) / 255, green: CGFloat(v >> 8 & 0xff) / 255,
                    blue: CGFloat(v & 0xff) / 255, alpha: 1)
 }
 
-func render(label: NSString, value: NSString, alpha: CGFloat, dark: Bool, dot: NSColor?, filled: Bool) -> String? {
-    // The menu bar's own text: near-black on a light bar, white on a dark one.
-    let color = (dark ? NSColor.white : NSColor.black).withAlphaComponent(alpha * (dark ? 0.95 : 0.85))
-    let labelAttrs: [NSAttributedString.Key: Any] = [.font: labelFont, .foregroundColor: color]
-    let valueAttrs: [NSAttributedString.Key: Any] = [.font: valueFont, .foregroundColor: color]
-    let width = ceil(max(widest, label.size(withAttributes: labelAttrs).width)) + 1
-    guard let rep = NSBitmapImageRep(
-        bitmapDataPlanes: nil, pixelsWide: Int(width * scale), pixelsHigh: Int(height * scale),
-        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
-    else { return nil }
-    rep.size = NSSize(width: width, height: height) // Points: drawn at Retina resolution.
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    label.draw(at: NSPoint(x: 0, y: 12), withAttributes: labelAttrs)
-    value.draw(at: NSPoint(x: 0, y: -2), withAttributes: valueAttrs)
-    if let dot = dot {
-        // Centred on the label's lowercase letters, a little past its end.
-        let size: CGFloat = 5.5
-        let x = ceil(label.size(withAttributes: labelAttrs).width) + 2.5
-        let circle = NSBezierPath(ovalIn: NSRect(x: x, y: 13.5, width: size, height: size)
-            .insetBy(dx: filled ? 0 : 0.6, dy: filled ? 0 : 0.6))
-        let ink = dot.withAlphaComponent(alpha)
-        if filled {
-            ink.setFill()
-            circle.fill()
-        } else {
-            ink.setStroke()
-            circle.lineWidth = 1.2
-            circle.stroke()
+struct Title: Equatable {
+    var label = "tk/s"
+    var value = "—"
+    var alpha: CGFloat = 0.5
+    var dot: String = ""
+    var filled = false
+}
+
+/// The title as an image drawn when the menu bar draws it, in that display's text colour.
+func titleImage(_ t: Title) -> NSImage {
+    let label = t.label as NSString
+    let value = t.value as NSString
+    let width = ceil(max(widest, label.size(withAttributes: [.font: labelFont]).width)) + 1
+    let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
+        let ink = NSColor.labelColor.withAlphaComponent(t.alpha)
+        label.draw(at: NSPoint(x: 0, y: 12), withAttributes: [.font: labelFont, .foregroundColor: ink])
+        value.draw(at: NSPoint(x: 0, y: -2), withAttributes: [.font: valueFont, .foregroundColor: ink])
+        if let dot = color(t.dot) {
+            // Centred on the label's lowercase letters, a little past its end.
+            let size: CGFloat = 5.5
+            let x = ceil(label.size(withAttributes: [.font: labelFont]).width) + 2.5
+            let circle = NSBezierPath(ovalIn: NSRect(x: x, y: 13.5, width: size, height: size)
+                .insetBy(dx: t.filled ? 0 : 0.6, dy: t.filled ? 0 : 0.6))
+            let fill = dot.withAlphaComponent(t.alpha)
+            if t.filled {
+                fill.setFill()
+                circle.fill()
+            } else {
+                fill.setStroke()
+                circle.lineWidth = 1.2
+                circle.stroke()
+            }
+        }
+        return true
+    }
+    image.isTemplate = false
+    return image
+}
+
+final class Runner: NSObject {
+    let path: String
+    init(path: String) { self.path = path }
+    @objc func run() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [path]
+        try? process.run()
+    }
+}
+
+/// One SwiftBar-format line as a menu item.
+func menuItem(_ line: String, runners: inout [Runner]) -> NSMenuItem {
+    var text = line
+    var params: [String: String] = [:]
+    if let bar = line.range(of: " | ", options: .backwards) {
+        text = String(line[..<bar.lowerBound])
+        for pair in line[bar.upperBound...].split(separator: " ") {
+            let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            if kv.count == 2 { params[kv[0]] = kv[1] }
         }
     }
-    NSGraphicsContext.restoreGraphicsState()
-    return rep.representation(using: .png, properties: [:])?.base64EncodedString()
+    let size = CGFloat(Double(params["size"] ?? "") ?? 13)
+    let font = params["font"].flatMap { NSFont(name: $0, size: size) } ?? NSFont.menuFont(ofSize: size)
+    var attrs: [NSAttributedString.Key: Any] = [.font: font]
+    if let c = params["color"].flatMap(color) { attrs[.foregroundColor] = c }
+    let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+    item.attributedTitle = NSAttributedString(string: text, attributes: attrs)
+    if let path = params["bash"] {
+        let runner = Runner(path: path)
+        runners.append(runner)
+        item.target = runner
+        item.action = #selector(Runner.run)
+    }
+    return item
+}
+
+final class Item: NSObject, NSMenuDelegate {
+    let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let menu = NSMenu()
+    var title = Title()
+    var lines: [String] = []
+    var runners: [Runner] = []
+
+    override init() {
+        super.init()
+        status.autosaveName = "splitrail" // Keeps the place it is dragged to.
+        menu.autoenablesItems = false
+        menu.delegate = self
+        status.menu = menu
+        status.button?.image = titleImage(title)
+    }
+
+    func update(title new: Title, lines newLines: [String]) {
+        if new != title {
+            title = new
+            status.button?.image = titleImage(new)
+        }
+        lines = newLines
+    }
+
+    /// Built as it opens, from the latest lines, so updates never close an open menu.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        runners.removeAll()
+        var parent: NSMenuItem?
+        for line in lines {
+            if line == "---" {
+                menu.addItem(.separator())
+                parent = nil
+            } else if line.hasPrefix("--"), let parent {
+                if parent.submenu == nil {
+                    parent.submenu = NSMenu()
+                    parent.submenu?.autoenablesItems = false
+                }
+                parent.submenu?.addItem(menuItem(String(line.dropFirst(2)), runners: &runners))
+            } else {
+                let item = menuItem(line, runners: &runners)
+                menu.addItem(item)
+                parent = item
+            }
+        }
+    }
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.prohibited)
-let probe = NSStatusBar.system.statusItem(withLength: 0)
-var cache: [String: String] = [:]
+app.setActivationPolicy(.accessory)
+let item = Item()
 
-func menuBarIsDark() -> Bool {
-    guard let appearance = probe.button?.effectiveAppearance else { return false }
-    return appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-}
-
-setvbuf(stdout, nil, _IOLBF, 0)
 Thread.detachNewThread {
+    var block: [String] = []
     while let line = readLine() {
-        // AppKit on the main thread, where the status item lives.
-        let image: String = DispatchQueue.main.sync {
-            let parts = line.components(separatedBy: "\t")
-            guard parts.count >= 2 else { return "" }
-            let alpha = parts.count > 2 ? CGFloat(Double(parts[2]) ?? 1) : 1
-            let dark = menuBarIsDark()
-            let key = "\(line)\t\(dark)"
-            if let hit = cache[key] { return hit }
-            let dot = parts.count > 3 ? hexColor(parts[3]) : nil
-            let filled = parts.count > 4 && parts[4] == "1"
-            let drawn = render(label: parts[0] as NSString, value: parts[1] as NSString, alpha: alpha, dark: dark,
-                               dot: dot, filled: filled) ?? ""
-            if cache.count > 500 { cache.removeAll() }
-            cache[key] = drawn
-            return drawn
+        guard line == "~~~" else {
+            block.append(line)
+            continue
         }
-        print(image)
+        var title = Title()
+        var lines = block
+        if let first = block.first, first.hasPrefix("TITLE\t") {
+            let parts = first.components(separatedBy: "\t")
+            title.label = parts.count > 1 ? parts[1] : "tk/s"
+            title.value = parts.count > 2 ? parts[2] : "—"
+            title.alpha = parts.count > 3 ? CGFloat(Double(parts[3]) ?? 1) : 1
+            title.dot = parts.count > 4 ? parts[4] : ""
+            title.filled = parts.count > 5 && parts[5] == "1"
+            lines.removeFirst()
+        }
+        block = []
+        DispatchQueue.main.async { item.update(title: title, lines: lines) }
     }
     exit(0)
 }
