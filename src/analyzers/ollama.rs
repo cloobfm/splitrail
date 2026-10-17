@@ -66,6 +66,9 @@ struct UsageEvent {
     /// Ollama's parameter count for the model (`20.9B`), for names whose tag has no size.
     #[serde(default)]
     param_size: Option<String>,
+    /// Ollama's base family (`qwen3_5`), for custom or fine-tuned models priced by family.
+    #[serde(default)]
+    family: Option<String>,
 }
 
 /// Normalise model name from the proxy event to the price feed slug.
@@ -108,12 +111,49 @@ pub fn street_names(model: &str, param_size: Option<&str>) -> Vec<String> {
 /// Models with no per-token hosted equivalent (by their base street name).
 const LOCAL_ONLY_MODELS: &[&str] = &["moondream"];
 
-fn street_price(model: &str, param_size: Option<&str>) -> Option<ModelPrice> {
+/// Ollama's family as hosted providers spell it: `qwen3_5` and `qwen35` -> `qwen3.5`.
+pub fn family_name(family: &str) -> String {
+    let lower = family.trim().to_lowercase().replace('_', ".");
+    let digits: Vec<char> = lower.chars().rev().take_while(char::is_ascii_digit).collect();
+    if !lower.contains('.') && digits.len() == 2 {
+        let (stem, number) = lower.split_at(lower.len() - 2);
+        return format!("{stem}{}.{}", &number[..1], &number[1..]);
+    }
+    lower
+}
+
+/// Billions of parameters from Ollama's count: `752.39M` -> 0.75, `20.9B` -> 20.9.
+fn billions(param_size: &str) -> Option<f64> {
+    let count = param_size.trim().to_lowercase();
+    let (number, unit) = count.split_at(count.len().checked_sub(1)?);
+    let number: f64 = number.parse().ok()?;
+    match unit {
+        "b" => Some(number),
+        "m" => Some(number / 1000.0),
+        _ => None,
+    }
+}
+
+/// For a model whose own name has no hosted price (a custom or fine-tuned one): the cheapest
+/// way to buy its family from a host, the smallest hosted size at or above its own (the largest
+/// below it if none is bigger). `sizes` is the family's hosted sizes in billions with their names.
+pub fn family_fallback(sizes: &[(f64, String)], own: Option<f64>) -> Option<String> {
+    let own = own.unwrap_or(0.0);
+    let above = sizes.iter().filter(|(b, _)| *b >= own).min_by(|a, b| a.0.total_cmp(&b.0));
+    let below = sizes.iter().filter(|(b, _)| *b < own).max_by(|a, b| a.0.total_cmp(&b.0));
+    above.or(below).map(|(_, name)| name.clone())
+}
+
+fn street_price(model: &str, param_size: Option<&str>, family: Option<&str>) -> Option<ModelPrice> {
     if let Some((price, _)) = price_feed::lookup(model) {
         return Some(price);
     }
     let names = street_names(model, param_size);
-    let found = price_feed::median_price(&names).map(|(_, price)| price);
+    let found = price_feed::median_price(&names).map(|(_, price)| price).or_else(|| {
+        let family = family_name(family?);
+        let name = family_fallback(&price_feed::family_sizes(&family), param_size.and_then(billions))?;
+        price_feed::median_price(&[name]).map(|(_, price)| price)
+    });
     // No hosted service sells these per token, so there is no street price to find; their cost
     // is the electricity, which is tracked separately.
     let local_only = names
@@ -139,6 +179,12 @@ pub fn parse_usage_log(
 ) -> Vec<ConversationMessage> {
     let source_str = source.to_string_lossy();
     let mut prices: HashMap<String, Option<ModelPrice>> = HashMap::new();
+    // Lines written before the proxy recorded families borrow one from a later line.
+    let families: HashMap<String, String> = content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<UsageEvent>(line.trim()).ok())
+        .filter_map(|event| Some((event.model, event.family?)))
+        .collect();
     content
         .lines()
         .enumerate()
@@ -164,7 +210,10 @@ pub fn parse_usage_log(
             let output_tokens = event.completion_tokens;
             let cost = prices
                 .entry(event.model.clone())
-                .or_insert_with(|| street_price(&event.model, event.param_size.as_deref()))
+                .or_insert_with(|| {
+                    let family = event.family.as_deref().or(families.get(&event.model).map(String::as_str));
+                    street_price(&event.model, event.param_size.as_deref(), family)
+                })
                 .as_ref()
                 .map_or(0.0, |price| {
                     price.input_cost(input_tokens)
@@ -396,5 +445,30 @@ mod tests {
         );
         assert_eq!(street_names("moondream:latest", None), ["moondream"]);
         assert_eq!(street_names("smollm:135m", None), ["smollm-135m", "smollm"]);
+    }
+
+    #[test]
+    fn custom_models_are_priced_by_their_family() {
+        assert_eq!(family_name("qwen3_5"), "qwen3.5");
+        assert_eq!(family_name("qwen35"), "qwen3.5");
+        assert_eq!(family_name("llama"), "llama");
+        assert_eq!(family_name("gemma3"), "gemma3");
+        assert_eq!(billions("752.39M"), Some(0.75239));
+        let sizes = [(9.0, "qwen3.5-9b".to_string()), (27.0, "qwen3.5-27b".to_string()), (397.0, "qwen3.5-397b".to_string())];
+        // A 0.8B fine-tune: the smallest hosted size above it.
+        assert_eq!(family_fallback(&sizes, Some(0.75)).as_deref(), Some("qwen3.5-9b"));
+        assert_eq!(family_fallback(&sizes, Some(20.0)).as_deref(), Some("qwen3.5-27b"));
+        // Bigger than anything hosted: the largest.
+        assert_eq!(family_fallback(&sizes, Some(500.0)).as_deref(), Some("qwen3.5-397b"));
+        assert_eq!(family_fallback(&[], Some(1.0)), None);
+    }
+
+    /// Prices a decision model against the real feed: `cargo test ollama_family_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn ollama_family_live_prices_a_fine_tune() {
+        crate::price_feed::init(Default::default(), true);
+        let price = street_price("tev1:0.8b-mxfp8", Some("752.39M"), Some("qwen3_5")).unwrap();
+        println!("tev1 at ${:.3} in / ${:.3} out per 1M", price.input_per_1m, price.output_per_1m);
     }
 }

@@ -270,16 +270,19 @@ class PowerMeter:
 
 
 class ModelSizes:
-    """Parameter counts (`20.9B`) per model, from the upstream `/api/tags`.
+    """Parameter counts (`20.9B`) and base family (`qwen3_5`) per model, from the upstream
+    `/api/tags`.
 
     Splitrail prices Ollama models at the hosted equivalent, which is named by size
     (`gpt-oss-20b`); a `:latest` tag says nothing about size, so the count is logged with usage.
+    A custom or fine-tuned model (`tev1:0.8b-mxfp8`) is priced by its family instead.
     Refreshed on a miss, at most once a minute.
     """
 
     def __init__(self, upstream):
         self.upstream = upstream
         self.sizes = {}
+        self.families = {}
         self.fetched = None  # monotonic() can start near 0, so no "long ago" sentinel.
         self.lock = threading.Lock()
 
@@ -291,14 +294,22 @@ class ModelSizes:
                 self._refresh()
             return self.sizes.get(model)
 
+    def family(self, model):
+        """The family, once `get` has looked the model up."""
+        with self.lock:
+            return self.families.get(model)
+
     def _refresh(self):
         conn = http.client.HTTPConnection(self.upstream.hostname, self.upstream.port or 80, timeout=5)
         try:
             conn.request("GET", "/api/tags")
             for entry in json.loads(conn.getresponse().read()).get("models", []):
-                size = (entry.get("details") or {}).get("parameter_size")
+                details = entry.get("details") or {}
+                size = details.get("parameter_size")
                 if entry.get("name") and size:
                     self.sizes[entry["name"]] = size
+                if entry.get("name") and details.get("family"):
+                    self.families[entry["name"]] = details["family"]
         except (OSError, ValueError, AttributeError):
             pass
         finally:
@@ -473,6 +484,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             size = self.sizes.get(usage["model"]) if self.sizes and usage.get("model") else None
             if size:
                 usage["param_size"] = size
+                family = self.sizes.family(usage["model"]) if hasattr(self.sizes, "family") else None
+                if family:
+                    usage["family"] = family
             write_usage(
                 {
                     "ts": time.time(),

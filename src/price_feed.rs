@@ -201,6 +201,26 @@ pub fn lookup(model_name: &str) -> Option<(ModelPrice, PriceSource)> {
 /// key whose last path segment equals it, or failing that starts with it at a `-` boundary
 /// (`qwen3-coder-30b` -> `novita/qwen/qwen3-coder-30b-a3b-instruct`). Free tiers are left out.
 /// Returns how many providers the median is over.
+/// The sizes a family is hosted at, in billions of parameters with the name to price them by:
+/// `qwen3.5` -> `[(9.0, "qwen3.5-9b"), (27.0, "qwen3.5-27b"), (35.0, "qwen3.5-35b"), …]`, from
+/// paid entries named `<family>-<n>b…`.
+pub fn family_sizes(family: &str) -> Vec<(f64, String)> {
+    let Ok(feed) = FEED.read() else { return Vec::new() };
+    let Some(feed) = feed.as_ref() else { return Vec::new() };
+    let prefix = format!("{}-", family.to_lowercase());
+    let mut sizes: Vec<(f64, String)> = Vec::new();
+    for (key, price) in &feed.models {
+        let segment = key.rsplit('/').next().unwrap_or(key).to_lowercase();
+        let Some(rest) = segment.strip_prefix(&prefix) else { continue };
+        let token = rest.split('-').next().unwrap_or("");
+        let Some(number) = token.strip_suffix('b').and_then(|n| n.parse::<f64>().ok()) else { continue };
+        if price.output_per_1m > 0.0 && !sizes.iter().any(|(b, _)| *b == number) {
+            sizes.push((number, format!("{family}-{token}")));
+        }
+    }
+    sizes
+}
+
 pub fn median_price(names: &[String]) -> Option<(usize, ModelPrice)> {
     let feed = FEED.read().ok()?;
     feed.as_ref()?.median(names)

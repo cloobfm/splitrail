@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.68] - 2026-10-16
+
+### Fixed
+- **Custom and fine-tuned Ollama models get a street price instead of $0.** A model named for
+  itself (`tev1:0.8b-mxfp8`, a decision model) matched no hosted model, so it cost $0 with a
+  warning. The proxy now also logs each model's base family from Ollama (`qwen3_5`), and a model
+  with no price of its own is priced as the cheapest hosted size of its family at or above its
+  own size: `tev1` (0.75B) at Qwen 3.5 9B's median, $0.135 / $0.20 per 1M. Earlier lines borrow
+  the family from later ones.
+
 ## [2.0.0-dash-0.67] - 2026-10-16
 
 ### Fixed
