@@ -143,7 +143,9 @@ pub async fn run() {
                 // A lone timeout is routine (about 1 poll in 300); log it and retry soon. Only
                 // a streak, with the figures going stale, is worth a warning on screen.
                 if failures == WARN_AFTER_FAILURES {
-                    crate::utils::report(format!("Droid limits: {e:#} ({failures} tries in a row)"));
+                    crate::utils::report(format!(
+                        "Droid limits: {e:#} ({failures} tries in a row)"
+                    ));
                 } else {
                     crate::utils::log_error(format!("Droid limits: {e:#}"));
                 }
@@ -159,7 +161,11 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The wait before the next poll: a minute after a failure (for a few tries), else the usual.
 fn next_poll(failures: u32) -> Duration {
-    if (1..WARN_AFTER_FAILURES).contains(&failures) { RETRY_INTERVAL } else { POLL_INTERVAL }
+    if (1..WARN_AFTER_FAILURES).contains(&failures) {
+        RETRY_INTERVAL
+    } else {
+        POLL_INTERVAL
+    }
 }
 
 #[cfg(test)]
@@ -188,7 +194,12 @@ mod tests {
         assert_eq!(week.used_percentage, 1.0);
         assert_eq!(
             week.resets_in_secs,
-            Some(chrono::DateTime::parse_from_rfc3339("2026-10-20T11:33:48.094Z").unwrap().timestamp() - 1_791_900_000)
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-10-20T11:33:48.094Z")
+                    .unwrap()
+                    .timestamp()
+                    - 1_791_900_000
+            )
         );
         assert_eq!(snapshot["monthly"]["used_percentage"], 3.0);
     }

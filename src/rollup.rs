@@ -121,7 +121,10 @@ pub fn daily_payload(host: &str, stats: &MultiAnalyzerStats, now: DateTime<Utc>)
             (!days.is_empty()).then(|| (tool.analyzer_name.clone(), days))
         })
         .collect();
-    DailyPayload { host: host.to_string(), tools }
+    DailyPayload {
+        host: host.to_string(),
+        tools,
+    }
 }
 
 fn recent_message(message: &ConversationMessage) -> RecentMessage {
@@ -176,13 +179,24 @@ pub fn recent_payload(
     share_previews: bool,
 ) -> RecentPayload {
     let since = now - ChronoDuration::seconds(RECENT_SECS);
-    let mut payload = RecentPayload { host: host.to_string(), ..Default::default() };
+    let mut payload = RecentPayload {
+        host: host.to_string(),
+        ..Default::default()
+    };
     for tool in &stats.analyzer_stats {
-        let Some(newest) = tool.messages.iter().filter(|m| m.date <= now).max_by_key(|m| m.date) else {
+        let Some(newest) = tool
+            .messages
+            .iter()
+            .filter(|m| m.date <= now)
+            .max_by_key(|m| m.date)
+        else {
             continue;
         };
-        let mut recent: Vec<&ConversationMessage> =
-            tool.messages.iter().filter(|m| m.date >= since && m.date <= now).collect();
+        let mut recent: Vec<&ConversationMessage> = tool
+            .messages
+            .iter()
+            .filter(|m| m.date >= since && m.date <= now)
+            .collect();
         if recent.is_empty() {
             recent.push(newest);
         }
@@ -194,12 +208,16 @@ pub fn recent_payload(
             let mut with_text: Vec<&ConversationMessage> = tool
                 .messages
                 .iter()
-                .filter(|m| m.date <= now && m.content.as_deref().is_some_and(|c| !c.trim().is_empty()))
+                .filter(|m| {
+                    m.date <= now && m.content.as_deref().is_some_and(|c| !c.trim().is_empty())
+                })
                 .collect();
             with_text.sort_by_key(|m| m.date);
             let last = &with_text[with_text.len().saturating_sub(RECENT_TEXTS)..];
             if let Some(newest) = last.last().and_then(|m| m.content.as_deref()) {
-                payload.previews.insert(tool.analyzer_name.clone(), preview(newest));
+                payload
+                    .previews
+                    .insert(tool.analyzer_name.clone(), preview(newest));
                 payload.texts.insert(
                     tool.analyzer_name.clone(),
                     last.iter()
@@ -223,7 +241,17 @@ pub fn recent_payload(
 fn looks_secret(token: &str) -> bool {
     let word = token.trim_matches(|c: char| "\"'`,;:()[]{}<>".contains(c));
     const PREFIXES: [&str; 12] = [
-        "sk-", "sk_", "pk_", "rk_", "ghp_", "gho_", "ghs_", "github_pat_", "xox", "AKIA", "eyJ",
+        "sk-",
+        "sk_",
+        "pk_",
+        "rk_",
+        "ghp_",
+        "gho_",
+        "ghs_",
+        "github_pat_",
+        "xox",
+        "AKIA",
+        "eyJ",
         "AIza",
     ];
     if PREFIXES.iter().any(|p| word.starts_with(p)) && word.len() >= 12 {
@@ -250,9 +278,11 @@ pub fn preview(text: &str) -> String {
             continue;
         }
         if let Some((key, value)) = token.split_once(['=', ':'])
-            && ["token", "password", "passwd", "secret", "api_key", "apikey", "key"]
-                .iter()
-                .any(|k| key.to_ascii_lowercase().ends_with(k))
+            && [
+                "token", "password", "passwd", "secret", "api_key", "apikey", "key",
+            ]
+            .iter()
+            .any(|k| key.to_ascii_lowercase().ends_with(k))
             && !value.is_empty()
         {
             out.push(format!("{key}=[redacted]"));
@@ -360,14 +390,23 @@ fn application_for(tool: &str) -> Application {
 }
 
 /// `slug`'s tools as columns, each registered so its limits and login can be found.
-fn remote_tools(slug: &str, host: &str, daily: &DailyPayload, recent: &RecentPayload) -> Vec<AgenticCodingToolStats> {
+fn remote_tools(
+    slug: &str,
+    host: &str,
+    daily: &DailyPayload,
+    recent: &RecentPayload,
+) -> Vec<AgenticCodingToolStats> {
     let mut names: Vec<&String> = daily.tools.keys().chain(recent.tools.keys()).collect();
     names.sort();
     names.dedup();
     // Two accounts of one tool (`Claude (main)`, `Claude (v)`) keep their full names.
     let shared_first_word = |tool: &str| {
         let first = tool.split_whitespace().next();
-        names.iter().filter(|n| n.split_whitespace().next() == first).count() > 1
+        names
+            .iter()
+            .filter(|n| n.split_whitespace().next() == first)
+            .count()
+            > 1
     };
     let columns: Vec<(&String, String)> = names
         .iter()
@@ -382,10 +421,23 @@ fn remote_tools(slug: &str, host: &str, daily: &DailyPayload, recent: &RecentPay
         .map(|(tool, column)| {
             let daily_stats = daily.tools.get(tool).cloned().unwrap_or_default();
             let application = application_for(tool);
-            let recent_messages = recent.tools.get(tool).map(Vec::as_slice).unwrap_or_default();
+            let recent_messages = recent
+                .tools
+                .get(tool)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             let newest = recent_messages.iter().map(|m| m.t).max();
-            let texts = recent.texts.get(tool).map(Vec::as_slice).unwrap_or_default();
-            let text_for = |m: &RecentMessage| texts.iter().find(|x| x.t == m.t && x.a == m.a).map(|x| x.text.clone());
+            let texts = recent
+                .texts
+                .get(tool)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let text_for = |m: &RecentMessage| {
+                texts
+                    .iter()
+                    .find(|x| x.t == m.t && x.a == m.a)
+                    .map(|x| x.text.clone())
+            };
             let mut messages: Vec<ConversationMessage> = recent_messages
                 .iter()
                 .filter_map(|m| {
@@ -407,10 +459,16 @@ fn remote_tools(slug: &str, host: &str, daily: &DailyPayload, recent: &RecentPay
                             tool_calls: m.tc,
                             ..Default::default()
                         },
-                        role: if m.a { MessageRole::Assistant } else { MessageRole::User },
+                        role: if m.a {
+                            MessageRole::Assistant
+                        } else {
+                            MessageRole::User
+                        },
                         content: if texts.is_empty() {
                             // A publisher before 0.98: only its newest message's text.
-                            (Some(m.t) == newest).then(|| recent.previews.get(tool).cloned()).flatten()
+                            (Some(m.t) == newest)
+                                .then(|| recent.previews.get(tool).cloned())
+                                .flatten()
                         } else {
                             text_for(m)
                         },
@@ -419,8 +477,13 @@ fn remote_tools(slug: &str, host: &str, daily: &DailyPayload, recent: &RecentPay
                 .collect();
             // Texts whose message was merged into a time bucket: their own entry, with no
             // tokens, so the verbose view shows them without changing any count.
-            for text in texts.iter().filter(|x| !recent_messages.iter().any(|m| m.t == x.t && m.a == x.a)) {
-                let Some(date) = DateTime::from_timestamp_millis(text.t) else { continue };
+            for text in texts
+                .iter()
+                .filter(|x| !recent_messages.iter().any(|m| m.t == x.t && m.a == x.a))
+            {
+                let Some(date) = DateTime::from_timestamp_millis(text.t) else {
+                    continue;
+                };
                 messages.push(ConversationMessage {
                     application: application.clone(),
                     date,
@@ -430,13 +493,20 @@ fn remote_tools(slug: &str, host: &str, daily: &DailyPayload, recent: &RecentPay
                     global_hash: format!("remote:{host}:{tool}:{}:text", text.t),
                     model: None,
                     stats: Stats::default(),
-                    role: if text.a { MessageRole::Assistant } else { MessageRole::User },
+                    role: if text.a {
+                        MessageRole::Assistant
+                    } else {
+                        MessageRole::User
+                    },
                     content: Some(text.text.clone()),
                 });
             }
             messages.sort_by_key(|m| m.date);
             AgenticCodingToolStats {
-                num_conversations: daily_stats.values().map(|d| u64::from(d.conversations)).sum(),
+                num_conversations: daily_stats
+                    .values()
+                    .map(|d| u64::from(d.conversations))
+                    .sum(),
                 daily_stats,
                 messages,
                 analyzer_name: column,
@@ -524,7 +594,11 @@ fn squeeze(text: &str, room: usize) -> String {
     }
     let tail = (room - 1) / 2;
     let head = room - 1 - tail;
-    chars[..head].iter().chain(['…'].iter()).chain(chars[chars.len() - tail..].iter()).collect()
+    chars[..head]
+        .iter()
+        .chain(['…'].iter())
+        .chain(chars[chars.len() - tail..].iter())
+        .collect()
 }
 
 /// `local` with a column appended for every remote tool.
@@ -680,7 +754,13 @@ pub fn publishers() -> Vec<Publisher> {
         publisher.host = remotes
             .as_ref()
             .and_then(|r| r.get(&publisher.slug))
-            .map(|r| if r.daily.host.is_empty() { r.recent.host.clone() } else { r.daily.host.clone() })
+            .map(|r| {
+                if r.daily.host.is_empty() {
+                    r.recent.host.clone()
+                } else {
+                    r.daily.host.clone()
+                }
+            })
             .filter(|h| !h.is_empty())
             .unwrap_or_else(|| publisher.slug.replace('_', "-"));
     }
@@ -718,7 +798,8 @@ pub fn start(config: &MqttConfig, own_slug: String) -> Option<watch::Receiver<u6
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
                     failing = false;
                     for kind in ["daily", "recent", "limits", "state", "status"] {
-                        let _ = client.try_subscribe(format!("splitrail/+/{kind}"), QoS::AtMostOnce);
+                        let _ =
+                            client.try_subscribe(format!("splitrail/+/{kind}"), QoS::AtMostOnce);
                     }
                 }
                 Ok(Event::Incoming(Packet::Publish(publish))) => {
@@ -767,7 +848,12 @@ pub fn merged_channel(
 mod tests {
     use super::*;
 
-    fn message(date: DateTime<Utc>, role: MessageRole, output: u64, content: Option<&str>) -> ConversationMessage {
+    fn message(
+        date: DateTime<Utc>,
+        role: MessageRole,
+        output: u64,
+        content: Option<&str>,
+    ) -> ConversationMessage {
         ConversationMessage {
             application: Application::ClaudeCode,
             date,
@@ -776,7 +862,11 @@ mod tests {
             local_hash: None,
             global_hash: format!("{date}{output}"),
             model: Some("claude-opus-5-5".into()),
-            stats: Stats { output_tokens: output, cost: 0.5, ..Default::default() },
+            stats: Stats {
+                output_tokens: output,
+                cost: 0.5,
+                ..Default::default()
+            },
             role,
             content: content.map(str::to_string),
         }
@@ -786,14 +876,21 @@ mod tests {
         DailyStats {
             ai_messages: messages,
             conversations: 1,
-            stats: Stats { cost, ..Default::default() },
+            stats: Stats {
+                cost,
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
 
     fn stats(now: DateTime<Utc>) -> MultiAnalyzerStats {
         let today = now.with_timezone(&Local).date_naive();
-        let date = |back: i64| (today - ChronoDuration::days(back)).format("%Y-%m-%d").to_string();
+        let date = |back: i64| {
+            (today - ChronoDuration::days(back))
+                .format("%Y-%m-%d")
+                .to_string()
+        };
         MultiAnalyzerStats {
             analyzer_stats: vec![
                 Arc::new(AgenticCodingToolStats {
@@ -804,8 +901,18 @@ mod tests {
                     ]),
                     num_conversations: 2,
                     messages: vec![
-                        message(now - ChronoDuration::hours(3), MessageRole::User, 0, Some("old")),
-                        message(now - ChronoDuration::minutes(5), MessageRole::User, 0, Some("fix it")),
+                        message(
+                            now - ChronoDuration::hours(3),
+                            MessageRole::User,
+                            0,
+                            Some("old"),
+                        ),
+                        message(
+                            now - ChronoDuration::minutes(5),
+                            MessageRole::User,
+                            0,
+                            Some("fix it"),
+                        ),
                         message(
                             now - ChronoDuration::minutes(4),
                             MessageRole::Assistant,
@@ -818,7 +925,12 @@ mod tests {
                 Arc::new(AgenticCodingToolStats {
                     daily_stats: BTreeMap::new(),
                     num_conversations: 1,
-                    messages: vec![message(now - ChronoDuration::days(2), MessageRole::Assistant, 10, None)],
+                    messages: vec![message(
+                        now - ChronoDuration::days(2),
+                        MessageRole::Assistant,
+                        10,
+                        None,
+                    )],
                     analyzer_name: "OpenCode".into(),
                 }),
             ],
@@ -830,7 +942,11 @@ mod tests {
         let now = Utc::now();
         let payload = daily_payload("devbox-a", &stats(now), now);
         let claude = &payload.tools["Claude Code"];
-        assert_eq!(claude.len(), 1, "40 days back and the empty day are left out");
+        assert_eq!(
+            claude.len(),
+            1,
+            "40 days back and the empty day are left out"
+        );
         assert!(!payload.tools.contains_key("OpenCode"));
     }
 
@@ -839,12 +955,19 @@ mod tests {
         let now = Utc::now();
         let payload = recent_payload("devbox-a", &stats(now), now, false);
         assert_eq!(payload.tools["Claude Code"].len(), 2);
-        assert_eq!(payload.tools["OpenCode"].len(), 1, "an idle tool still says when it last ran");
+        assert_eq!(
+            payload.tools["OpenCode"].len(),
+            1,
+            "an idle tool still says when it last ran"
+        );
         assert_eq!(payload.tools["Claude Code"][0].conv, "conversation-has");
         assert!(payload.previews.is_empty(), "no text unless sharing is on");
 
         let shared = recent_payload("devbox-a", &stats(now), now, true);
-        assert_eq!(shared.previews["Claude Code"], "Done, key [redacted] rotated");
+        assert_eq!(
+            shared.previews["Claude Code"],
+            "Done, key [redacted] rotated"
+        );
     }
 
     #[test]
@@ -855,8 +978,18 @@ mod tests {
         let slot_start = (at(600).timestamp_millis() / BUCKET_MS) * BUCKET_MS;
         let base = DateTime::from_timestamp_millis(slot_start).unwrap();
         let messages = [
-            message(base + ChronoDuration::seconds(1), MessageRole::User, 0, None),
-            message(base + ChronoDuration::seconds(20), MessageRole::Assistant, 300, None),
+            message(
+                base + ChronoDuration::seconds(1),
+                MessageRole::User,
+                0,
+                None,
+            ),
+            message(
+                base + ChronoDuration::seconds(20),
+                MessageRole::Assistant,
+                300,
+                None,
+            ),
             message(at(30), MessageRole::User, 0, None),
             message(at(20), MessageRole::Assistant, 50, None),
         ];
@@ -869,14 +1002,26 @@ mod tests {
 
     #[test]
     fn previews_redact_and_truncate() {
-        assert_eq!(preview("export TOKEN=abc123 now"), "export TOKEN=[redacted] now");
-        assert_eq!(preview("curl -H 'Authorization: Bearer abc.def' x"), "curl -H 'Authorization: Bearer [redacted] x");
+        assert_eq!(
+            preview("export TOKEN=abc123 now"),
+            "export TOKEN=[redacted] now"
+        );
+        assert_eq!(
+            preview("curl -H 'Authorization: Bearer abc.def' x"),
+            "curl -H 'Authorization: Bearer [redacted] x"
+        );
         assert_eq!(
             preview("hash 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 ok"),
             "hash [redacted] ok"
         );
-        assert_eq!(preview("see src/analyzers/antigravity_store.rs for it"), "see src/analyzers/antigravity_store.rs for it");
-        assert_eq!(preview(&"word ".repeat(100)).chars().count(), PREVIEW_CHARS + 1);
+        assert_eq!(
+            preview("see src/analyzers/antigravity_store.rs for it"),
+            "see src/analyzers/antigravity_store.rs for it"
+        );
+        assert_eq!(
+            preview(&"word ".repeat(100)).chars().count(),
+            PREVIEW_CHARS + 1
+        );
         assert_eq!(preview("two\nlines"), "two lines");
     }
 
@@ -887,18 +1032,41 @@ mod tests {
         let daily = daily_payload("devbox-a", &local, now);
         let recent = recent_payload("devbox-a", &local, now, true);
         // Over the wire and back.
-        let daily: DailyPayload = serde_json::from_str(&serde_json::to_string(&daily).unwrap()).unwrap();
-        let recent: RecentPayload = serde_json::from_str(&serde_json::to_string(&recent).unwrap()).unwrap();
+        let daily: DailyPayload =
+            serde_json::from_str(&serde_json::to_string(&daily).unwrap()).unwrap();
+        let recent: RecentPayload =
+            serde_json::from_str(&serde_json::to_string(&recent).unwrap()).unwrap();
         let tools = remote_tools("devbox_a", "devbox-a", &daily, &recent);
-        let claude = tools.iter().find(|t| t.analyzer_name == "Claude@dev-a").unwrap();
+        let claude = tools
+            .iter()
+            .find(|t| t.analyzer_name == "Claude@dev-a")
+            .unwrap();
         assert_eq!(claude.daily_stats.len(), 1);
         // The last messages with text all arrive (the verbose view shows 5), oldest first,
         // without changing the tokens: they are older than the raw window, so their tokens
         // sit in time buckets and the texts come as entries of their own.
-        let texts: Vec<&str> = claude.messages.iter().filter_map(|m| m.content.as_deref()).collect();
+        let texts: Vec<&str> = claude
+            .messages
+            .iter()
+            .filter_map(|m| m.content.as_deref())
+            .collect();
         assert_eq!(texts, ["old", "fix it", "Done, key [redacted] rotated"]);
-        assert_eq!(claude.messages.iter().map(|m| m.stats.output_tokens).sum::<u64>(), 900);
-        assert_eq!(claude.messages.iter().filter(|m| m.stats.output_tokens > 0).count(), 1);
+        assert_eq!(
+            claude
+                .messages
+                .iter()
+                .map(|m| m.stats.output_tokens)
+                .sum::<u64>(),
+            900
+        );
+        assert_eq!(
+            claude
+                .messages
+                .iter()
+                .filter(|m| m.stats.output_tokens > 0)
+                .count(),
+            1
+        );
         // The project travels too, for the verbose view's `#project` column.
         assert!(claude.messages.iter().all(|m| m.project_hash == "p"));
         assert!(tools.iter().any(|t| t.analyzer_name == "OC@devbox-a"));
@@ -911,27 +1079,43 @@ mod tests {
             analyzer_stats: vec![Arc::new(AgenticCodingToolStats {
                 daily_stats: BTreeMap::new(),
                 num_conversations: 1,
-                messages: vec![message(now - ChronoDuration::seconds(30), MessageRole::Assistant, 50, Some("Now a JS parity test."))],
+                messages: vec![message(
+                    now - ChronoDuration::seconds(30),
+                    MessageRole::Assistant,
+                    50,
+                    Some("Now a JS parity test."),
+                )],
                 analyzer_name: "Claude Code".into(),
             })],
         };
         let daily = daily_payload("devbox-a", &local, now);
-        let recent: RecentPayload =
-            serde_json::from_str(&serde_json::to_string(&recent_payload("devbox-a", &local, now, true)).unwrap()).unwrap();
+        let recent: RecentPayload = serde_json::from_str(
+            &serde_json::to_string(&recent_payload("devbox-a", &local, now, true)).unwrap(),
+        )
+        .unwrap();
         let tools = remote_tools("devbox_a", "devbox-a", &daily, &recent);
         let claude = &tools[0];
         assert_eq!(claude.messages.len(), 1);
-        assert_eq!(claude.messages[0].content.as_deref(), Some("Now a JS parity test."));
+        assert_eq!(
+            claude.messages[0].content.as_deref(),
+            Some("Now a JS parity test.")
+        );
         assert_eq!(claude.messages[0].stats.output_tokens, 50);
     }
 
     #[test]
     fn remote_names_fit_a_column() {
-        assert_eq!(remote_name("Claude Code", "devbox-a", false), "Claude@dev-a");
+        assert_eq!(
+            remote_name("Claude Code", "devbox-a", false),
+            "Claude@dev-a"
+        );
         assert_eq!(remote_name("OpenCode", "devbox-a", false), "OC@devbox-a");
         assert_eq!(remote_name("Codex", "devbox-a", false), "Codex@dev-a");
         assert_eq!(remote_name("Claude Code", "nas", false), "Claude@nas");
-        assert_eq!(remote_name("Claude Code", "buildserver", false), "C@buildserver");
+        assert_eq!(
+            remote_name("Claude Code", "buildserver", false),
+            "C@buildserver"
+        );
         assert_eq!(remote_name("Claude (v)", "devbox-a", true), "Cld(v)@dev-a");
         for name in [
             remote_name("Claude Code", "a-very-long-hostname", false),
@@ -954,16 +1138,41 @@ mod tests {
         apply("splitrail/pub_old/state", br#"{"tks": 0.0}"#, "me");
         let all = publishers();
         let current = all.iter().find(|p| p.slug == "pub_test").unwrap();
-        assert_eq!((current.host.as_str(), current.version.as_deref(), current.online), ("pub-test", Some(env!("CARGO_PKG_VERSION")), true));
+        assert_eq!(
+            (
+                current.host.as_str(),
+                current.version.as_deref(),
+                current.online
+            ),
+            ("pub-test", Some(env!("CARGO_PKG_VERSION")), true)
+        );
         assert!(!current.behind());
         // Same code, older version: still updated, so the versions match.
-        let older = format!(r#"{{"version": "2.0.0-dash-0.1", "publisher_rev": "{}"}}"#, crate::mqtt::PUBLISHER_REV);
+        let older = format!(
+            r#"{{"version": "2.0.0-dash-0.1", "publisher_rev": "{}"}}"#,
+            crate::mqtt::PUBLISHER_REV
+        );
         apply("splitrail/pub_ver/state", older.as_bytes(), "me");
-        assert!(publishers().iter().find(|p| p.slug == "pub_ver").unwrap().behind());
+        assert!(
+            publishers()
+                .iter()
+                .find(|p| p.slug == "pub_ver")
+                .unwrap()
+                .behind()
+        );
         let old = all.iter().find(|p| p.slug == "pub_old").unwrap();
-        assert!(old.behind() && !old.online, "no fingerprint: an older build");
+        assert!(
+            old.behind() && !old.online,
+            "no fingerprint: an older build"
+        );
         apply("splitrail/pub_test/status", b"offline", "me");
-        assert!(!publishers().iter().find(|p| p.slug == "pub_test").unwrap().online);
+        assert!(
+            !publishers()
+                .iter()
+                .find(|p| p.slug == "pub_test")
+                .unwrap()
+                .online
+        );
     }
 
     #[test]
@@ -985,7 +1194,10 @@ mod tests {
         assert!(reduced.get("login").is_none() && reduced.get("sessions").is_none());
         assert_eq!(reduced["login_name"], "me");
         let unnamed = serde_json::json!({"captured_at": 1000.0, "login": "someone@x.com"});
-        assert_eq!(reduce_snapshot(&unnamed, 2000.0).unwrap()["login_name"], "someone");
+        assert_eq!(
+            reduce_snapshot(&unnamed, 2000.0).unwrap()["login_name"],
+            "someone"
+        );
         assert!(reduce_snapshot(&raw, 1000.0 + LIMITS_MAX_AGE_SECS + 1.0).is_none());
     }
 }

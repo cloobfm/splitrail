@@ -43,7 +43,9 @@ struct GeminiCliSession {
 
 /// A message's text: a plain string, or (newer CLIs, for pasted prompts) a list of
 /// `{"text": …}` parts, joined.
-fn deserialize_content<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+fn deserialize_content<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
     #[derive(Deserialize)]
     struct Part {
         #[serde(default)]
@@ -57,7 +59,11 @@ fn deserialize_content<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Res
     }
     Ok(match Content::deserialize(deserializer)? {
         Content::Text(text) => text,
-        Content::Parts(parts) => parts.into_iter().map(|p| p.text).collect::<Vec<_>>().join("\n"),
+        Content::Parts(parts) => parts
+            .into_iter()
+            .map(|p| p.text)
+            .collect::<Vec<_>>()
+            .join("\n"),
     })
 }
 
@@ -450,7 +456,9 @@ impl Analyzer for GeminiCliAnalyzer {
                     log_error(&format!(
                         "Failed to parse Gemini session file {path}: {e:#}"
                     ));
-                    warn_once("Gemini CLI sessions failed to parse; see ~/.splitrail.log for details");
+                    warn_once(
+                        "Gemini CLI sessions failed to parse; see ~/.splitrail.log for details",
+                    );
                     None
                 }
             })
@@ -519,6 +527,12 @@ mod tests {
         let messages = parse_json_session_file(&path).unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].content.as_deref(), Some("Fix the\nflicker"));
-        assert_eq!((messages[1].stats.input_tokens, messages[1].stats.output_tokens), (60, 20));
+        assert_eq!(
+            (
+                messages[1].stats.input_tokens,
+                messages[1].stats.output_tokens
+            ),
+            (60, 20)
+        );
     }
 }

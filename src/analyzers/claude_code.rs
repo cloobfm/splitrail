@@ -136,7 +136,11 @@ impl Accumulator {
                         state.stats.cache_read_tokens,
                     );
                 }
-                crate::utils::add_stats_delta_into_day(day, &delta, state.stats.cost - previous_cost);
+                crate::utils::add_stats_delta_into_day(
+                    day,
+                    &delta,
+                    state.stats.cost - previous_cost,
+                );
                 state.add_to_slice(day, &delta, state.stats.cost - previous_cost);
             }
             return;
@@ -185,7 +189,11 @@ impl Accumulator {
         let mut seen = HashSet::new();
         self.recent
             .iter()
-            .filter(|m| m.local_hash.as_ref().is_none_or(|h| seen.insert(h.as_str())))
+            .filter(|m| {
+                m.local_hash
+                    .as_ref()
+                    .is_none_or(|h| seen.insert(h.as_str()))
+            })
             .map(|m| {
                 let mut m = m.clone();
                 if let Some(state) = m.local_hash.as_ref().and_then(|h| self.folded.get(h)) {
@@ -209,7 +217,9 @@ fn max_activity_delta(current: &Stats, from: &Stats) -> Stats {
     delta.files_read = from.files_read.saturating_sub(current.files_read);
     delta.files_edited = from.files_edited.saturating_sub(current.files_edited);
     delta.files_added = from.files_added.saturating_sub(current.files_added);
-    delta.terminal_commands = from.terminal_commands.saturating_sub(current.terminal_commands);
+    delta.terminal_commands = from
+        .terminal_commands
+        .saturating_sub(current.terminal_commands);
     delta.file_searches = from.file_searches.saturating_sub(current.file_searches);
     delta.file_content_searches = from
         .file_content_searches
@@ -245,8 +255,12 @@ fn max_tokens_delta(current: &Stats, from: &Stats) -> Stats {
     Stats {
         input_tokens: from.input_tokens.saturating_sub(current.input_tokens),
         output_tokens: from.output_tokens.saturating_sub(current.output_tokens),
-        cache_creation_tokens: from.cache_creation_tokens.saturating_sub(current.cache_creation_tokens),
-        cache_read_tokens: from.cache_read_tokens.saturating_sub(current.cache_read_tokens),
+        cache_creation_tokens: from
+            .cache_creation_tokens
+            .saturating_sub(current.cache_creation_tokens),
+        cache_read_tokens: from
+            .cache_read_tokens
+            .saturating_sub(current.cache_read_tokens),
         cached_tokens: from.cached_tokens.saturating_sub(current.cached_tokens),
         ..Default::default()
     }
@@ -849,7 +863,13 @@ pub fn parse_jsonl_file<T>(
 where
     T: Read,
 {
-    parse_jsonl_chunk(file_path, buffer_reader, &mut JsonlParseState::default(), true).0
+    parse_jsonl_chunk(
+        file_path,
+        buffer_reader,
+        &mut JsonlParseState::default(),
+        true,
+    )
+    .0
 }
 
 /// Parse complete lines from `reader`, which may be positioned partway into the file, carrying
@@ -1017,11 +1037,8 @@ where
 
         // Determine role from nested message.role field
         // Note: entry.r#type is always None because serde's tag="type" consumes that field
-        let is_assistant = entry
-            .message
-            .as_ref()
-            .and_then(|m| m.role.as_deref())
-            == Some("assistant");
+        let is_assistant =
+            entry.message.as_ref().and_then(|m| m.role.as_deref()) == Some("assistant");
 
         // Skip tool-result-only messages - they're API plumbing, not conversation turns
         // (tool results are passed back to Claude as "user" messages in the API)
@@ -1144,16 +1161,28 @@ pub(crate) fn dedup_messages<'a>(
                 // largest seen, not the sum; this row's own activity adds.
                 let existing = &mut deduplicated_entries[existing_index];
 
-                existing.stats.input_tokens = existing.stats.input_tokens.max(message.stats.input_tokens);
-                existing.stats.output_tokens = existing.stats.output_tokens.max(message.stats.output_tokens);
-                existing.stats.cache_creation_tokens =
-                    existing.stats.cache_creation_tokens.max(message.stats.cache_creation_tokens);
+                existing.stats.input_tokens =
+                    existing.stats.input_tokens.max(message.stats.input_tokens);
+                existing.stats.output_tokens = existing
+                    .stats
+                    .output_tokens
+                    .max(message.stats.output_tokens);
+                existing.stats.cache_creation_tokens = existing
+                    .stats
+                    .cache_creation_tokens
+                    .max(message.stats.cache_creation_tokens);
                 existing.stats.cache_creation_1h_tokens = existing
                     .stats
                     .cache_creation_1h_tokens
                     .max(message.stats.cache_creation_1h_tokens);
-                existing.stats.cache_read_tokens = existing.stats.cache_read_tokens.max(message.stats.cache_read_tokens);
-                existing.stats.cached_tokens = existing.stats.cached_tokens.max(message.stats.cached_tokens);
+                existing.stats.cache_read_tokens = existing
+                    .stats
+                    .cache_read_tokens
+                    .max(message.stats.cache_read_tokens);
+                existing.stats.cached_tokens = existing
+                    .stats
+                    .cached_tokens
+                    .max(message.stats.cached_tokens);
 
                 // Aggregate tool stats
                 existing.stats.tool_calls += message.stats.tool_calls;
@@ -1222,9 +1251,13 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
         let now = chrono::Utc::now();
         let mut lines = String::new();
-        for (i, block) in [r#"{"type":"thinking","thinking":"hm"}"#, r#"{"type":"text","text":"ok"}"#, r#"{"type":"tool_use","id":"t","name":"Bash","input":{}}"#]
-            .iter()
-            .enumerate()
+        for (i, block) in [
+            r#"{"type":"thinking","thinking":"hm"}"#,
+            r#"{"type":"text","text":"ok"}"#,
+            r#"{"type":"tool_use","id":"t","name":"Bash","input":{}}"#,
+        ]
+        .iter()
+        .enumerate()
         {
             let at = (now - chrono::Duration::seconds(60 - i as i64)).to_rfc3339();
             lines.push_str(&format!(
@@ -1237,7 +1270,10 @@ mod tests {
         let analyzer = ClaudeCodeAnalyzer::for_account(None, dir.path().to_path_buf());
         let sources = analyzer.discover_data_sources().unwrap();
         let (messages, _) = analyzer.parse_conversations_with_report(&sources);
-        let replies: Vec<&ConversationMessage> = messages.iter().filter(|m| m.role == MessageRole::Assistant).collect();
+        let replies: Vec<&ConversationMessage> = messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Assistant)
+            .collect();
         assert_eq!(replies.len(), 1);
         assert_eq!(replies[0].stats.output_tokens, 300);
         assert_eq!(replies[0].stats.tool_calls, 1);
@@ -1247,7 +1283,14 @@ mod tests {
         assert!((replies[0].stats.cost - day.stats.cost).abs() < 1e-9);
         // Its hour/model/project slice carries the same, once (BZL-138).
         assert_eq!(day.slices.len(), 1);
-        assert_eq!((day.slices[0].replies, day.slices[0].output_tokens, day.slices[0].project.as_str()), (1, 300, "p"));
+        assert_eq!(
+            (
+                day.slices[0].replies,
+                day.slices[0].output_tokens,
+                day.slices[0].project.as_str()
+            ),
+            (1, 300, "p")
+        );
         assert!((day.slices[0].cost - day.stats.cost).abs() < 1e-9);
     }
 

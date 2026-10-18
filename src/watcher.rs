@@ -473,7 +473,10 @@ impl RealtimeStatsManager {
         };
 
         let mut new_stats = analyzer.get_stats().await?;
-        crate::utils::retain_live_window(&mut new_stats, crate::utils::current_live_window_cutoff());
+        crate::utils::retain_live_window(
+            &mut new_stats,
+            crate::utils::current_live_window_cutoff(),
+        );
         let new_stats = Arc::new(new_stats);
         // Arc clones: the other analyzers' stats are shared, not copied.
         let mut updated_analyzer_stats = self.current_stats.analyzer_stats.clone();
@@ -503,8 +506,7 @@ impl RealtimeStatsManager {
     /// Trigger a manual upload regardless of auto-upload settings
     pub async fn trigger_manual_upload(&mut self) -> Result<()> {
         use crate::config::Config;
-        use crate::upload;
-        use crate::utils;
+        use crate::{upload, utils};
 
         // Check if an upload is already in progress
         if let Ok(in_progress) = self.upload_in_progress.lock()
@@ -521,10 +523,8 @@ impl RealtimeStatsManager {
 
         // Only the messages past the watermark are cloned, not every retained one (BZL-14
         // phase 4).
-        let messages_to_upload = utils::messages_pending_upload(
-            config.upload.last_date_uploaded,
-            &self.current_stats,
-        );
+        let messages_to_upload =
+            utils::messages_pending_upload(config.upload.last_date_uploaded, &self.current_stats);
 
         if messages_to_upload.is_empty() {
             return Ok(()); // Nothing to upload
@@ -552,15 +552,20 @@ impl RealtimeStatsManager {
 
         // Spawn upload task
         tokio::spawn(async move {
-            let result = upload::upload_message_stats(&messages_to_upload, &mut config, |_current, _total| {
-                if let Some(status) = &upload_status {
-                    if let Ok(mut status_guard) = status.lock() {
-                        if let UploadStatus::Uploading { dots, .. } = &mut *status_guard {
-                            *dots = (*dots + 1) % 4;
+            let result = upload::upload_message_stats(
+                &messages_to_upload,
+                &mut config,
+                |_current, _total| {
+                    if let Some(status) = &upload_status {
+                        if let Ok(mut status_guard) = status.lock() {
+                            if let UploadStatus::Uploading { dots, .. } = &mut *status_guard {
+                                *dots = (*dots + 1) % 4;
+                            }
                         }
                     }
-                }
-            }).await;
+                },
+            )
+            .await;
 
             // Update status based on result
             if let Some(status) = &upload_status {
@@ -609,9 +614,14 @@ mod coalesce_tests {
             vec![]
         }
         fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
-            Ok(vec![DataSource { path: self.file.clone() }])
+            Ok(vec![DataSource {
+                path: self.file.clone(),
+            }])
         }
-        async fn parse_conversations(&self, _: Vec<DataSource>) -> Result<Vec<ConversationMessage>> {
+        async fn parse_conversations(
+            &self,
+            _: Vec<DataSource>,
+        ) -> Result<Vec<ConversationMessage>> {
             Ok(vec![])
         }
         async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
@@ -635,7 +645,10 @@ mod coalesce_tests {
         std::fs::write(&file, "a").unwrap();
         let loads = Arc::new(AtomicUsize::new(0));
         let mut registry = AnalyzerRegistry::new();
-        registry.register(FakeCodex { file: file.clone(), loads: loads.clone() });
+        registry.register(FakeCodex {
+            file: file.clone(),
+            loads: loads.clone(),
+        });
         let mut manager = RealtimeStatsManager::new(registry).await.unwrap();
         assert_eq!(loads.load(Ordering::SeqCst), 1, "initial load");
         manager.batch_window = Duration::ZERO;
@@ -643,7 +656,10 @@ mod coalesce_tests {
 
         // One write, seen by both the watcher and the poll before the batch runs.
         std::fs::write(&file, "ab").unwrap();
-        manager.handle_watcher_event(WatcherEvent::DataChanged("Codex CLI".into())).await.unwrap();
+        manager
+            .handle_watcher_event(WatcherEvent::DataChanged("Codex CLI".into()))
+            .await
+            .unwrap();
         manager.poll_codex_if_needed().await.unwrap();
         manager.process_pending_batches().await.unwrap();
         assert_eq!(manager.reloads, 1);
@@ -654,7 +670,10 @@ mod coalesce_tests {
 
         // A second write inside the debounce is deferred, not dropped.
         std::fs::write(&file, "abc").unwrap();
-        manager.handle_watcher_event(WatcherEvent::DataChanged("Codex CLI".into())).await.unwrap();
+        manager
+            .handle_watcher_event(WatcherEvent::DataChanged("Codex CLI".into()))
+            .await
+            .unwrap();
         manager.process_pending_batches().await.unwrap();
         assert_eq!(manager.reloads, 1, "debounced");
         assert!(manager.pending_events.contains("Codex CLI"));

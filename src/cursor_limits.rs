@@ -138,7 +138,11 @@ pub fn charges_from_response(body: &str) -> Option<(Vec<Charge>, usize)> {
             Some(Charge {
                 conversation_id: event.get("conversationId")?.as_str()?.to_string(),
                 ts: number(event.get("timestamp")?)? as i64,
-                model: event.get("model").and_then(Value::as_str).unwrap_or_default().to_string(),
+                model: event
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 input_tokens: count(usage, "inputTokens"),
                 output_tokens: count(usage, "outputTokens"),
                 cache_read_tokens: count(usage, "cacheReadTokens"),
@@ -200,7 +204,9 @@ async fn refresh_charges(client: &reqwest::Client, token: &str, now: f64) -> Res
         .iter()
         .map(|c| (c.conversation_id.clone(), c.ts))
         .collect();
-    charges.retain(|c| c.ts >= now_ms - HISTORY_MS && !seen.contains(&(c.conversation_id.clone(), c.ts)));
+    charges.retain(|c| {
+        c.ts >= now_ms - HISTORY_MS && !seen.contains(&(c.conversation_id.clone(), c.ts))
+    });
     charges.extend(fresh);
     charges.sort_by_key(|c| c.ts);
     let mut out = String::new();
@@ -275,7 +281,16 @@ mod tests {
         assert_eq!(events, 2);
         assert_eq!(charges.len(), 1); // The request-counted event has no tokens.
         let c = &charges[0];
-        assert_eq!((c.ts, c.input_tokens, c.output_tokens, c.cache_read_tokens, c.cache_write_tokens), (1_791_961_120_280, 9763, 352, 3392, 0));
+        assert_eq!(
+            (
+                c.ts,
+                c.input_tokens,
+                c.output_tokens,
+                c.cache_read_tokens,
+                c.cache_write_tokens
+            ),
+            (1_791_961_120_280, 9763, 352, 3392, 0)
+        );
         assert_eq!(c.cents, 3.6265);
     }
 

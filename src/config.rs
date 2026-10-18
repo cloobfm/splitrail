@@ -39,7 +39,9 @@ pub struct GoalConfig {
 
 impl Default for GoalConfig {
     fn default() -> Self {
-        Self { monthly_tks: default_monthly_tks() }
+        Self {
+            monthly_tks: default_monthly_tks(),
+        }
     }
 }
 
@@ -180,9 +182,22 @@ pub fn detect_claude_accounts(home: &std::path::Path) -> Vec<(String, PathBuf)> 
     if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
         let dir = expand_home(&dir.to_string_lossy(), home);
         if dir.join("projects").is_dir() && !accounts.iter().any(|(_, known)| *known == dir) {
-            let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let label = name.trim_start_matches('.').trim_start_matches("claude-").to_string();
-            accounts.push((if label.is_empty() || label == "claude" { "env".into() } else { label }, dir));
+            let name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let label = name
+                .trim_start_matches('.')
+                .trim_start_matches("claude-")
+                .to_string();
+            accounts.push((
+                if label.is_empty() || label == "claude" {
+                    "env".into()
+                } else {
+                    label
+                },
+                dir,
+            ));
         }
     }
     accounts

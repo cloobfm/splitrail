@@ -8,7 +8,9 @@ use serde::Serialize;
 use tokio::sync::watch;
 
 use crate::config::SlackConfig;
-use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, MultiAnalyzerStats};
+use crate::types::{
+    AgenticCodingToolStats, Application, ConversationMessage, MessageRole, MultiAnalyzerStats,
+};
 
 pub struct NotificationManager {
     settings: NotificationSettings,
@@ -83,22 +85,17 @@ impl NotificationManager {
             // Only alert on the freshest conversation that just crossed the threshold,
             // and ignore ones that have been idle far beyond it (to avoid noisy catch-up).
             const RECENT_WINDOW_SECS: i64 = 15 * 60; // 15 minutes after threshold
-            let waiting: Vec<_> =
-                find_waiting_conversations(analyzer_stats, &self.settings, now)
-                    .into_iter()
-                    .filter(|alert| {
-                        let over_threshold = alert
-                            .idle_seconds
-                            .saturating_sub(self.settings.waiting_seconds);
-                        over_threshold <= RECENT_WINDOW_SECS
-                    })
-                    .collect();
+            let waiting: Vec<_> = find_waiting_conversations(analyzer_stats, &self.settings, now)
+                .into_iter()
+                .filter(|alert| {
+                    let over_threshold = alert
+                        .idle_seconds
+                        .saturating_sub(self.settings.waiting_seconds);
+                    over_threshold <= RECENT_WINDOW_SECS
+                })
+                .collect();
 
-            if let Some(alert) = waiting
-                .iter()
-                .min_by_key(|a| a.idle_seconds)
-                .cloned()
-            {
+            if let Some(alert) = waiting.iter().min_by_key(|a| a.idle_seconds).cloned() {
                 // Skip if we've already notified on this exact assistant message
                 if self
                     .notified_messages
@@ -177,13 +174,8 @@ fn find_waiting_conversations(
         if !matches!(last.role, MessageRole::Assistant) {
             continue;
         }
-        
 
-
-        let idle = now
-            .signed_duration_since(last.date)
-            .num_seconds()
-            .max(0);
+        let idle = now.signed_duration_since(last.date).num_seconds().max(0);
         if idle < settings.waiting_seconds || idle > settings.stale_seconds {
             continue;
         }
@@ -237,7 +229,7 @@ fn find_waiting_conversations(
 fn build_notification_text(alert: &WaitingAlert) -> String {
     let model = alert.model.as_deref().unwrap_or("unknown");
     let app = format_application(&alert.application);
-    
+
     // Ultra-compact header (no "ago" since notification timing implies recency)
     let header = format!(
         "🟡 {} {} | {} | {}",
@@ -248,8 +240,6 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
     );
 
     let mut lines = vec![header];
-
-
 
     // Get last 2 messages to show interaction pace and who spoke last
     let mut messages = Vec::new();
@@ -263,14 +253,23 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
                 };
                 let trimmed = truncate_content(&cleaned, max_len);
                 let timestamp = format_timestamp(msg.date);
-                messages.push(format!("[{}] {}{}{}{} {}", timestamp, prefix, bold_prefix, emoji, trimmed, bold_suffix));
+                messages.push(format!(
+                    "[{}] {}{}{}{} {}",
+                    timestamp, prefix, bold_prefix, emoji, trimmed, bold_suffix
+                ));
             }
         }
     }
 
     // If we have less than 3 messages, add more to reach minimum 3 total
     if messages.len() < 3 {
-        for msg in alert.recent_messages.iter().rev().skip(2).take(3 - messages.len()) {
+        for msg in alert
+            .recent_messages
+            .iter()
+            .rev()
+            .skip(2)
+            .take(3 - messages.len())
+        {
             if let Some(content_raw) = msg.content.as_deref() {
                 let cleaned = clean_message(content_raw);
                 if !cleaned.is_empty() {
@@ -280,7 +279,10 @@ fn build_notification_text(alert: &WaitingAlert) -> String {
                     };
                     let trimmed = truncate_content(&cleaned, max_len);
                     let timestamp = format_timestamp(msg.date);
-                    messages.push(format!("[{}] {}{}{}{} {}", timestamp, prefix, bold_prefix, emoji, trimmed, bold_suffix));
+                    messages.push(format!(
+                        "[{}] {}{}{}{} {}",
+                        timestamp, prefix, bold_prefix, emoji, trimmed, bold_suffix
+                    ));
                 }
             }
         }
@@ -434,10 +436,7 @@ pub fn last_notification_age_seconds(max_age_secs: i64) -> Option<i64> {
     let guard = LAST_SENT.get_or_init(|| std::sync::Mutex::new(None));
     if let Ok(last) = guard.lock() {
         if let Some(ts) = *last {
-            let age = Utc::now()
-                .signed_duration_since(ts)
-                .num_seconds()
-                .max(0);
+            let age = Utc::now().signed_duration_since(ts).num_seconds().max(0);
             if age <= max_age_secs {
                 return Some(age);
             }

@@ -238,15 +238,23 @@ pub fn lookup(model_name: &str) -> Option<(ModelPrice, PriceSource)> {
 /// `qwen3.5` -> `[(9.0, "qwen3.5-9b"), (27.0, "qwen3.5-27b"), (35.0, "qwen3.5-35b"), …]`, from
 /// paid entries named `<family>-<n>b…`.
 pub fn family_sizes(family: &str) -> Vec<(f64, String)> {
-    let Ok(feed) = FEED.read() else { return Vec::new() };
-    let Some(feed) = feed.as_ref() else { return Vec::new() };
+    let Ok(feed) = FEED.read() else {
+        return Vec::new();
+    };
+    let Some(feed) = feed.as_ref() else {
+        return Vec::new();
+    };
     let prefix = format!("{}-", family.to_lowercase());
     let mut sizes: Vec<(f64, String)> = Vec::new();
     for (key, price) in &feed.models {
         let segment = key.rsplit('/').next().unwrap_or(key).to_lowercase();
-        let Some(rest) = segment.strip_prefix(&prefix) else { continue };
+        let Some(rest) = segment.strip_prefix(&prefix) else {
+            continue;
+        };
         let token = rest.split('-').next().unwrap_or("");
-        let Some(number) = token.strip_suffix('b').and_then(|n| n.parse::<f64>().ok()) else { continue };
+        let Some(number) = token.strip_suffix('b').and_then(|n| n.parse::<f64>().ok()) else {
+            continue;
+        };
         if price.output_per_1m > 0.0 && !sizes.iter().any(|(b, _)| *b == number) {
             sizes.push((number, format!("{family}-{token}")));
         }
@@ -574,8 +582,14 @@ mod one_hour_cache_tests {
         let five_minute = price.cache_cost_split(one_million, 0, 0);
         let one_hour = price.cache_cost_split(0, one_million, 0);
 
-        assert!((five_minute - 6.25).abs() < 1e-9, "5m write is 1.25x base: {five_minute}");
-        assert!((one_hour - 10.0).abs() < 1e-9, "1h write is 2x base: {one_hour}");
+        assert!(
+            (five_minute - 6.25).abs() < 1e-9,
+            "5m write is 1.25x base: {five_minute}"
+        );
+        assert!(
+            (one_hour - 10.0).abs() < 1e-9,
+            "1h write is 2x base: {one_hour}"
+        );
     }
 
     /// The split must agree with the old flat call when nothing used the 1h TTL, so existing
@@ -584,7 +598,8 @@ mod one_hour_cache_tests {
     fn split_matches_flat_cost_when_no_one_hour_tokens() {
         let price = opus();
         assert!(
-            (price.cache_cost_split(3_000, 0, 7_000) - price.cache_cost(3_000, 7_000)).abs() < 1e-12
+            (price.cache_cost_split(3_000, 0, 7_000) - price.cache_cost(3_000, 7_000)).abs()
+                < 1e-12
         );
     }
 
@@ -599,7 +614,10 @@ mod one_hour_cache_tests {
             cache_read_per_1m: Some(0.5),
             tiers: Vec::new(),
         };
-        assert_eq!(price.cache_cost_split(1_000, 0, 1_000), price.cache_cost(1_000, 1_000));
+        assert_eq!(
+            price.cache_cost_split(1_000, 0, 1_000),
+            price.cache_cost(1_000, 1_000)
+        );
     }
 }
 
@@ -760,7 +778,10 @@ mod tests {
         let feed = Feed::new(models);
         let key = |name: &str| loose_key(name, &feed.by_segment);
         assert_eq!(key("qwen-3-32b").as_deref(), Some("cerebras/qwen-3-32b"));
-        assert_eq!(key("custom:GLM-4.6-Coding-Plan-0").as_deref(), Some("zai/glm-4.6"));
+        assert_eq!(
+            key("custom:GLM-4.6-Coding-Plan-0").as_deref(),
+            Some("zai/glm-4.6")
+        );
         // No boundary after the prefix: not a match.
         assert_eq!(key("gpt-5.6-terra"), None);
         assert_eq!(key("gpt-oss"), None);

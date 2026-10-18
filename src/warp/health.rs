@@ -103,7 +103,9 @@ fn get_warp_token() -> Result<String> {
         }
     }
 
-    Err(anyhow::anyhow!("WARP auth_token not found. Run 'splitrail warp setup'"))
+    Err(anyhow::anyhow!(
+        "WARP auth_token not found. Run 'splitrail warp setup'"
+    ))
 }
 
 /// Perform a lightweight API call to check if token is valid

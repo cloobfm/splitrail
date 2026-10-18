@@ -40,7 +40,9 @@ pub struct CopilotCliAnalyzer {
 
 impl CopilotCliAnalyzer {
     pub fn new() -> Self {
-        Self { cache: crate::stamp_cache::StampCache::new() }
+        Self {
+            cache: crate::stamp_cache::StampCache::new(),
+        }
     }
 
     fn history_dir() -> Option<std::path::PathBuf> {
@@ -57,18 +59,31 @@ fn size(entry: &Value) -> usize {
     match entry.get("type").and_then(Value::as_str) {
         Some("tool_call_completed") | Some("tool_call_requested") => {
             entry.get("arguments").map_or(0, |a| a.to_string().len())
-                + entry.get("result").map_or(0, |r| r.as_str().map_or_else(|| r.to_string().len(), str::len))
+                + entry.get("result").map_or(0, |r| {
+                    r.as_str().map_or_else(|| r.to_string().len(), str::len)
+                })
         }
-        _ => entry.get("text").and_then(Value::as_str).map_or(0, str::len),
+        _ => entry
+            .get("text")
+            .and_then(Value::as_str)
+            .map_or(0, str::len),
     }
 }
 
 /// Messages in one session file, with estimated tokens.
 pub(crate) fn parse_session(path: &Path) -> Result<Vec<ConversationMessage>> {
     let session: Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
-    let session_id = session.get("sessionId").and_then(Value::as_str).unwrap_or_default().to_string();
+    let session_id = session
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     let conversation_hash = hash_text(&session_id);
-    let timeline = session.get("timeline").and_then(Value::as_array).cloned().unwrap_or_default();
+    let timeline = session
+        .get("timeline")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
 
     let mut messages: Vec<ConversationMessage> = Vec::new();
     // Characters said before the latest reply, and since it.
@@ -120,17 +135,26 @@ pub(crate) fn parse_session(path: &Path) -> Result<Vec<ConversationMessage>> {
                 if let Some(i) = last_reply {
                     let reply = &mut messages[i];
                     reply.stats.tool_calls += 1;
-                    reply.stats.output_tokens += tokens(entry.get("arguments").map_or(0, |a| a.to_string().len()));
+                    reply.stats.output_tokens +=
+                        tokens(entry.get("arguments").map_or(0, |a| a.to_string().len()));
                 }
                 fresh += chars;
             }
             _ => {}
         }
     }
-    for reply in messages.iter_mut().filter(|m| m.role == MessageRole::Assistant) {
+    for reply in messages
+        .iter_mut()
+        .filter(|m| m.role == MessageRole::Assistant)
+    {
         let s = &reply.stats;
-        reply.stats.cost =
-            crate::models::calculate_total_cost(DEFAULT_MODEL, s.input_tokens, s.output_tokens, 0, s.cache_read_tokens);
+        reply.stats.cost = crate::models::calculate_total_cost(
+            DEFAULT_MODEL,
+            s.input_tokens,
+            s.output_tokens,
+            0,
+            s.cache_read_tokens,
+        );
     }
     Ok(messages)
 }
@@ -157,16 +181,24 @@ impl Analyzer for CopilotCliAnalyzer {
         Ok(sources)
     }
 
-    async fn parse_conversations(&self, sources: Vec<DataSource>) -> Result<Vec<ConversationMessage>> {
+    async fn parse_conversations(
+        &self,
+        sources: Vec<DataSource>,
+    ) -> Result<Vec<ConversationMessage>> {
         let (messages, _report) = self.cache.parse_all(&sources, parse_session);
         Ok(messages)
     }
 
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
-        let messages = self.parse_conversations(self.discover_data_sources()?).await?;
+        let messages = self
+            .parse_conversations(self.discover_data_sources()?)
+            .await?;
         let daily_stats = crate::utils::aggregate_by_date(&messages);
-        let num_conversations =
-            messages.iter().map(|m| &m.conversation_hash).collect::<std::collections::HashSet<_>>().len() as u64;
+        let num_conversations = messages
+            .iter()
+            .map(|m| &m.conversation_hash)
+            .collect::<std::collections::HashSet<_>>()
+            .len() as u64;
         Ok(AgenticCodingToolStats {
             daily_stats,
             num_conversations,
@@ -200,17 +232,33 @@ mod tests {
         )
         .unwrap();
         let messages = parse_session(&path).unwrap();
-        let replies: Vec<&Stats> =
-            messages.iter().filter(|m| m.role == MessageRole::Assistant).map(|m| &m.stats).collect();
+        let replies: Vec<&Stats> = messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Assistant)
+            .map(|m| &m.stats)
+            .collect();
         assert_eq!(messages.len(), 3);
         // c1 reads the 8-char prompt fresh (2 tokens) and writes 1 token, then calls a tool
         // (`{"c":"ls"}`, 10 chars: 3 tokens).
-        assert_eq!((replies[0].input_tokens, replies[0].cache_read_tokens, replies[0].output_tokens), (2, 0, 4));
+        assert_eq!(
+            (
+                replies[0].input_tokens,
+                replies[0].cache_read_tokens,
+                replies[0].output_tokens
+            ),
+            (2, 0, 4)
+        );
         assert_eq!(replies[0].tool_calls, 1);
         // c2 reads the tool call and result fresh (18 chars) and the first turn (12) from cache.
-        assert_eq!((replies[1].input_tokens, replies[1].cache_read_tokens, replies[1].output_tokens), (5, 3, 2));
+        assert_eq!(
+            (
+                replies[1].input_tokens,
+                replies[1].cache_read_tokens,
+                replies[1].output_tokens
+            ),
+            (5, 3, 2)
+        );
         assert!(replies[1].cost > 0.0);
         assert_eq!(messages[1].model.as_deref(), Some(DEFAULT_MODEL));
     }
 }
-

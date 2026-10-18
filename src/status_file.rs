@@ -39,21 +39,26 @@ fn round(value: f64, places: i32) -> f64 {
 }
 
 fn window(window: Option<WindowStatus>) -> Value {
-    window.map_or(Value::Null, |w| {
-        json!({ "used": round(w.used_percentage, 1), "resets_in": w.resets_in_secs })
-    })
+    window.map_or(
+        Value::Null,
+        |w| json!({ "used": round(w.used_percentage, 1), "resets_in": w.resets_in_secs }),
+    )
 }
 
 /// Local midnight on `date`, or `None` in a gap (a DST change at midnight).
 fn local_midnight(date: NaiveDate) -> Option<DateTime<Local>> {
-    Local.from_local_datetime(&date.and_hms_opt(0, 0, 0)?).earliest()
+    Local
+        .from_local_datetime(&date.and_hms_opt(0, 0, 0)?)
+        .earliest()
 }
 
 /// The month's pace against `goal_tks`: output tokens since the 1st, from the daily totals (which
 /// cover other machines too), averaged over the time elapsed, and what the rest needs.
 pub fn month_pace(stats: &MultiAnalyzerStats, now: DateTime<Local>, goal_tks: f64) -> Value {
     let first = now.date_naive().with_day(1).unwrap_or(now.date_naive());
-    let next = first.checked_add_months(chrono::Months::new(1)).unwrap_or(first);
+    let next = first
+        .checked_add_months(chrono::Months::new(1))
+        .unwrap_or(first);
     let (Some(start), Some(end)) = (local_midnight(first), local_midnight(next)) else {
         return Value::Null;
     };
@@ -67,7 +72,11 @@ pub fn month_pace(stats: &MultiAnalyzerStats, now: DateTime<Local>, goal_tks: f6
     let elapsed = (now - start).num_seconds().max(1) as f64;
     let remaining = (end - now).num_seconds().max(0) as f64;
     let target = goal_tks * (end - start).num_seconds() as f64;
-    let needed = if remaining > 0.0 { ((target - output_tokens as f64) / remaining).max(0.0) } else { 0.0 };
+    let needed = if remaining > 0.0 {
+        ((target - output_tokens as f64) / remaining).max(0.0)
+    } else {
+        0.0
+    };
     json!({
         "goal_tks": goal_tks,
         "avg_tks": round(output_tokens as f64 / elapsed, 1),
@@ -80,11 +89,16 @@ pub fn month_pace(stats: &MultiAnalyzerStats, now: DateTime<Local>, goal_tks: f6
 /// The file's contents for `stats` as of now. Tools idle today with no limits are left out.
 pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
     let now = Utc::now();
-    let mut tools: Vec<_> = crate::mqtt::tool_states(stats, now, crate::plan_limits::limits_for_analyzer)
-        .into_iter()
-        .filter(|t| t.tks > 0.0 || t.cost_today > 0.0 || t.limits.is_some())
-        .collect();
-    tools.sort_by(|a, b| b.tks.total_cmp(&a.tks).then(b.cost_today.total_cmp(&a.cost_today)));
+    let mut tools: Vec<_> =
+        crate::mqtt::tool_states(stats, now, crate::plan_limits::limits_for_analyzer)
+            .into_iter()
+            .filter(|t| t.tks > 0.0 || t.cost_today > 0.0 || t.limits.is_some())
+            .collect();
+    tools.sort_by(|a, b| {
+        b.tks
+            .total_cmp(&a.tks)
+            .then(b.cost_today.total_cmp(&a.cost_today))
+    });
     let publishers: Vec<Value> = crate::rollup::publishers()
         .into_iter()
         .map(|p| json!({ "host": p.host, "version": p.version, "online": p.online, "behind": p.behind() }))
@@ -141,12 +155,16 @@ pub async fn run(mut stats_rx: watch::Receiver<MultiAnalyzerStats>, goal_tks: f6
         let payload = {
             let stats = stats_rx.borrow_and_update();
             // Keeps records.json current (and announces new records) even with the view closed.
-            let tools: Vec<&crate::types::AgenticCodingToolStats> = stats.analyzer_stats.iter().map(|s| s.as_ref()).collect();
+            let tools: Vec<&crate::types::AgenticCodingToolStats> =
+                stats.analyzer_stats.iter().map(|s| s.as_ref()).collect();
             crate::records::board(&tools, goal_tks);
             payload(&stats, goal_tks)
         };
         wait = INTERVAL.max(started.elapsed() * MAX_SHARE);
-        if let Err(e) = tokio::task::spawn_blocking(move || write(&payload)).await.unwrap_or(Ok(())) {
+        if let Err(e) = tokio::task::spawn_blocking(move || write(&payload))
+            .await
+            .unwrap_or(Ok(()))
+        {
             crate::utils::log_error(format!("Status file: {e}"));
         }
     }
@@ -155,7 +173,9 @@ pub async fn run(mut stats_rx: watch::Receiver<MultiAnalyzerStats>, goal_tks: f6
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
+    use crate::types::{
+        AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats,
+    };
 
     fn tool(name: &str, output: u64, cost: f64, age_secs: i64) -> AgenticCodingToolStats {
         let now = Utc::now();
@@ -171,7 +191,11 @@ mod tests {
                 local_hash: None,
                 global_hash: name.to_string(),
                 model: Some("m".into()),
-                stats: Stats { output_tokens: output, cost, ..Default::default() },
+                stats: Stats {
+                    output_tokens: output,
+                    cost,
+                    ..Default::default()
+                },
                 role: MessageRole::Assistant,
                 content: None,
             }],
@@ -188,7 +212,12 @@ mod tests {
             ],
         };
         let payload = payload(&stats, 150.0);
-        let names: Vec<&str> = payload["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = payload["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
         assert_eq!(names, ["Status Test Busy", "Status Test Quiet"]);
         assert_eq!(payload["tks"], 11.0); // 9,900 output tokens over the 15-minute window.
         assert_eq!(payload["cost_today"], 2.5);
@@ -197,16 +226,23 @@ mod tests {
     #[test]
     fn month_pace_averages_since_the_first_and_spreads_the_rest() {
         let mut claude = tool("Status Test Month", 0, 0.0, 60);
-        for (date, output) in [("2026-09-30", 999_999_999), ("2026-10-01", 50_000_000), ("2026-10-02", 50_000_000)] {
+        for (date, output) in [
+            ("2026-09-30", 999_999_999),
+            ("2026-10-01", 50_000_000),
+            ("2026-10-02", 50_000_000),
+        ] {
             let mut day = crate::types::DailyStats::default();
             day.stats.output_tokens = output;
             claude.daily_stats.insert(date.into(), day);
         }
-        let stats = MultiAnalyzerStats { analyzer_stats: vec![claude.into()] };
+        let stats = MultiAnalyzerStats {
+            analyzer_stats: vec![claude.into()],
+        };
         // Noon on Oct 3: 2.5 days in, 28.5 days left of 31.
         let now = Local.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap();
         let month = month_pace(&stats, now, 150.0);
-        let elapsed = (now - local_midnight(NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()).unwrap()).num_seconds() as f64;
+        let elapsed = (now - local_midnight(NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()).unwrap())
+            .num_seconds() as f64;
         assert_eq!(month["output_tokens"], 100_000_000);
         assert_eq!(month["avg_tks"], round(100_000_000.0 / elapsed, 1));
         let remaining = month["remaining_secs"].as_f64().unwrap();

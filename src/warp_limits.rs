@@ -76,7 +76,10 @@ fn read_limit_info() -> Result<(String, f64)> {
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or_else(now, |d| d.as_secs_f64());
-    Ok((String::from_utf8_lossy(&output.stdout).into_owned(), written))
+    Ok((
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        written,
+    ))
 }
 
 fn now() -> f64 {
@@ -158,11 +161,32 @@ mod tests {
 
     #[test]
     fn unlimited_or_unreadable_records_give_nothing() {
-        assert!(snapshot_from_limit_info(r#"{"limit": 0, "num_requests_used_since_refresh": 1}"#, 0.0, None).is_none());
-        assert!(snapshot_from_limit_info(r#"{"limit": 10, "num_requests_used_since_refresh": 1, "is_unlimited": true}"#, 0.0, None).is_none());
+        assert!(
+            snapshot_from_limit_info(
+                r#"{"limit": 0, "num_requests_used_since_refresh": 1}"#,
+                0.0,
+                None
+            )
+            .is_none()
+        );
+        assert!(
+            snapshot_from_limit_info(
+                r#"{"limit": 10, "num_requests_used_since_refresh": 1, "is_unlimited": true}"#,
+                0.0,
+                None
+            )
+            .is_none()
+        );
         assert!(snapshot_from_limit_info("not json", 0.0, None).is_none());
         // Decoded once as well as twice.
-        assert!(snapshot_from_limit_info(r#"{"limit": 10, "num_requests_used_since_refresh": 1}"#, 0.0, None).is_some());
+        assert!(
+            snapshot_from_limit_info(
+                r#"{"limit": 10, "num_requests_used_since_refresh": 1}"#,
+                0.0,
+                None
+            )
+            .is_some()
+        );
     }
 
     /// Writes the real snapshot: `cargo test warp_limits_live -- --ignored --nocapture`.

@@ -138,21 +138,23 @@ impl Analyzer for DroidCliAnalyzer {
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
         let sources = self.discover_data_sources()?;
         let conversations = self.parse_conversations(sources).await?;
-        
+
         let mut daily_stats: BTreeMap<String, crate::types::DailyStats> = BTreeMap::new();
-        
+
         for conversation in &conversations {
             let date_str = conversation.date.format("%Y-%m-%d").to_string();
-            let daily = daily_stats.entry(date_str).or_insert_with(|| crate::types::DailyStats {
-                date: conversation.date.format("%Y-%m-%d").to_string(),
-                user_messages: 0,
-                ai_messages: 0,
-                conversations: 0,
-                active_seconds: 0,
-                models: BTreeMap::new(),
-                stats: Stats::default(),
-                slices: Vec::new(),
-            });
+            let daily = daily_stats
+                .entry(date_str)
+                .or_insert_with(|| crate::types::DailyStats {
+                    date: conversation.date.format("%Y-%m-%d").to_string(),
+                    user_messages: 0,
+                    ai_messages: 0,
+                    conversations: 0,
+                    active_seconds: 0,
+                    models: BTreeMap::new(),
+                    stats: Stats::default(),
+                    slices: Vec::new(),
+                });
 
             if conversation.role == MessageRole::Assistant {
                 daily.ai_messages += 1;
@@ -199,7 +201,7 @@ impl DroidCliAnalyzer {
         let content = fs::read_to_string(file_path)?;
         let mut messages = Vec::new();
         let mut last_timestamp: Option<DateTime<Utc>> = None;
-        
+
         // First, load the session settings to get token usage info
         let settings_path = file_path.with_extension("settings.json");
         let settings = if let Ok(settings_content) = fs::read_to_string(&settings_path) {
@@ -207,10 +209,10 @@ impl DroidCliAnalyzer {
         } else {
             None
         };
-        
+
         // Track session info from session_start event
         let mut session_info: Option<DroidSession> = None;
-        
+
         // Parse JSONL file line by line
         for line in content.lines() {
             if line.trim().is_empty() {
@@ -235,7 +237,9 @@ impl DroidCliAnalyzer {
                                 if self.is_tool_result_only_message(&value) {
                                     continue;
                                 }
-                                if let Ok(message) = self.create_message_from_line(&value, session, settings, file_path) {
+                                if let Ok(message) = self
+                                    .create_message_from_line(&value, session, settings, file_path)
+                                {
                                     last_timestamp = match last_timestamp {
                                         Some(prev) if prev > message.date => Some(prev),
                                         _ => Some(message.date),
@@ -338,34 +342,39 @@ impl DroidCliAnalyzer {
     ) -> Result<ConversationMessage> {
         // Parse the message
         let message: DroidMessage = serde_json::from_value(value.clone())?;
-        
+
         // Parse timestamp
-        let timestamp = message.timestamp.parse::<DateTime<Utc>>()
-            .unwrap_or_else(|_| self.extract_timestamp_from_path(file_path).unwrap_or_else(|_| Utc::now()));
-        
+        let timestamp = message
+            .timestamp
+            .parse::<DateTime<Utc>>()
+            .unwrap_or_else(|_| {
+                self.extract_timestamp_from_path(file_path)
+                    .unwrap_or_else(|_| Utc::now())
+            });
+
         // Determine role
         let role = match message.message.role.as_str() {
             "user" => MessageRole::User,
             "assistant" => MessageRole::Assistant,
             _ => MessageRole::Assistant, // Default to assistant for unknown roles
         };
-        
+
         // Extract content text
         let content_text = self.extract_content_text(&message.message.content);
-        
+
         // Count tool calls if assistant message
         let tool_calls = if role == MessageRole::Assistant {
             self.count_tool_calls(&message.message.content)
         } else {
             0
         };
-        
+
         // Calculate costs using Droid CLI's model pricing
         let model_name = self.normalize_model_name(&settings.model);
-        
+
         // Per-message tokens are not provided; rely on session totals from settings to avoid double counting
         let (input_tokens, output_tokens) = (0, 0);
-        
+
         let total_cost = calculate_total_cost(
             &model_name,
             input_tokens,
@@ -378,7 +387,12 @@ impl DroidCliAnalyzer {
         let project_hash = self.extract_project_hash(&session.cwd);
 
         // Create global hash
-        let global_hash = format!("droid-cli:{}:{}:{}", session.id, message.id, timestamp.timestamp());
+        let global_hash = format!(
+            "droid-cli:{}:{}:{}",
+            session.id,
+            message.id,
+            timestamp.timestamp()
+        );
 
         Ok(ConversationMessage {
             application: Application::DroidCli,
@@ -396,13 +410,29 @@ impl DroidCliAnalyzer {
                 cache_read_tokens: 0,
                 cached_tokens: 0,
                 cost: total_cost,
-tool_calls: tool_calls as u32,
-                terminal_commands: if tool_calls > 0 { self.count_terminal_commands(&message.message.content) } else { 0 },
-                file_searches: if tool_calls > 0 { self.count_file_searches(&message.message.content) } else { 0 },
+                tool_calls: tool_calls as u32,
+                terminal_commands: if tool_calls > 0 {
+                    self.count_terminal_commands(&message.message.content)
+                } else {
+                    0
+                },
+                file_searches: if tool_calls > 0 {
+                    self.count_file_searches(&message.message.content)
+                } else {
+                    0
+                },
                 file_content_searches: 0,
-                files_read: if tool_calls > 0 { self.count_file_reads(&message.message.content) } else { 0 },
+                files_read: if tool_calls > 0 {
+                    self.count_file_reads(&message.message.content)
+                } else {
+                    0
+                },
                 files_added: 0,
-                files_edited: if tool_calls > 0 { self.count_file_edits(&message.message.content) } else { 0 },
+                files_edited: if tool_calls > 0 {
+                    self.count_file_edits(&message.message.content)
+                } else {
+                    0
+                },
                 files_deleted: 0,
                 lines_read: 0,
                 lines_added: 0,
@@ -412,10 +442,18 @@ tool_calls: tool_calls as u32,
                 bytes_added: 0,
                 bytes_edited: 0,
                 bytes_deleted: 0,
-                todos_created: if tool_calls > 0 { self.count_todo_writes(&message.message.content) } else { 0 },
+                todos_created: if tool_calls > 0 {
+                    self.count_todo_writes(&message.message.content)
+                } else {
+                    0
+                },
                 todos_completed: 0,
                 todos_in_progress: 0,
-                todo_writes: if tool_calls > 0 { self.count_todo_writes(&message.message.content) } else { 0 },
+                todo_writes: if tool_calls > 0 {
+                    self.count_todo_writes(&message.message.content)
+                } else {
+                    0
+                },
                 todo_reads: 0,
                 code_lines: 0,
                 docs_lines: 0,
@@ -430,7 +468,7 @@ tool_calls: tool_calls as u32,
             content: Some(content_text),
         })
     }
-    
+
     fn extract_content_text(&self, content: &[serde_json::Value]) -> String {
         // Look for text content only - tool_use and tool_result messages are not interesting
         // for message previews. Tool stats are tracked separately.
@@ -447,7 +485,7 @@ tool_calls: tool_calls as u32,
         // No text content found - return empty string (message will be filtered out in display)
         String::new()
     }
-    
+
     fn count_tool_calls(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
@@ -461,14 +499,14 @@ tool_calls: tool_calls as u32,
         }
         count
     }
-    
+
     fn count_terminal_commands(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
             if let Some(obj) = item.as_object() {
                 if let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
-                    obj.get("name").and_then(|v| v.as_str())
+                    obj.get("name").and_then(|v| v.as_str()),
                 ) {
                     if text_type == "tool_use" && name == "Execute" {
                         count += 1;
@@ -478,14 +516,14 @@ tool_calls: tool_calls as u32,
         }
         count
     }
-    
+
     fn count_file_searches(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
             if let Some(obj) = item.as_object() {
                 if let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
-                    obj.get("name").and_then(|v| v.as_str())
+                    obj.get("name").and_then(|v| v.as_str()),
                 ) {
                     if text_type == "tool_use" && (name == "Grep" || name == "Glob") {
                         count += 1;
@@ -495,14 +533,14 @@ tool_calls: tool_calls as u32,
         }
         count
     }
-    
+
     fn count_file_reads(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
             if let Some(obj) = item.as_object() {
                 if let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
-                    obj.get("name").and_then(|v| v.as_str())
+                    obj.get("name").and_then(|v| v.as_str()),
                 ) {
                     if text_type == "tool_use" && name == "Read" {
                         count += 1;
@@ -512,14 +550,14 @@ tool_calls: tool_calls as u32,
         }
         count
     }
-    
+
     fn count_file_edits(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
             if let Some(obj) = item.as_object() {
                 if let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
-                    obj.get("name").and_then(|v| v.as_str())
+                    obj.get("name").and_then(|v| v.as_str()),
                 ) {
                     if text_type == "tool_use" && name == "Edit" {
                         count += 1;
@@ -529,14 +567,14 @@ tool_calls: tool_calls as u32,
         }
         count
     }
-    
+
     fn count_todo_writes(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
             if let Some(obj) = item.as_object() {
                 if let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
-                    obj.get("name").and_then(|v| v.as_str())
+                    obj.get("name").and_then(|v| v.as_str()),
                 ) {
                     if text_type == "tool_use" && name == "TodoWrite" {
                         count += 1;
@@ -591,7 +629,7 @@ tool_calls: tool_calls as u32,
         // Create a simple hash from the working directory
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         cwd.hash(&mut hasher);
         format!("{:x}", hasher.finish())
@@ -601,9 +639,9 @@ tool_calls: tool_calls as u32,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs::File;
     use std::io::Write;
+    use tempfile::TempDir;
 
     /// The session-total row is one logical "total for this session" message, so its identity
     /// must not move as the session grows. It embedded `last_timestamp` — the session's newest
@@ -644,7 +682,10 @@ mod tests {
         let before = session_total_hash(&session_file);
 
         // The session continues, with a later timestamp than the first message.
-        let mut f = fs::OpenOptions::new().append(true).open(&session_file).unwrap();
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(&session_file)
+            .unwrap();
         writeln!(f, r#"{{"type":"message","id":"msg-2","timestamp":"2025-11-29T10:12:40.000Z","message":{{"role":"assistant","content":[{{"type":"text","text":"b"}}]}}}}"#).unwrap();
         drop(f);
 
@@ -696,7 +737,8 @@ mod tests {
     "thinkingTokens": 0
   }}
 }}"#
-        ).unwrap();
+        )
+        .unwrap();
 
         let analyzer = DroidCliAnalyzer::new();
         let messages = analyzer.parse_session_file(&session_file).unwrap();
@@ -705,7 +747,7 @@ mod tests {
         // authoritative token counts from settings.json (commit 2dc0ed6). Per-message tokens are
         // zero so the session is not double counted.
         assert_eq!(messages.len(), 3);
-        
+
         // Check user message
         let user_msg = &messages[0];
         assert_eq!(user_msg.conversation_hash, "test-id");
@@ -714,12 +756,18 @@ mod tests {
         assert_eq!(user_msg.content, Some("Hello world".to_string()));
         assert_eq!(user_msg.stats.input_tokens, 0);
         assert_eq!(user_msg.stats.output_tokens, 0);
-        
+
         // Check assistant message
         let assistant_msg = &messages[1];
         assert_eq!(assistant_msg.conversation_hash, "test-id");
         assert_eq!(assistant_msg.role, MessageRole::Assistant);
-        assert!(assistant_msg.content.as_ref().unwrap().contains("I'll help you"));
+        assert!(
+            assistant_msg
+                .content
+                .as_ref()
+                .unwrap()
+                .contains("I'll help you")
+        );
         assert_eq!(assistant_msg.stats.input_tokens, 0);
         assert_eq!(assistant_msg.stats.output_tokens, 0);
         assert_eq!(assistant_msg.stats.tool_calls, 1);

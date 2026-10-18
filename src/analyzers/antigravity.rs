@@ -66,9 +66,8 @@ struct CachedConversation {
 type Stamp = [(u64, Option<SystemTime>); 2];
 
 fn stamp(db: &Path) -> Stamp {
-    let of = |path: &Path| {
-        std::fs::metadata(path).map_or((0, None), |m| (m.len(), m.modified().ok()))
-    };
+    let of =
+        |path: &Path| std::fs::metadata(path).map_or((0, None), |m| (m.len(), m.modified().ok()));
     [of(db), of(&db.with_extension("db-wal"))]
 }
 
@@ -88,8 +87,11 @@ impl AntigravityAnalyzer {
                     .join("antigravity")
                     .join("usage.jsonl")
             }),
-            conversations_dir: home
-                .map(|home| home.join(".gemini").join("antigravity-cli").join("conversations")),
+            conversations_dir: home.map(|home| {
+                home.join(".gemini")
+                    .join("antigravity-cli")
+                    .join("conversations")
+            }),
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -108,7 +110,10 @@ impl AntigravityAnalyzer {
                 let messages = Arc::new(messages_from_steps(&id, &steps));
                 cache.insert(
                     db.to_path_buf(),
-                    CachedConversation { stamp: current, messages: messages.clone() },
+                    CachedConversation {
+                        stamp: current,
+                        messages: messages.clone(),
+                    },
                 );
                 Some(messages)
             }
@@ -139,7 +144,11 @@ pub fn messages_from_steps(conversation_id: &str, steps: &[Step]) -> Vec<Convers
     for (i, step) in steps.iter().enumerate() {
         let global_hash = hash_text(&format!("antigravity:{conversation_id}:{i}"));
         match step {
-            Step::User { at, text, cwd: step_cwd } => {
+            Step::User {
+                at,
+                text,
+                cwd: step_cwd,
+            } => {
                 cwd = step_cwd.as_deref().or(cwd);
                 messages.push(ConversationMessage {
                     application: Application::Antigravity,
@@ -154,13 +163,22 @@ pub fn messages_from_steps(conversation_id: &str, steps: &[Step]) -> Vec<Convers
                     content: text.clone(),
                 });
             }
-            Step::Response { at, text, tool_calls, model, usage } => {
+            Step::Response {
+                at,
+                text,
+                tool_calls,
+                model,
+                usage,
+            } => {
                 if let Some(model) = model {
                     last_model = Some(normalize_model(model));
                 }
-                let model = last_model.clone().unwrap_or_else(|| UNKNOWN_MODEL.to_string());
+                let model = last_model
+                    .clone()
+                    .unwrap_or_else(|| UNKNOWN_MODEL.to_string());
                 let usage = usage.clone().unwrap_or_default();
-                let cost = calculate_total_cost(&model, usage.input, usage.output, 0, usage.cache_read);
+                let cost =
+                    calculate_total_cost(&model, usage.input, usage.output, 0, usage.cache_read);
                 messages.push(ConversationMessage {
                     application: Application::Antigravity,
                     date: *at,
@@ -231,7 +249,9 @@ pub fn parse_usage_log(
     let mut runs: HashMap<&str, Vec<f64>> = HashMap::new();
     for (_, _, event) in &events {
         if event.source.as_deref() == Some("print") {
-            runs.entry(&event.conversation_id).or_default().push(event.ts);
+            runs.entry(&event.conversation_id)
+                .or_default()
+                .push(event.ts);
         }
     }
     for ends in runs.values_mut() {
@@ -239,10 +259,11 @@ pub fn parse_usage_log(
     }
     // A status line line covered by a print run: at or before a run's end, after the previous.
     let in_print_run = |event: &UsageEvent| {
-        runs.get(event.conversation_id.as_str()).is_some_and(|ends| {
-            ends.iter()
-                .any(|&end| event.ts <= end && !ends.iter().any(|&e| e < end && e >= event.ts))
-        })
+        runs.get(event.conversation_id.as_str())
+            .is_some_and(|ends| {
+                ends.iter()
+                    .any(|&end| event.ts <= end && !ends.iter().any(|&e| e < end && e >= event.ts))
+            })
     };
     events
         .iter()
@@ -319,7 +340,10 @@ impl Analyzer for AntigravityAnalyzer {
         {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
                 if name.ends_with(".db") || name.ends_with(".db-wal") {
                     sources.push(DataSource { path });
                 }
@@ -347,7 +371,10 @@ impl Analyzer for AntigravityAnalyzer {
                 messages.extend(found.iter().cloned());
             }
         }
-        for source in sources.iter().filter(|s| Some(&s.path) == self.usage_file.as_ref()) {
+        for source in sources
+            .iter()
+            .filter(|s| Some(&s.path) == self.usage_file.as_ref())
+        {
             let content = std::fs::read_to_string(&source.path)?;
             messages.extend(parse_usage_log(&content, &source.path, &from_store));
         }
@@ -447,7 +474,10 @@ mod tests {
         // Store slugs carry the effort.
         assert_eq!(normalize_model("gemini-3.8-flash-high"), "gemini-3.8-flash");
         assert_eq!(normalize_model("gemini-3.8-flash-n"), "gemini-3.8-flash");
-        assert_eq!(normalize_model("claude-sonnet-5-5-medium"), "claude-sonnet-5-5");
+        assert_eq!(
+            normalize_model("claude-sonnet-5-5-medium"),
+            "claude-sonnet-5-5"
+        );
         assert_eq!(normalize_model("  "), "");
     }
 
@@ -477,11 +507,31 @@ mod live {
         use crate::analyzer::Analyzer;
         let stats = super::AntigravityAnalyzer::new().get_stats().await.unwrap();
         for (day, s) in &stats.daily_stats {
-            println!("{day} in {} out {} think {} cache {} cost {:.2} tools {} convs {}", s.stats.input_tokens, s.stats.output_tokens, s.stats.reasoning_tokens, s.stats.cache_read_tokens, s.stats.cost, s.stats.tool_calls, s.conversations);
+            println!(
+                "{day} in {} out {} think {} cache {} cost {:.2} tools {} convs {}",
+                s.stats.input_tokens,
+                s.stats.output_tokens,
+                s.stats.reasoning_tokens,
+                s.stats.cache_read_tokens,
+                s.stats.cost,
+                s.stats.tool_calls,
+                s.conversations
+            );
         }
-        let users = stats.messages.iter().filter(|m| m.role == crate::types::MessageRole::User).count();
-        let models: std::collections::BTreeSet<_> = stats.messages.iter().filter_map(|m| m.model.clone()).collect();
-        println!("messages {} user {users} models {models:?}", stats.messages.len());
+        let users = stats
+            .messages
+            .iter()
+            .filter(|m| m.role == crate::types::MessageRole::User)
+            .count();
+        let models: std::collections::BTreeSet<_> = stats
+            .messages
+            .iter()
+            .filter_map(|m| m.model.clone())
+            .collect();
+        println!(
+            "messages {} user {users} models {models:?}",
+            stats.messages.len()
+        );
         assert!(stats.messages.iter().any(|m| m.content.is_some()));
     }
 }

@@ -1,14 +1,16 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use chrono::{DateTime, Utc};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use splitrail_dashboard::analyzer::{Analyzer, AnalyzerRegistry};
 use splitrail_dashboard::analyzers::*;
-use splitrail_dashboard::types::{ConversationMessage, DailyStats, Stats, Application, MessageRole};
-use splitrail_dashboard::utils::{hash_text, aggregate_by_date};
-use std::time::Duration;
+use splitrail_dashboard::types::{
+    Application, ConversationMessage, DailyStats, MessageRole, Stats,
+};
+use splitrail_dashboard::utils::{aggregate_by_date, hash_text};
 use std::collections::BTreeMap;
-use chrono::{DateTime, Utc};
-use tempfile::TempDir;
 use std::fs::File;
 use std::io::Write;
+use std::time::Duration;
+use tempfile::TempDir;
 
 // Benchmark initial data loading from all analyzers
 fn bench_initial_load(c: &mut Criterion) {
@@ -62,7 +64,9 @@ fn bench_stats_aggregation(c: &mut Criterion) {
     group.bench_function("aggregate_by_date", |b| {
         b.iter(|| {
             for analyzer_stats in &stats.analyzer_stats {
-                let _ = black_box(splitrail_dashboard::utils::aggregate_by_date(&analyzer_stats.messages));
+                let _ = black_box(splitrail_dashboard::utils::aggregate_by_date(
+                    &analyzer_stats.messages,
+                ));
             }
         });
     });
@@ -106,7 +110,9 @@ fn bench_deduplication(c: &mut Criterion) {
             |b, &msg_count| {
                 let messages = create_test_messages(msg_count);
                 b.iter(|| {
-                    let _ = black_box(deduplicate_messages_by_local_hash_current(black_box(messages.clone())));
+                    let _ = black_box(deduplicate_messages_by_local_hash_current(black_box(
+                        messages.clone(),
+                    )));
                 });
             },
         );
@@ -118,9 +124,9 @@ fn bench_deduplication(c: &mut Criterion) {
 // Benchmark file parsing performance
 fn bench_file_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("file_parsing");
-    
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Test JSONL parsing with different file sizes
     for line_count in [100, 1000, 10000].iter() {
         group.throughput(Throughput::Elements(*line_count as u64));
@@ -138,7 +144,7 @@ fn bench_file_parsing(c: &mut Criterion) {
 
     // Test parallel vs sequential parsing
     let test_files = create_multiple_test_files(&temp_dir, 10, 1000);
-    
+
     group.bench_function("sequential_parsing", |b| {
         b.iter(|| {
             let _ = black_box(parse_files_sequential(&test_files));
@@ -229,7 +235,7 @@ fn bench_tui_performance(c: &mut Criterion) {
     let mut group = c.benchmark_group("tui_performance");
 
     let stats = create_test_analyzer_stats();
-    
+
     // Test sparkline cache building
     group.bench_function("sparkline_cache_building", |b| {
         b.iter(|| {
@@ -266,7 +272,11 @@ fn create_test_messages(count: usize) -> Vec<ConversationMessage> {
                 tool_calls: (i % 10) as u32,
                 ..Default::default()
             },
-            role: if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant },
+            role: if i % 2 == 0 {
+                MessageRole::User
+            } else {
+                MessageRole::Assistant
+            },
             content: Some(format!("Test message content {}", i)),
         });
     }
@@ -294,23 +304,21 @@ fn create_test_daily_stats() -> DailyStats {
 }
 
 fn create_test_analyzer_stats() -> Vec<splitrail_dashboard::types::AgenticCodingToolStats> {
-    vec![
-        splitrail_dashboard::types::AgenticCodingToolStats {
-            analyzer_name: "Claude Code".to_string(),
-            num_conversations: 1000,
-            daily_stats: BTreeMap::from([
-                ("2024-01-01".to_string(), create_test_daily_stats()),
-                ("2024-01-02".to_string(), create_test_daily_stats()),
-            ]),
-            messages: create_test_messages(2000),
-        }
-    ]
+    vec![splitrail_dashboard::types::AgenticCodingToolStats {
+        analyzer_name: "Claude Code".to_string(),
+        num_conversations: 1000,
+        daily_stats: BTreeMap::from([
+            ("2024-01-01".to_string(), create_test_daily_stats()),
+            ("2024-01-02".to_string(), create_test_daily_stats()),
+        ]),
+        messages: create_test_messages(2000),
+    }]
 }
 
 fn create_test_jsonl_file(temp_dir: &TempDir, line_count: usize) -> std::path::PathBuf {
     let file_path = temp_dir.path().join("test.jsonl");
     let mut file = File::create(&file_path).unwrap();
-    
+
     for i in 0..line_count {
         let json_line = serde_json::json!({
             "type": "message",
@@ -322,16 +330,20 @@ fn create_test_jsonl_file(temp_dir: &TempDir, line_count: usize) -> std::path::P
         });
         writeln!(file, "{}", json_line).unwrap();
     }
-    
+
     file_path
 }
 
-fn create_multiple_test_files(temp_dir: &TempDir, file_count: usize, lines_per_file: usize) -> Vec<std::path::PathBuf> {
+fn create_multiple_test_files(
+    temp_dir: &TempDir,
+    file_count: usize,
+    lines_per_file: usize,
+) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
     for i in 0..file_count {
         let file_path = temp_dir.path().join(format!("test_{}.jsonl", i));
         let mut file = File::create(&file_path).unwrap();
-        
+
         for j in 0..lines_per_file {
             let json_line = serde_json::json!({
                 "type": "message",
@@ -349,10 +361,12 @@ fn create_multiple_test_files(temp_dir: &TempDir, file_count: usize, lines_per_f
 }
 
 // Current (inefficient) deduplication implementation for comparison
-fn deduplicate_messages_by_local_hash_current(messages: Vec<ConversationMessage>) -> Vec<ConversationMessage> {
+fn deduplicate_messages_by_local_hash_current(
+    messages: Vec<ConversationMessage>,
+) -> Vec<ConversationMessage> {
     let mut result = Vec::new();
     let mut seen_hashes = std::collections::HashSet::new();
-    
+
     for msg in messages {
         if let Some(local_hash) = &msg.local_hash {
             if !seen_hashes.contains(local_hash) {
@@ -363,7 +377,7 @@ fn deduplicate_messages_by_local_hash_current(messages: Vec<ConversationMessage>
             result.push(msg);
         }
     }
-    
+
     result
 }
 
@@ -371,8 +385,9 @@ fn parse_jsonl_file_bench(file_path: &std::path::Path) -> Vec<serde_json::Value>
     use std::io::{BufRead, BufReader};
     let file = File::open(file_path).unwrap();
     let reader = BufReader::new(file);
-    
-    reader.lines()
+
+    reader
+        .lines()
         .filter_map(|line| line.ok())
         .filter_map(|line| serde_json::from_str(&line).ok())
         .collect()
@@ -388,7 +403,8 @@ fn parse_files_sequential(files: &[std::path::PathBuf]) -> Vec<serde_json::Value
 
 fn parse_files_parallel(files: &[std::path::PathBuf]) -> Vec<serde_json::Value> {
     use rayon::prelude::*;
-    files.par_iter()
+    files
+        .par_iter()
         .flat_map(|file_path| parse_jsonl_file_bench(file_path))
         .collect()
 }

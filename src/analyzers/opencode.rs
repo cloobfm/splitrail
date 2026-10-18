@@ -171,7 +171,10 @@ impl OpenCodeAnalyzer {
     }
 
     pub fn for_flavor(flavor: Flavor) -> Self {
-        Self { flavor, db_cache: Default::default() }
+        Self {
+            flavor,
+            db_cache: Default::default(),
+        }
     }
 
     fn data_dir(&self) -> Option<PathBuf> {
@@ -182,9 +185,13 @@ impl OpenCodeAnalyzer {
     fn is_database_name(&self, name: &str) -> bool {
         let stem = self.flavor.db_stem;
         name == format!("{stem}.db")
-            || name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('-')).is_some_and(|rest| {
-                rest.strip_suffix(".db").is_some_and(|channel| !channel.is_empty())
-            })
+            || name
+                .strip_prefix(stem)
+                .and_then(|rest| rest.strip_prefix('-'))
+                .is_some_and(|rest| {
+                    rest.strip_suffix(".db")
+                        .is_some_and(|channel| !channel.is_empty())
+                })
     }
 
     /// The tool's SQLite databases, default channel first.
@@ -195,10 +202,20 @@ impl OpenCodeAnalyzer {
         let mut found: Vec<PathBuf> = entries
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.is_file() && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| self.is_database_name(n)))
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| self.is_database_name(n))
+            })
             .collect();
         let default = format!("{}.db", self.flavor.db_stem);
-        found.sort_by_key(|p| (p.file_name().and_then(|n| n.to_str()) != Some(default.as_str()), p.clone()));
+        found.sort_by_key(|p| {
+            (
+                p.file_name().and_then(|n| n.to_str()) != Some(default.as_str()),
+                p.clone(),
+            )
+        });
         found
     }
 
@@ -216,7 +233,8 @@ impl OpenCodeAnalyzer {
         let mut caches = self.db_cache.lock().unwrap_or_else(|e| e.into_inner());
         let cache = caches.entry(path.to_path_buf()).or_default();
         if cache.stamp.as_ref() != Some(&stamp) {
-            let (rows, v2, v1) = parse_database(self, path, cache.watermark_v2, cache.watermark_v1)?;
+            let (rows, v2, v1) =
+                parse_database(self, path, cache.watermark_v2, cache.watermark_v1)?;
             for (id, msg) in rows {
                 cache.messages.insert(id, msg);
             }
@@ -245,17 +263,11 @@ impl Analyzer for OpenCodeAnalyzer {
 
             // OPTIMIZED: Only read message files (contain all stats) and sessions (for project context)
             // Message files contain complete token counts, model info, and timing
-            patterns.push(format!(
-                "{home_str}/storage/message/*/msg_*.json"
-            ));
+            patterns.push(format!("{home_str}/storage/message/*/msg_*.json"));
 
             // Session metadata (read once for project context) - handle both directory structures
-            patterns.push(format!(
-                "{home_str}/storage/session/*/ses_*.json"
-            ));
-            patterns.push(format!(
-                "{home_str}/storage/message/ses_*.json"
-            ));
+            patterns.push(format!("{home_str}/storage/session/*/ses_*.json"));
+            patterns.push(format!("{home_str}/storage/message/ses_*.json"));
 
             // OpenCode 1.x+ keeps everything in SQLite; the WAL changes on every write, so watching
             // it surfaces new turns live.
@@ -276,7 +288,10 @@ impl Analyzer for OpenCodeAnalyzer {
         // 13,564 present), so with it the JSON files are not read at all.
         let databases = self.databases();
         if !databases.is_empty() {
-            return Ok(databases.into_iter().map(|path| DataSource { path }).collect());
+            return Ok(databases
+                .into_iter()
+                .map(|path| DataSource { path })
+                .collect());
         }
         let patterns = self.get_data_glob_patterns();
         let mut sources = Vec::new();
@@ -387,7 +402,9 @@ impl Analyzer for OpenCodeAnalyzer {
                     for line in content.lines() {
                         let line = line.trim();
                         if !line.is_empty() {
-                            if let Ok(opencode_msg) = serde_json::from_str::<OpenCodeMessageData>(line) {
+                            if let Ok(opencode_msg) =
+                                serde_json::from_str::<OpenCodeMessageData>(line)
+                            {
                                 // Get session info for directory path
                                 let session_dir = sessions
                                     .get(&opencode_msg.session_id)
@@ -395,7 +412,8 @@ impl Analyzer for OpenCodeAnalyzer {
                                     .unwrap_or_else(|| "unknown".to_string());
 
                                 // Read actual message content from part files for both user and assistant
-                                let message_content = self.read_message_text_content(&opencode_msg.id);
+                                let message_content =
+                                    self.read_message_text_content(&opencode_msg.id);
 
                                 // Convert to our internal format
                                 if let Some(msg) = self.convert_opencode_message_data(
@@ -446,7 +464,9 @@ impl Analyzer for OpenCodeAnalyzer {
                     for line in content.lines() {
                         let line = line.trim();
                         if !line.is_empty() {
-                            if let Ok(opencode_msg) = serde_json::from_str::<OpenCodeMessageData>(line) {
+                            if let Ok(opencode_msg) =
+                                serde_json::from_str::<OpenCodeMessageData>(line)
+                            {
                                 // Get session info for directory path
                                 let session_dir = sessions
                                     .get(&opencode_msg.session_id)
@@ -454,7 +474,8 @@ impl Analyzer for OpenCodeAnalyzer {
                                     .unwrap_or_else(|| "unknown".to_string());
 
                                 // Read actual message content from part files for both user and assistant
-                                let message_content = self.read_message_text_content(&opencode_msg.id);
+                                let message_content =
+                                    self.read_message_text_content(&opencode_msg.id);
 
                                 // Convert to our internal format
                                 if let Some(msg) = self.convert_opencode_message_data(
@@ -507,7 +528,12 @@ impl Analyzer for OpenCodeAnalyzer {
                     daily.ai_messages += 1;
                     if let Some(ref model) = message.model {
                         *daily.models.entry(model.clone()).or_insert(0) += 1;
-                        let slice = crate::utils::slice_mut(daily, crate::utils::local_hour(&message.date), model, &message.project_hash);
+                        let slice = crate::utils::slice_mut(
+                            daily,
+                            crate::utils::local_hour(&message.date),
+                            model,
+                            &message.project_hash,
+                        );
                         crate::utils::add_to_slice(slice, &message.stats, message.stats.cost, 1);
                     }
                 }
@@ -554,7 +580,8 @@ impl Analyzer for OpenCodeAnalyzer {
 
     fn is_available(&self) -> bool {
         // Installed: its config or data directory exists.
-        let config = std::env::home_dir().map(|home| home.join(".config").join(self.flavor.db_stem));
+        let config =
+            std::env::home_dir().map(|home| home.join(".config").join(self.flavor.db_stem));
         config.is_some_and(|c| c.exists()) || self.data_dir().is_some_and(|d| d.exists())
     }
 }
@@ -614,7 +641,8 @@ impl OpenCodeAnalyzer {
         };
 
         // Use cwd from message path if available, otherwise fall back to session directory
-        let effective_project_path = msg.path
+        let effective_project_path = msg
+            .path
             .as_ref()
             .and_then(|p| p.cwd.as_ref())
             .filter(|cwd| !cwd.is_empty())
@@ -626,12 +654,15 @@ impl OpenCodeAnalyzer {
                     .unwrap_or(cwd)
             })
             .unwrap_or_else(|| project_path);
-        
+
         // Generate hashes - use the actual project name directly like other analyzers
         let project_hash = effective_project_path.to_string();
         let conversation_hash = hash_text(&msg.session_id);
         let local_hash = Some(hash_text(&format!("{}-{}", msg.id, msg.time.created)));
-        let global_hash = hash_text(&format!("{}-{}-{}", self.flavor.hash_prefix, msg.id, msg.time.created));
+        let global_hash = hash_text(&format!(
+            "{}-{}-{}",
+            self.flavor.hash_prefix, msg.id, msg.time.created
+        ));
 
         // Extract model information - FIXED: read from correct field
         let model = msg
@@ -727,7 +758,8 @@ fn parse_database(
     for table in ["session", "session_v2"] {
         if has_table(&conn, table) {
             let mut stmt = conn.prepare(&format!("SELECT id, directory FROM {table}"))?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows.flatten() {
                 directories.insert(row.0, row.1);
             }
@@ -768,7 +800,15 @@ fn parse_database(
         })?;
         for (id, session, role, created, data, updated) in rows.flatten() {
             max_v2 = max_v2.max(updated);
-            if let Some(msg) = convert_v2_row(analyzer, &id, &session, &role, created, &data, &directory(&session)) {
+            if let Some(msg) = convert_v2_row(
+                analyzer,
+                &id,
+                &session,
+                &role,
+                created,
+                &data,
+                &directory(&session),
+            ) {
                 v2_ids.insert(id.clone());
                 messages.push((id, msg));
             }
@@ -829,7 +869,10 @@ fn convert_v2_row(
         .map(|p| p.iter().filter(|part| part["type"] == "tool").count() as u32)
         .unwrap_or(0);
     let text = match role {
-        "user" => data.get("text").and_then(|t| t.as_str()).map(str::to_string),
+        "user" => data
+            .get("text")
+            .and_then(|t| t.as_str())
+            .map(str::to_string),
         _ => parts.map(|p| {
             p.iter()
                 .filter(|part| part["type"] == "text")
@@ -891,13 +934,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(messages.len(), 4); // m1, m2 once, m3, m4; the idle row is skipped
-        let m4 = messages.iter().find(|m| m.model.as_deref() == Some("cat-jam-free")).unwrap();
+        let m4 = messages
+            .iter()
+            .find(|m| m.model.as_deref() == Some("cat-jam-free"))
+            .unwrap();
         assert_eq!(m4.stats.output_tokens, 3);
         assert_eq!(m4.stats.cache_read_tokens, 100);
         assert_eq!(m4.stats.tool_calls, 2);
         assert_eq!(m4.project_hash, "new");
         assert_eq!(m4.content.as_deref(), Some("done"));
-        let m1 = messages.iter().find(|m| m.model.as_deref() == Some("glm-4.6")).unwrap();
+        let m1 = messages
+            .iter()
+            .find(|m| m.model.as_deref() == Some("glm-4.6"))
+            .unwrap();
         assert_eq!(m1.project_hash, "old");
 
         // A turn streamed further: only that row is read again, and it replaces the old one.
@@ -913,7 +962,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(messages.len(), 4);
-        let m4 = messages.iter().find(|m| m.model.as_deref() == Some("cat-jam-free")).unwrap();
+        let m4 = messages
+            .iter()
+            .find(|m| m.model.as_deref() == Some("cat-jam-free"))
+            .unwrap();
         assert_eq!(m4.stats.output_tokens, 30);
     }
 
@@ -1053,10 +1105,14 @@ mod tests {
 
         // Mock file paths that match the glob patterns
         let message_file = DataSource {
-            path: std::path::PathBuf::from("/home/user/.local/share/opencode/storage/message/session123/msg_001.json"),
+            path: std::path::PathBuf::from(
+                "/home/user/.local/share/opencode/storage/message/session123/msg_001.json",
+            ),
         };
         let session_file = DataSource {
-            path: std::path::PathBuf::from("/home/user/.local/share/opencode/storage/session/session123/ses_001.json"),
+            path: std::path::PathBuf::from(
+                "/home/user/.local/share/opencode/storage/session/session123/ses_001.json",
+            ),
         };
         let sources = vec![message_file, session_file];
 
@@ -1077,8 +1133,18 @@ mod tests {
 
         assert_eq!(message_files.len(), 1);
         assert_eq!(session_files.len(), 1);
-        assert!(message_files[0].path.to_string_lossy().contains("msg_001.json"));
-        assert!(session_files[0].path.to_string_lossy().contains("ses_001.json"));
+        assert!(
+            message_files[0]
+                .path
+                .to_string_lossy()
+                .contains("msg_001.json")
+        );
+        assert!(
+            session_files[0]
+                .path
+                .to_string_lossy()
+                .contains("ses_001.json")
+        );
     }
 
     #[test]
@@ -1140,7 +1206,13 @@ mod tests {
         let kilo = OpenCodeAnalyzer::for_flavor(KILO_CLI);
         assert!(kilo.is_database_name("kilo.db"));
         assert!(kilo.is_database_name("kilo-canary.db"));
-        for other in ["kilo.db-wal", "kilo-.db", "kilo-canary.db-shm", "opencode.db", "kilocode.db"] {
+        for other in [
+            "kilo.db-wal",
+            "kilo-.db",
+            "kilo-canary.db-shm",
+            "opencode.db",
+            "kilocode.db",
+        ] {
             assert!(!kilo.is_database_name(other), "{other}");
         }
         assert!(OpenCodeAnalyzer::new().is_database_name("opencode.db"));
@@ -1152,10 +1224,15 @@ mod tests {
                 "modelID": "kilo-auto/free", "tokens": {"input": 5, "output": 2, "reasoning": 0}
             }))
             .unwrap();
-            analyzer.convert_opencode_message_data(data, "proj", None).unwrap()
+            analyzer
+                .convert_opencode_message_data(data, "proj", None)
+                .unwrap()
         };
         let (k, o) = (msg(&kilo), msg(&OpenCodeAnalyzer::new()));
         assert_eq!(k.application, Application::KiloCli);
-        assert_ne!(k.global_hash, o.global_hash, "the same message id in both tools stays two messages");
+        assert_ne!(
+            k.global_hash, o.global_hash,
+            "the same message id in both tools stays two messages"
+        );
     }
 }

@@ -49,7 +49,10 @@ fn plan_name(raw: &str) -> String {
         .map(|word| {
             let lower = word.to_lowercase();
             let mut chars = lower.chars();
-            chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+            chars
+                .next()
+                .map(|c| c.to_uppercase().chain(chars).collect())
+                .unwrap_or_default()
         })
         .collect::<Vec<String>>()
         .join(" ")
@@ -70,9 +73,13 @@ pub fn snapshot_from_usage(output: &str, captured_at: f64) -> Option<Value> {
         .map(|t| t.and_utc().timestamp() as f64);
     let plan = parts.next().map(plan_name).filter(|p| !p.is_empty());
     // `Credits (0.55 of 50 covered in plan)`
-    let credits = text.lines().find(|l| l.trim_start().starts_with("Credits"))?;
+    let credits = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("Credits"))?;
     let inside = credits.split('(').nth(1)?.split(')').next()?;
-    let mut numbers = inside.split_whitespace().filter_map(|w| w.replace(',', "").parse::<f64>().ok());
+    let mut numbers = inside
+        .split_whitespace()
+        .filter_map(|w| w.replace(',', "").parse::<f64>().ok());
     let used = numbers.next()?;
     let limit = numbers.next().filter(|l| *l > 0.0)?;
     let overages = text
@@ -92,9 +99,12 @@ pub fn snapshot_from_usage(output: &str, captured_at: f64) -> Option<Value> {
 
 fn kiro_cli() -> Option<std::path::PathBuf> {
     let home = std::env::home_dir()?;
-    [home.join(".local/bin/kiro-cli"), "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli".into()]
-        .into_iter()
-        .find(|p| p.is_file())
+    [
+        home.join(".local/bin/kiro-cli"),
+        "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli".into(),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
 }
 
 async fn poll_once(cli: &std::path::Path) -> Result<()> {
@@ -109,10 +119,16 @@ async fn poll_once(cli: &std::path::Path) -> Result<()> {
     .await
     .context("Kiro took too long to report usage")?
     .context("Could not run kiro-cli")?;
-    let text = String::from_utf8_lossy(&output.stdout).into_owned() + &String::from_utf8_lossy(&output.stderr);
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs_f64();
-    let snapshot = snapshot_from_usage(&text, now).context("Kiro's /usage had no credit line (signed out?)")?;
-    let dir = std::env::home_dir().context("No home directory")?.join(".config/splitrail/limits");
+    let text = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs_f64();
+    let snapshot = snapshot_from_usage(&text, now)
+        .context("Kiro's /usage had no credit line (signed out?)")?;
+    let dir = std::env::home_dir()
+        .context("No home directory")?
+        .join(".config/splitrail/limits");
     std::fs::create_dir_all(&dir)?;
     // Write-then-rename so the dashboard never reads a half-written file.
     let tmp = dir.join(format!(".{SNAPSHOT_LABEL}.json.tmp"));
@@ -160,7 +176,10 @@ mod tests {
     #[test]
     fn output_without_credits_gives_nothing() {
         assert!(snapshot_from_usage("Not logged in", 0.0).is_none());
-        assert!(snapshot_from_usage("Estimated Usage | resets on 2026-11-01 | KIRO PRO\n", 0.0).is_none());
+        assert!(
+            snapshot_from_usage("Estimated Usage | resets on 2026-11-01 | KIRO PRO\n", 0.0)
+                .is_none()
+        );
     }
 
     /// Asks the real Kiro: `cargo test kiro_limits_live -- --ignored --nocapture`.
@@ -169,6 +188,10 @@ mod tests {
     async fn kiro_limits_live_writes_the_snapshot() {
         poll_once(&kiro_cli().unwrap()).await.unwrap();
         let limits = crate::plan_limits::limits_for_analyzer("Kiro CLI").unwrap();
-        println!("monthly {:?} plan {:?}", limits.monthly, crate::plan_limits::login_for_analyzer("Kiro CLI"));
+        println!(
+            "monthly {:?} plan {:?}",
+            limits.monthly,
+            crate::plan_limits::login_for_analyzer("Kiro CLI")
+        );
     }
 }

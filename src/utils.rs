@@ -107,11 +107,7 @@ fn write_log_line(level: &str, message: &str) {
         let line = format!("[{timestamp}] {level}: {message}\n");
         let _ = path.parent().map(std::fs::create_dir_all);
         rotate_log_if_needed(&path);
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
             let _ = file.write_all(line.as_bytes());
         }
     }
@@ -500,10 +496,7 @@ pub fn fold_entry_into_day(day: &mut DailyStats, entry: &ConversationMessage) {
             day.ai_messages += 1;
             let slice = slice_mut(day, local_hour(&entry.date), model, &entry.project_hash);
             add_to_slice(slice, &entry.stats, entry.stats.cost, 1);
-            *day
-                .models
-                .entry(model.to_string())
-                .or_insert(0) += 1;
+            *day.models.entry(model.to_string()).or_insert(0) += 1;
 
             // Aggregate all stats
             day.stats.cost += entry.stats.cost;
@@ -559,8 +552,17 @@ pub fn fold_entry_into_day(day: &mut DailyStats, entry: &ConversationMessage) {
 }
 
 /// The day's slice for (`hour`, `model`, `project`), added if new.
-pub fn slice_mut<'a>(day: &'a mut DailyStats, hour: u8, model: &str, project: &str) -> &'a mut crate::types::Slice {
-    let index = match day.slices.iter().position(|s| s.hour == hour && s.model == model && s.project == project) {
+pub fn slice_mut<'a>(
+    day: &'a mut DailyStats,
+    hour: u8,
+    model: &str,
+    project: &str,
+) -> &'a mut crate::types::Slice {
+    let index = match day
+        .slices
+        .iter()
+        .position(|s| s.hour == hour && s.model == model && s.project == project)
+    {
         Some(index) => index,
         None => {
             day.slices.push(crate::types::Slice {

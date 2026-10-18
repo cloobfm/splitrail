@@ -95,8 +95,9 @@ fn analyzers_discover_linux_and_windows_layouts_from_macos() {
     }
     let patterns = ClineAnalyzer::new().get_data_glob_patterns();
     assert!(
-        patterns.iter().any(|p| p.starts_with(r"C:\Users\test\AppData\Roaming\")
-            && p.contains("globalStorage")),
+        patterns.iter().any(
+            |p| p.starts_with(r"C:\Users\test\AppData\Roaming\") && p.contains("globalStorage")
+        ),
         "an APPDATA pattern must be offered for Windows: {patterns:?}"
     );
 

@@ -93,10 +93,19 @@ pub fn window_spend(stats: &crate::types::AgenticCodingToolStats, start: DateTim
         .succ_opt()
         .and_then(|next| next.and_hms_opt(0, 0, 0))
         .and_then(|midnight| midnight.and_local_timezone(Local).earliest())
-        .map_or(1.0, |midnight| ((midnight - start_local).num_seconds() as f64 / 86_400.0).clamp(0.0, 1.0));
+        .map_or(1.0, |midnight| {
+            ((midnight - start_local).num_seconds() as f64 / 86_400.0).clamp(0.0, 1.0)
+        });
     let mut spend = Spend::default();
-    for (day, totals) in stats.daily_stats.range(first_day.format("%Y-%m-%d").to_string()..) {
-        let share = if *day == first_day.format("%Y-%m-%d").to_string() { first_share } else { 1.0 };
+    for (day, totals) in stats
+        .daily_stats
+        .range(first_day.format("%Y-%m-%d").to_string()..)
+    {
+        let share = if *day == first_day.format("%Y-%m-%d").to_string() {
+            first_share
+        } else {
+            1.0
+        };
         let t = &totals.stats;
         spend.add(&Spend {
             input: t.input_tokens as f64 * share,
@@ -115,14 +124,19 @@ pub fn recent_tks(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Ut
     let output: u64 = stats
         .messages
         .iter()
-        .filter(|m| m.role == crate::types::MessageRole::Assistant && m.date >= since && m.date <= now)
+        .filter(|m| {
+            m.role == crate::types::MessageRole::Assistant && m.date >= since && m.date <= now
+        })
         .map(|m| m.stats.output_tokens)
         .sum();
     output as f64 / 900.0
 }
 
 /// One tool's entry in the `status.json` shape, with each window's spend so far.
-pub fn tool_json(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc>) -> Option<Value> {
+pub fn tool_json(
+    stats: &crate::types::AgenticCodingToolStats,
+    now: DateTime<Utc>,
+) -> Option<Value> {
     let name = stats.analyzer_name.as_str();
     let limits = crate::plan_limits::limits_for_analyzer(name)?;
     let window = |key: &str, w: Option<crate::plan_limits::WindowStatus>| {
@@ -146,8 +160,11 @@ pub fn tool_json(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc
 }
 
 /// Models to express a Claude plan's remaining allowance in, as (label, model).
-const CLAUDE_MODELS: [(&str, &str); 3] =
-    [("Opus 5.5", "claude-opus-5-5"), ("Fable 5.1", "claude-fable-5-1"), ("Sonnet 5.5", "claude-sonnet-5-5")];
+const CLAUDE_MODELS: [(&str, &str); 3] = [
+    ("Opus 5.5", "claude-opus-5-5"),
+    ("Fable 5.1", "claude-fable-5-1"),
+    ("Sonnet 5.5", "claude-sonnet-5-5"),
+];
 
 /// `1.6M`, `650k`, `900`.
 pub fn human_tokens(tokens: f64) -> String {
@@ -228,7 +245,9 @@ impl Window {
     /// For a Claude plan: the remaining allowance as output tokens on each model, if this
     /// window's work (its input, cache and output mix) had run on that model.
     pub fn left_output_by_model(&self) -> Vec<(&'static str, f64)> {
-        let (Some(spend), Some(left)) = (self.spend, self.left_dollars()) else { return Vec::new() };
+        let (Some(spend), Some(left)) = (self.spend, self.left_dollars()) else {
+            return Vec::new();
+        };
         if !self.tool.contains("Claude") || spend.output <= 0.0 {
             return Vec::new();
         }
@@ -294,15 +313,29 @@ pub fn human_secs(secs: i64) -> String {
 /// Every plan window in a status payload, with its reset time and pace, as of `now`.
 pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
     let mut out = Vec::new();
-    for tool in status.get("tools").and_then(Value::as_array).into_iter().flatten() {
+    for tool in status
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("?");
-        let account = tool.get("account").and_then(Value::as_str).map(str::to_string);
+        let account = tool
+            .get("account")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let now_tks = tool.get("tks").and_then(Value::as_f64).unwrap_or(0.0);
         for key in ["five_hour", "seven_day", "monthly"] {
-            let Some(w) = tool.get("limits").and_then(|l| l.get(key)).filter(|w| !w.is_null()) else {
+            let Some(w) = tool
+                .get("limits")
+                .and_then(|l| l.get(key))
+                .filter(|w| !w.is_null())
+            else {
                 continue;
             };
-            let Some(used) = w.get("used").and_then(Value::as_f64) else { continue };
+            let Some(used) = w.get("used").and_then(Value::as_f64) else {
+                continue;
+            };
             let resets_in = w.get("resets_in").and_then(Value::as_i64);
             if resets_in.is_none() && used <= 0.0 {
                 continue; // An unused window with no reset says nothing.
@@ -344,13 +377,21 @@ fn merge_shared_accounts(windows: Vec<Window>) -> Vec<Window> {
     let mut tools: Vec<String> = windows.iter().map(|w| w.tool.clone()).collect();
     tools.dedup();
     let mut groups: Vec<Vec<String>> = Vec::new();
-    for tool in tools.iter().filter(|t| !groups.iter().flatten().any(|g| g == *t)).cloned().collect::<Vec<_>>() {
+    for tool in tools
+        .iter()
+        .filter(|t| !groups.iter().flatten().any(|g| g == *t))
+        .cloned()
+        .collect::<Vec<_>>()
+    {
         if groups.iter().flatten().any(|g| *g == tool) {
             continue;
         }
         let own: Vec<&Window> = windows.iter().filter(|w| w.tool == tool).collect();
         let mut group = vec![tool.clone()];
-        for other in tools.iter().filter(|t| **t != tool && !groups.iter().flatten().any(|g| g == *t)) {
+        for other in tools
+            .iter()
+            .filter(|t| **t != tool && !groups.iter().flatten().any(|g| g == *t))
+        {
             let theirs: Vec<&Window> = windows.iter().filter(|w| &w.tool == other).collect();
             if !own.is_empty()
                 && own.len() == theirs.len()
@@ -365,15 +406,28 @@ fn merge_shared_accounts(windows: Vec<Window>) -> Vec<Window> {
         .into_iter()
         .flat_map(|group| {
             // `Claude (main), dev-a`: the others by host when they are remote columns.
-            let others: Vec<&str> = group[1..].iter().map(|t| t.rsplit('@').next().unwrap_or(t)).collect();
-            let name = if others.is_empty() { group[0].clone() } else { format!("{}, {}", group[0], others.join(", ")) };
+            let others: Vec<&str> = group[1..]
+                .iter()
+                .map(|t| t.rsplit('@').next().unwrap_or(t))
+                .collect();
+            let name = if others.is_empty() {
+                group[0].clone()
+            } else {
+                format!("{}, {}", group[0], others.join(", "))
+            };
             // The account's use is every column's: sum their spend and rate.
             windows
                 .iter()
                 .filter(|w| w.tool == group[0])
                 .map(|w| {
-                    let mut merged = Window { tool: name.clone(), ..w.clone() };
-                    for other in windows.iter().filter(|o| group[1..].contains(&o.tool) && o.window == w.window) {
+                    let mut merged = Window {
+                        tool: name.clone(),
+                        ..w.clone()
+                    };
+                    for other in windows
+                        .iter()
+                        .filter(|o| group[1..].contains(&o.tool) && o.window == w.window)
+                    {
                         merged.now_tks += other.now_tks;
                         if let Some(more) = other.spend {
                             let mut sum = merged.spend.unwrap_or_default();
@@ -408,11 +462,16 @@ pub fn plan_rows(windows: &[Window]) -> Vec<PlanRow> {
         .into_iter()
         .filter_map(|tool| {
             let own: Vec<&Window> = windows.iter().filter(|w| w.tool == tool).collect();
-            let plan = own
+            let plan = own.iter().max_by(|a, b| {
+                window_secs_label(a.window).total_cmp(&window_secs_label(b.window))
+            })?;
+            let five_hour = own
                 .iter()
-                .max_by(|a, b| window_secs_label(a.window).total_cmp(&window_secs_label(b.window)))?;
-            let five_hour = own.iter().find(|w| w.window == "5h" && w.window != plan.window);
-            Some(PlanRow { plan: (*plan).clone(), five_hour: five_hour.map(|w| (*w).clone()) })
+                .find(|w| w.window == "5h" && w.window != plan.window);
+            Some(PlanRow {
+                plan: (*plan).clone(),
+                five_hour: five_hour.map(|w| (*w).clone()),
+            })
         })
         .collect();
     rows.sort_by_key(|r| r.plan.resets_in_secs.unwrap_or(i64::MAX));
@@ -423,7 +482,12 @@ pub fn plan_rows(windows: &[Window]) -> Vec<PlanRow> {
 pub fn plans_by_waste(windows: &[Window]) -> Vec<PlanRow> {
     let picks = where_to_spend(windows);
     let mut rows = plan_rows(windows);
-    rows.sort_by_key(|r| picks.iter().position(|p| p.tool == r.plan.tool).unwrap_or(usize::MAX));
+    rows.sort_by_key(|r| {
+        picks
+            .iter()
+            .position(|p| p.tool == r.plan.tool)
+            .unwrap_or(usize::MAX)
+    });
     rows
 }
 
@@ -450,7 +514,9 @@ impl Pick {
             "EASE OFF"
         } else if w.projected.is_none() {
             "USE"
-        } else if w.expiring() >= 25.0 || (w.expiring() >= 5.0 && w.resets_in_secs.is_some_and(|s| s < 86_400)) {
+        } else if w.expiring() >= 25.0
+            || (w.expiring() >= 5.0 && w.resets_in_secs.is_some_and(|s| s < 86_400))
+        {
             // A lot unused, or some with under a day to use it.
             "USE NOW"
         } else if w.expiring() >= 5.0 {
@@ -462,7 +528,9 @@ impl Pick {
 
     /// Why, as a short phrase.
     pub fn why(&self) -> String {
-        let Some(w) = &self.window else { return "no data".into() };
+        let Some(w) = &self.window else {
+            return "no data".into();
+        };
         let secs = |s: Option<i64>| s.map(human_secs).unwrap_or_else(|| "?".into());
         if !self.available {
             return format!("{} full · back in {}", w.window, secs(w.resets_in_secs));
@@ -569,7 +637,10 @@ pub fn age_secs(status: &Value, now: DateTime<Utc>) -> f64 {
 pub fn read_status() -> anyhow::Result<Value> {
     let path = crate::status_file::path().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
     let text = std::fs::read_to_string(&path).map_err(|_| {
-        anyhow::anyhow!("{} not found: the splitrail dashboard writes it while it runs", path.display())
+        anyhow::anyhow!(
+            "{} not found: the splitrail dashboard writes it while it runs",
+            path.display()
+        )
     })?;
     Ok(serde_json::from_str(&text)?)
 }
@@ -578,7 +649,10 @@ pub fn read_status() -> anyhow::Result<Value> {
 fn freshness(status: &Value, now: DateTime<Utc>) -> Value {
     let age = age_secs(status, now);
     if age > 120.0 {
-        json!(format!("status is {} old; the dashboard may have stopped", human_secs(age as i64)))
+        json!(format!(
+            "status is {} old; the dashboard may have stopped",
+            human_secs(age as i64)
+        ))
     } else {
         Value::Null
     }
@@ -653,13 +727,29 @@ mod tests {
     fn pace_projects_the_window_to_its_reset() {
         let now = DateTime::from_timestamp(1000, 0).unwrap();
         let all = windows(&status(), now);
-        let week = all.iter().find(|w| w.tool == "Claude (v)" && w.window == "week").unwrap();
+        let week = all
+            .iter()
+            .find(|w| w.tool == "Claude (v)" && w.window == "week")
+            .unwrap();
         assert!((week.projected.unwrap() - 40.0 * 7.0 / 6.0).abs() < 1e-9);
         assert_eq!(week.resets_at, Some(now + Duration::days(1)));
-        assert!(all.iter().all(|w| w.tool != "Ollama"), "no limits, no windows");
-        assert!(all.iter().all(|w| w.tool != "Droid CLI"), "empty window with no reset");
-        assert!(all.iter().any(|w| w.tool == "Claude (main), dev-b"), "{all:?}");
-        assert_eq!(all.iter().filter(|w| w.tool.contains("dev-b")).count(), 1, "one row for the shared account");
+        assert!(
+            all.iter().all(|w| w.tool != "Ollama"),
+            "no limits, no windows"
+        );
+        assert!(
+            all.iter().all(|w| w.tool != "Droid CLI"),
+            "empty window with no reset"
+        );
+        assert!(
+            all.iter().any(|w| w.tool == "Claude (main), dev-b"),
+            "{all:?}"
+        );
+        assert_eq!(
+            all.iter().filter(|w| w.tool.contains("dev-b")).count(),
+            1,
+            "one row for the shared account"
+        );
     }
 
     #[test]
@@ -668,10 +758,19 @@ mod tests {
         let picks = where_to_spend(&windows(&status(), now));
         assert_eq!(picks[0].tool, "Claude (v)", "{picks:?}");
         let last = picks.last().unwrap();
-        assert_eq!((last.tool.as_str(), last.available), ("Claude@dev-a", false));
+        assert_eq!(
+            (last.tool.as_str(), last.available),
+            ("Claude@dev-a", false)
+        );
         assert!(last.reason.contains("back in 30m"));
-        let main = picks.iter().find(|p| p.tool == "Claude (main), dev-b").unwrap();
-        assert!(main.score < picks[0].score, "on pace to use its week: little expires");
+        let main = picks
+            .iter()
+            .find(|p| p.tool == "Claude (main), dev-b")
+            .unwrap();
+        assert!(
+            main.score < picks[0].score,
+            "on pace to use its week: little expires"
+        );
     }
 
     #[test]
@@ -684,24 +783,42 @@ mod tests {
         // Only a 5-hour window: that is the plan.
         let dev_a = rows.iter().find(|r| r.plan.tool == "Claude@dev-a").unwrap();
         assert_eq!((dev_a.plan.window, dev_a.five_hour.is_none()), ("5h", true));
-        assert_eq!(rows.iter().filter(|r| r.plan.tool == "Claude (v)").count(), 1);
+        assert_eq!(
+            rows.iter().filter(|r| r.plan.tool == "Claude (v)").count(),
+            1
+        );
     }
 
     #[test]
     fn measured_spend_turns_the_remaining_share_into_tokens_and_a_pace() {
         // 70% of the week cost $381 for 3.77M output tokens; 9.2 hours left.
         let w = Window {
-            tool: "Claude (main)".into(), account: None, window: "week", used: 70.0, resets_at: None,
-            resets_in_secs: Some(33_120), projected: Some(74.0), now_tks: 140.0,
-            spend: Some(Spend { input: 9_764.0, output: 3_770_000.0, cache_write: 17_259_201.0,
-                                cache_read: 1_094_254_105.0, cost: 381.0 }),
+            tool: "Claude (main)".into(),
+            account: None,
+            window: "week",
+            used: 70.0,
+            resets_at: None,
+            resets_in_secs: Some(33_120),
+            projected: Some(74.0),
+            now_tks: 140.0,
+            spend: Some(Spend {
+                input: 9_764.0,
+                output: 3_770_000.0,
+                cache_write: 17_259_201.0,
+                cache_read: 1_094_254_105.0,
+                cost: 381.0,
+            }),
         };
         assert!((w.dollars_per_percent().unwrap() - 381.0 / 70.0).abs() < 1e-9);
         assert!((w.left_dollars().unwrap() - 381.0 * 30.0 / 70.0).abs() < 1e-6);
         let left = w.left_output().unwrap();
         assert!((left - 3_770_000.0 * 30.0 / 70.0).abs() < 1.0, "{left}");
         assert!((w.need_tks().unwrap() - left / 33_120.0).abs() < 1e-9);
-        assert_eq!(w.locked_out_secs(), None, "on pace for 74%: it does not run out");
+        assert_eq!(
+            w.locked_out_secs(),
+            None,
+            "on pace for 74%: it does not run out"
+        );
     }
 
     #[test]
@@ -716,8 +833,15 @@ mod tests {
     fn a_fast_pace_says_when_it_runs_out() {
         // 70% of a week used in 3.5 days: 20%/day, so the last 30% lasts 1.5 days.
         let w = Window {
-            tool: "t".into(), account: None, window: "week", used: 70.0, resets_at: None,
-            resets_in_secs: Some(302_400), projected: Some(140.0), spend: None, now_tks: 0.0,
+            tool: "t".into(),
+            account: None,
+            window: "week",
+            used: 70.0,
+            resets_at: None,
+            resets_in_secs: Some(302_400),
+            projected: Some(140.0),
+            spend: None,
+            now_tks: 0.0,
         };
         assert_eq!(w.runs_out_in_secs(), Some(129_600));
     }

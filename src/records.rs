@@ -67,7 +67,9 @@ impl Kind {
             Kind::DayCost => format!("${value:.0}"),
             Kind::GoalStreak => format!("{value:.0} d"),
             Kind::ParallelSessions => format!("{value:.0}"),
-            Kind::DayOutput | Kind::WeekOutput | Kind::MonthOutput => crate::advisor::human_tokens(value),
+            Kind::DayOutput | Kind::WeekOutput | Kind::MonthOutput => {
+                crate::advisor::human_tokens(value)
+            }
         }
     }
 }
@@ -140,9 +142,18 @@ pub fn compute(stats: &[&AgenticCodingToolStats], goal_tks: f64, now: DateTime<U
         *weeks.entry(week_label(date)).or_default() += output;
         *months.entry(date.format("%B %Y").to_string()).or_default() += output;
         if output >= goal_tks * 86_400.0 {
-            run = if prev.is_some_and(|p| date - p == chrono::Duration::days(1)) { run + 1 } else { 1 };
+            run = if prev.is_some_and(|p| date - p == chrono::Duration::days(1)) {
+                run + 1
+            } else {
+                1
+            };
             prev = Some(date);
-            set(&mut board, Kind::GoalStreak, run as f64, format!("to {}", date.format("%b %-d %Y")));
+            set(
+                &mut board,
+                Kind::GoalStreak,
+                run as f64,
+                format!("to {}", date.format("%b %-d %Y")),
+            );
         } else {
             run = 0;
             prev = None;
@@ -165,7 +176,11 @@ pub fn compute(stats: &[&AgenticCodingToolStats], goal_tks: f64, now: DateTime<U
     let mut points: Vec<(i64, f64)> = Vec::new();
     let mut slots: HashMap<i64, HashSet<(usize, &str)>> = HashMap::new();
     for (i, tool) in stats.iter().enumerate() {
-        for m in tool.messages.iter().filter(|m| m.role == MessageRole::Assistant) {
+        for m in tool
+            .messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Assistant)
+        {
             let at = m.date.timestamp();
             if m.stats.output_tokens > 0 {
                 points.push((at, m.stats.output_tokens as f64));
@@ -173,14 +188,21 @@ pub fn compute(stats: &[&AgenticCodingToolStats], goal_tks: f64, now: DateTime<U
             // Each Ollama request is its own "conversation" (a decision-model eval fires hundreds),
             // so it is not a session running alongside the others.
             if m.application != crate::types::Application::Ollama {
-                slots.entry(at.div_euclid(PARALLEL_SLOT_SECS)).or_default().insert((i, m.conversation_hash.as_str()));
+                slots
+                    .entry(at.div_euclid(PARALLEL_SLOT_SECS))
+                    .or_default()
+                    .insert((i, m.conversation_hash.as_str()));
             }
         }
     }
     points.sort_by_key(|p| p.0);
     let time = |at: i64| {
         DateTime::from_timestamp(at, 0)
-            .map(|t| t.with_timezone(&Local).format("%a %b %-d %Y %H:%M").to_string())
+            .map(|t| {
+                t.with_timezone(&Local)
+                    .format("%a %b %-d %Y %H:%M")
+                    .to_string()
+            })
             .unwrap_or_default()
     };
     for (kind, window) in [(Kind::PeakTks15m, 15 * 60), (Kind::PeakTks1h, 3600)] {
@@ -188,10 +210,18 @@ pub fn compute(stats: &[&AgenticCodingToolStats], goal_tks: f64, now: DateTime<U
             set(&mut board, kind, rate, time(at));
         }
         let since = now.timestamp() - window;
-        let recent: f64 = points.iter().rev().take_while(|p| p.0 > since).map(|p| p.1).sum();
+        let recent: f64 = points
+            .iter()
+            .rev()
+            .take_while(|p| p.0 > since)
+            .map(|p| p.1)
+            .sum();
         board.now.insert(kind, recent / window as f64);
     }
-    if let Some((&slot, sessions)) = slots.iter().max_by_key(|(slot, s)| (s.len(), std::cmp::Reverse(**slot))) {
+    if let Some((&slot, sessions)) = slots
+        .iter()
+        .max_by_key(|(slot, s)| (s.len(), std::cmp::Reverse(**slot)))
+    {
         // Which tools they were, busiest first: "Sat Oct 17 2026 08:05 · Claude (main) 9, Codex CLI 3".
         let mut by_tool: BTreeMap<&str, usize> = BTreeMap::new();
         for (i, _) in sessions {
@@ -199,9 +229,18 @@ pub fn compute(stats: &[&AgenticCodingToolStats], goal_tks: f64, now: DateTime<U
         }
         let mut by_tool: Vec<_> = by_tool.into_iter().collect();
         by_tool.sort_by_key(|(name, n)| (std::cmp::Reverse(*n), *name));
-        let tools: Vec<String> = by_tool.iter().take(3).map(|(name, n)| format!("{name} {n}")).collect();
+        let tools: Vec<String> = by_tool
+            .iter()
+            .take(3)
+            .map(|(name, n)| format!("{name} {n}"))
+            .collect();
         let when = format!("{} · {}", time(slot * PARALLEL_SLOT_SECS), tools.join(", "));
-        set(&mut board, Kind::ParallelSessions, sessions.len() as f64, when);
+        set(
+            &mut board,
+            Kind::ParallelSessions,
+            sessions.len() as f64,
+            when,
+        );
     }
     let slot_now = now.timestamp().div_euclid(PARALLEL_SLOT_SECS);
     let parallel_now = [slot_now, slot_now - 1]
@@ -218,13 +257,21 @@ pub fn compute(stats: &[&AgenticCodingToolStats], goal_tks: f64, now: DateTime<U
     let this_week = week_label(today);
     board.now.insert(
         Kind::WeekOutput,
-        days.iter().filter(|(d, _)| week_label(**d) == this_week).map(|(_, v)| v.0).sum(),
+        days.iter()
+            .filter(|(d, _)| week_label(**d) == this_week)
+            .map(|(_, v)| v.0)
+            .sum(),
     );
     board.now.insert(
         Kind::MonthOutput,
-        days.iter().filter(|(d, _)| d.year() == today.year() && d.month() == today.month()).map(|(_, v)| v.0).sum(),
+        days.iter()
+            .filter(|(d, _)| d.year() == today.year() && d.month() == today.month())
+            .map(|(_, v)| v.0)
+            .sum(),
     );
-    board.now.insert(Kind::ParallelSessions, parallel_now as f64);
+    board
+        .now
+        .insert(Kind::ParallelSessions, parallel_now as f64);
     board
 }
 
@@ -265,7 +312,10 @@ fn parse_saved(text: &str) -> Option<BTreeMap<Kind, Record>> {
     Some(
         raw.into_iter()
             .filter_map(|(kind, record)| {
-                Some((serde_json::from_value(serde_json::Value::String(kind)).ok()?, serde_json::from_value(record).ok()?))
+                Some((
+                    serde_json::from_value(serde_json::Value::String(kind)).ok()?,
+                    serde_json::from_value(record).ok()?,
+                ))
             })
             .collect(),
     )
@@ -339,9 +389,8 @@ impl Notifier for NullNotifier {
 
 /// Whether a command exists on `PATH`, for deciding if `notify-send` is available.
 fn on_path(command: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(command).is_file()))
 }
 
 fn platform_notifier() -> Box<dyn Notifier> {
@@ -398,8 +447,8 @@ mod notifier_tests {
 
     #[test]
     fn linux_posts_through_notify_send_when_installed() {
-        let (program, args) = LinuxNotifier { installed: true }
-            .must_command("🏆 New record", "Cost: $1 (was $2)");
+        let (program, args) =
+            LinuxNotifier { installed: true }.must_command("🏆 New record", "Cost: $1 (was $2)");
         assert_eq!(program, "notify-send");
         assert!(args.contains(&"--urgency=low".to_string()));
         assert_eq!(args[args.len() - 2], "🏆 New record", "title before body");
@@ -451,7 +500,11 @@ static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 pub fn board(stats: &[&AgenticCodingToolStats], goal_tks: f64) -> Board {
     let key = (
         stats.iter().map(|s| s.messages.len()).sum(),
-        stats.iter().flat_map(|s| s.daily_stats.values()).map(|d| d.stats.output_tokens).sum(),
+        stats
+            .iter()
+            .flat_map(|s| s.daily_stats.values())
+            .map(|d| d.stats.output_tokens)
+            .sum(),
     );
     observe_plans(stats);
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -476,7 +529,11 @@ pub fn board(stats: &[&AgenticCodingToolStats], goal_tks: f64) -> Board {
         }
     }
     board.best = merged;
-    *cache = Some(Cache { at: Instant::now(), key, board: board.clone() });
+    *cache = Some(Cache {
+        at: Instant::now(),
+        key,
+        board: board.clone(),
+    });
     board
 }
 
@@ -517,13 +574,16 @@ fn load_plans() -> Vec<PlanWindow> {
 /// `seen` (account, tool, window, used, resets_at) folded into `plans`: the peak per window
 /// kept, a new window added, old ones trimmed. Returns the windows that have now reset and were
 /// not announced yet (marking them announced).
-pub fn fold_plans(plans: &mut Vec<PlanWindow>, seen: &[(String, String, &str, f64, i64)], now: i64) -> Vec<PlanWindow> {
+pub fn fold_plans(
+    plans: &mut Vec<PlanWindow>,
+    seen: &[(String, String, &str, f64, i64)],
+    now: i64,
+) -> Vec<PlanWindow> {
     let round = |t: i64| (t + RESET_ROUNDING_SECS / 2).div_euclid(RESET_ROUNDING_SECS);
     for (account, tool, window, used, resets_at) in seen {
-        match plans
-            .iter_mut()
-            .find(|p| &p.account == account && p.window == *window && round(p.resets_at) == round(*resets_at))
-        {
+        match plans.iter_mut().find(|p| {
+            &p.account == account && p.window == *window && round(p.resets_at) == round(*resets_at)
+        }) {
             Some(p) => p.peak = p.peak.max(*used),
             None => plans.push(PlanWindow {
                 account: account.clone(),
@@ -535,17 +595,27 @@ pub fn fold_plans(plans: &mut Vec<PlanWindow>, seen: &[(String, String, &str, f6
             }),
         }
     }
-    plans.sort_by(|a, b| (&a.account, &a.window, a.resets_at).cmp(&(&b.account, &b.window, b.resets_at)));
+    plans.sort_by(|a, b| {
+        (&a.account, &a.window, a.resets_at).cmp(&(&b.account, &b.window, b.resets_at))
+    });
     let mut kept: Vec<PlanWindow> = Vec::new();
     for p in plans.drain(..).rev() {
-        if kept.iter().filter(|k| k.account == p.account && k.window == p.window).count() < PLAN_HISTORY {
+        if kept
+            .iter()
+            .filter(|k| k.account == p.account && k.window == p.window)
+            .count()
+            < PLAN_HISTORY
+        {
             kept.push(p);
         }
     }
     kept.reverse();
     *plans = kept;
     let mut closed = Vec::new();
-    for p in plans.iter_mut().filter(|p| p.resets_at <= now && !p.announced) {
+    for p in plans
+        .iter_mut()
+        .filter(|p| p.resets_at <= now && !p.announced)
+    {
         p.announced = true;
         closed.push(p.clone());
     }
@@ -567,14 +637,22 @@ fn observe_plans(stats: &[&AgenticCodingToolStats]) {
     let now = Utc::now().timestamp();
     let mut seen = Vec::new();
     for tool in stats {
-        let Some(limits) = crate::plan_limits::limits_for_analyzer(&tool.analyzer_name) else { continue };
+        let Some(limits) = crate::plan_limits::limits_for_analyzer(&tool.analyzer_name) else {
+            continue;
+        };
         let account = crate::plan_limits::account_for_analyzer(&tool.analyzer_name)
             .unwrap_or_else(|| tool.analyzer_name.clone());
         for (window, status) in [("week", limits.seven_day), ("month", limits.monthly)] {
             if let Some(w) = status
                 && let Some(secs) = w.resets_in_secs.filter(|s| *s > 0)
             {
-                seen.push((account.clone(), tool.analyzer_name.clone(), window, w.used_percentage, now + secs));
+                seen.push((
+                    account.clone(),
+                    tool.analyzer_name.clone(),
+                    window,
+                    w.used_percentage,
+                    now + secs,
+                ));
             }
         }
     }
@@ -598,7 +676,11 @@ fn observe_plans(stats: &[&AgenticCodingToolStats]) {
         for p in closed {
             notify_text(
                 &format!("📅 {} {} closed", p.tool, p.window),
-                &format!("{:.0}% used, {:.0}% left unused", p.peak, (100.0 - p.peak).max(0.0)),
+                &format!(
+                    "{:.0}% used, {:.0}% left unused",
+                    p.peak,
+                    (100.0 - p.peak).max(0.0)
+                ),
             );
         }
     }
@@ -611,7 +693,11 @@ pub fn plan_windows() -> Vec<PlanWindow> {
 
 /// The last board `board` worked out, if any, without recomputing.
 pub fn cached() -> Option<Board> {
-    CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|c| c.board.clone())
+    CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|c| c.board.clone())
 }
 
 #[cfg(test)]
@@ -626,7 +712,10 @@ mod tests {
                 "peak_tks_1h": {"value": 640.0, "when": "Sat Oct 17 2026 08:57"}}"#,
         )
         .unwrap();
-        assert_eq!(saved.keys().copied().collect::<Vec<_>>(), [Kind::PeakTks1h, Kind::DayOutput]);
+        assert_eq!(
+            saved.keys().copied().collect::<Vec<_>>(),
+            [Kind::PeakTks1h, Kind::DayOutput]
+        );
     }
     use crate::types::{Application, ConversationMessage, DailyStats, Stats};
 
@@ -639,13 +728,19 @@ mod tests {
             local_hash: None,
             global_hash: format!("{conversation}-{at}"),
             model: Some("m".into()),
-            stats: Stats { output_tokens: output, ..Default::default() },
+            stats: Stats {
+                output_tokens: output,
+                ..Default::default()
+            },
             role: MessageRole::Assistant,
             content: None,
         }
     }
 
-    fn tool(days: &[(&str, u64, f64)], messages: Vec<ConversationMessage>) -> AgenticCodingToolStats {
+    fn tool(
+        days: &[(&str, u64, f64)],
+        messages: Vec<ConversationMessage>,
+    ) -> AgenticCodingToolStats {
         let mut daily_stats = BTreeMap::new();
         for &(date, output, cost) in days {
             let mut day = DailyStats::default();
@@ -653,12 +748,23 @@ mod tests {
             day.stats.cost = cost;
             daily_stats.insert(date.to_string(), day);
         }
-        AgenticCodingToolStats { daily_stats, num_conversations: 1, messages, analyzer_name: "t".into() }
+        AgenticCodingToolStats {
+            daily_stats,
+            num_conversations: 1,
+            messages,
+            analyzer_name: "t".into(),
+        }
     }
 
     #[test]
     fn peak_rate_finds_the_busiest_window() {
-        let points = [(0, 900.0), (100, 900.0), (2000, 9000.0), (2500, 4500.0), (5000, 1.0)];
+        let points = [
+            (0, 900.0),
+            (100, 900.0),
+            (2000, 9000.0),
+            (2500, 4500.0),
+            (5000, 1.0),
+        ];
         let (rate, at) = peak_rate(&points, 900).unwrap();
         assert_eq!((rate, at), (15.0, 2500)); // 13,500 over 15 minutes.
     }
@@ -666,33 +772,80 @@ mod tests {
     #[test]
     fn days_weeks_months_and_streaks_add_up_across_tools() {
         let goal_day: f64 = 150.0 * 86_400.0;
-        let a = tool(&[("2026-10-12", goal_day as u64, 10.0), ("2026-10-13", goal_day as u64, 5.0)], vec![]);
-        let b = tool(&[("2026-10-13", 1_000, 50.0), ("2026-10-14", 1, 1.0), ("2026-10-15", goal_day as u64, 1.0)], vec![]);
-        let now = Local.with_ymd_and_hms(2026, 10, 16, 12, 0, 0).unwrap().with_timezone(&Utc);
+        let a = tool(
+            &[
+                ("2026-10-12", goal_day as u64, 10.0),
+                ("2026-10-13", goal_day as u64, 5.0),
+            ],
+            vec![],
+        );
+        let b = tool(
+            &[
+                ("2026-10-13", 1_000, 50.0),
+                ("2026-10-14", 1, 1.0),
+                ("2026-10-15", goal_day as u64, 1.0),
+            ],
+            vec![],
+        );
+        let now = Local
+            .with_ymd_and_hms(2026, 10, 16, 12, 0, 0)
+            .unwrap()
+            .with_timezone(&Utc);
         let board = compute(&[&a, &b], 150.0, now);
         assert_eq!(board.best[&Kind::DayCost].value, 55.0);
         assert!(board.best[&Kind::DayCost].when.contains("Oct 13"));
-        assert_eq!(board.best[&Kind::GoalStreak].value, 2.0, "Oct 12-13; Oct 14 broke it");
-        assert_eq!(board.now[&Kind::GoalStreak], 1.0, "Oct 15 reaches yesterday");
-        assert_eq!(board.best[&Kind::WeekOutput].value, 3.0 * goal_day.floor() + 1_001.0);
+        assert_eq!(
+            board.best[&Kind::GoalStreak].value,
+            2.0,
+            "Oct 12-13; Oct 14 broke it"
+        );
+        assert_eq!(
+            board.now[&Kind::GoalStreak],
+            1.0,
+            "Oct 15 reaches yesterday"
+        );
+        assert_eq!(
+            board.best[&Kind::WeekOutput].value,
+            3.0 * goal_day.floor() + 1_001.0
+        );
         assert_eq!(board.best[&Kind::WeekOutput].when, "week of Oct 12 2026");
     }
 
     #[test]
     fn parallel_sessions_count_distinct_conversations_in_one_slot() {
-        let t = tool(&[], vec![reply("a", 600, 1), reply("b", 650, 1), reply("c", 899, 1), reply("a", 700, 1), reply("d", 1300, 1)]);
+        let t = tool(
+            &[],
+            vec![
+                reply("a", 600, 1),
+                reply("b", 650, 1),
+                reply("c", 899, 1),
+                reply("a", 700, 1),
+                reply("d", 1300, 1),
+            ],
+        );
         let board = compute(&[&t], 150.0, DateTime::from_timestamp(10_000, 0).unwrap());
         assert_eq!(board.best[&Kind::ParallelSessions].value, 3.0);
     }
 
     #[test]
     fn saved_records_only_go_up_and_a_first_record_is_not_beaten() {
-        let rec = |value: f64| Record { value, when: "x".into() };
+        let rec = |value: f64| Record {
+            value,
+            when: "x".into(),
+        };
         let saved = BTreeMap::from([(Kind::DayOutput, rec(10.0)), (Kind::DayCost, rec(99.0))]);
-        let computed = BTreeMap::from([(Kind::DayOutput, rec(12.0)), (Kind::DayCost, rec(50.0)), (Kind::GoalStreak, rec(3.0))]);
+        let computed = BTreeMap::from([
+            (Kind::DayOutput, rec(12.0)),
+            (Kind::DayCost, rec(50.0)),
+            (Kind::GoalStreak, rec(3.0)),
+        ]);
         let (merged, beaten) = ratchet(&saved, &computed);
         assert_eq!(merged[&Kind::DayOutput].value, 12.0);
-        assert_eq!(merged[&Kind::DayCost].value, 99.0, "pruned transcripts never lower a record");
+        assert_eq!(
+            merged[&Kind::DayCost].value,
+            99.0,
+            "pruned transcripts never lower a record"
+        );
         assert_eq!(merged[&Kind::GoalStreak].value, 3.0);
         assert_eq!(beaten.len(), 1);
         assert_eq!(beaten[0].0, Kind::DayOutput);
@@ -701,7 +854,15 @@ mod tests {
     #[test]
     fn a_plan_window_keeps_its_peak_and_is_announced_once_after_it_resets() {
         let mut plans = Vec::new();
-        let seen = |used: f64, resets_at: i64| vec![("me@x.com".to_string(), "Claude (main)".to_string(), "week", used, resets_at)];
+        let seen = |used: f64, resets_at: i64| {
+            vec![(
+                "me@x.com".to_string(),
+                "Claude (main)".to_string(),
+                "week",
+                used,
+                resets_at,
+            )]
+        };
         assert!(fold_plans(&mut plans, &seen(90.0, 10_000), 1_000).is_empty());
         // An idle session re-reports an older, lower figure with a reset a few seconds off.
         fold_plans(&mut plans, &seen(93.0, 10_005), 2_000);

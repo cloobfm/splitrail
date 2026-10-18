@@ -251,7 +251,7 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                             calculate_total_cost(
                                 model,
                                 delta_in,
-                                api_req.tokens_out, // per-request, use raw
+                                api_req.tokens_out,   // per-request, use raw
                                 api_req.cache_writes, // per-request, use raw
                                 delta_cache_reads,
                             )

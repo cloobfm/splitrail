@@ -144,7 +144,14 @@ fn durations() -> serde_json::Map<String, serde_json::Value> {
 /// publisher (the first one in a round also builds the Linux binary).
 fn duration_key(key: &str) -> String {
     if key == LOCAL {
-        format!("local-{}", if cfg!(debug_assertions) { "debug" } else { "release" })
+        format!(
+            "local-{}",
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+        )
     } else {
         format!("publisher-{key}")
     }
@@ -163,7 +170,12 @@ pub const LOCAL: &str = "";
 static PROGRESS: Mutex<Vec<(String, Progress)>> = Mutex::new(Vec::new());
 
 pub fn progress(key: &str) -> Option<Progress> {
-    PROGRESS.lock().ok()?.iter().find(|(k, _)| k == key).map(|(_, p)| *p)
+    PROGRESS
+        .lock()
+        .ok()?
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, p)| *p)
 }
 
 fn set_progress(key: &str, change: impl FnOnce(&mut Progress)) {
@@ -172,7 +184,12 @@ fn set_progress(key: &str, change: impl FnOnce(&mut Progress)) {
             change(p);
         } else {
             let expected = durations().get(&duration_key(key)).and_then(|v| v.as_u64());
-            let mut p = Progress { started: std::time::Instant::now(), done: 0, total: 0, expected };
+            let mut p = Progress {
+                started: std::time::Instant::now(),
+                done: 0,
+                total: 0,
+                expected,
+            };
             change(&mut p);
             all.push((key.to_string(), p));
         }
@@ -294,7 +311,11 @@ fn start_publishers() {
     if targets.is_empty() {
         return;
     }
-    let config = crate::config::Config::load().ok().flatten().unwrap_or_default().mqtt;
+    let config = crate::config::Config::load()
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .mqtt;
     let (Some(broker), Some(user)) = (config.host, config.username) else {
         crate::utils::log_error("Update: no MQTT broker configured to install publishers against");
         return;
@@ -304,18 +325,36 @@ fn start_publishers() {
     }
     std::thread::spawn(move || {
         let log = log_path().and_then(|p| {
-            std::fs::OpenOptions::new().create(true).append(true).open(p).ok()
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .ok()
         });
         for target in targets {
-            let mut command = std::process::Command::new(source_dir().join("scripts/install_mqtt_publisher.sh"));
-            command.args([&target.host, &broker, &user]).current_dir(source_dir());
-            let ok = run_tracked(command, log.as_ref().and_then(|l| l.try_clone().ok()), &target.slug);
+            let mut command =
+                std::process::Command::new(source_dir().join("scripts/install_mqtt_publisher.sh"));
+            command
+                .args([&target.host, &broker, &user])
+                .current_dir(source_dir());
+            let ok = run_tracked(
+                command,
+                log.as_ref().and_then(|l| l.try_clone().ok()),
+                &target.slug,
+            );
             if !ok {
-                crate::utils::log_error(format!("Update: installing on {} failed; see ~/.config/splitrail/update.log", target.host));
+                crate::utils::log_error(format!(
+                    "Update: installing on {} failed; see ~/.config/splitrail/update.log",
+                    target.host
+                ));
             }
             crate::rollup::set_publisher_update(
                 &target.slug,
-                if ok { crate::rollup::PublisherUpdate::Idle } else { crate::rollup::PublisherUpdate::Failed },
+                if ok {
+                    crate::rollup::PublisherUpdate::Idle
+                } else {
+                    crate::rollup::PublisherUpdate::Failed
+                },
             );
         }
     });
@@ -324,7 +363,11 @@ fn start_publishers() {
 /// The path this process was started from, which a build will have replaced.
 fn new_binary_path() -> std::path::PathBuf {
     std::env::current_exe().unwrap_or_else(|_| {
-        let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+        let profile = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        };
         source_dir().join("target").join(profile).join(BINARY)
     })
 }
@@ -365,20 +408,49 @@ mod tests {
 
     #[test]
     fn reads_cargo_progress_lines() {
-        assert_eq!(parse_progress("    Building [=====>      ] 120/300: serde, tokio"), Some((120, 300)));
-        assert_eq!(parse_progress("    Building [             ] 0/2: itoa"), Some((0, 2)));
+        assert_eq!(
+            parse_progress("    Building [=====>      ] 120/300: serde, tokio"),
+            Some((120, 300))
+        );
+        assert_eq!(
+            parse_progress("    Building [             ] 0/2: itoa"),
+            Some((0, 2))
+        );
         assert_eq!(parse_progress("   Compiling itoa v1.0.15"), None);
-        let progress = Progress { started: std::time::Instant::now(), done: 63, total: 100, expected: Some(55) };
+        let progress = Progress {
+            started: std::time::Instant::now(),
+            done: 63,
+            total: 100,
+            expected: Some(55),
+        };
         assert_eq!(progress.label(), "63% · 0:00");
         // Near the end of the crate list the percentage says nothing; last time's duration does.
-        assert_eq!(Progress { done: 98, ..progress }.label(), "0:00 of ~0:55");
-        assert_eq!(Progress { total: 0, expected: None, ..progress }.label(), "0:00");
+        assert_eq!(
+            Progress {
+                done: 98,
+                ..progress
+            }
+            .label(),
+            "0:00 of ~0:55"
+        );
+        assert_eq!(
+            Progress {
+                total: 0,
+                expected: None,
+                ..progress
+            }
+            .label(),
+            "0:00"
+        );
     }
 
     #[test]
     fn reads_the_package_version() {
         let manifest = "[package]\nname = \"x\"\nversion = \"2.0.0-dash-0.52\"\n\n[dependencies]\nfoo = { version = \"1\" }\n";
-        assert_eq!(manifest_version(manifest).as_deref(), Some("2.0.0-dash-0.52"));
+        assert_eq!(
+            manifest_version(manifest).as_deref(),
+            Some("2.0.0-dash-0.52")
+        );
         assert_eq!(manifest_version("not toml ["), None);
     }
 }

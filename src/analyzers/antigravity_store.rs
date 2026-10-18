@@ -80,12 +80,20 @@ fn bytes_at<'a>(buf: &'a [u8], path: &[u64]) -> Option<&'a [u8]> {
         Wire::Bytes(b) if n == first => Some(b),
         _ => None,
     })?;
-    if rest.is_empty() { Some(found) } else { bytes_at(found, rest) }
+    if rest.is_empty() {
+        Some(found)
+    } else {
+        bytes_at(found, rest)
+    }
 }
 
 fn varint_at(buf: &[u8], path: &[u64]) -> Option<u64> {
     let (&last, parents) = path.split_last()?;
-    let parent = if parents.is_empty() { buf } else { bytes_at(buf, parents)? };
+    let parent = if parents.is_empty() {
+        buf
+    } else {
+        bytes_at(buf, parents)?
+    };
     fields(parent)?.into_iter().find_map(|(n, v)| match v {
         Wire::Varint(x) if n == last => Some(x),
         _ => None,
@@ -139,10 +147,7 @@ const PLANNER_RESPONSE: i64 = 15;
 
 /// Decode one conversation's user and response steps, in order. `models` maps generation ids
 /// to model slugs (from `gen_metadata`).
-pub fn decode_steps(
-    rows: &[(i64, Vec<u8>)],
-    models: &HashMap<String, String>,
-) -> Vec<Step> {
+pub fn decode_steps(rows: &[(i64, Vec<u8>)], models: &HashMap<String, String>) -> Vec<Step> {
     let mut steps = Vec::new();
     for (step_type, payload) in rows {
         let Some(at) = timestamp_at(payload, &[5, 1]) else {
@@ -249,7 +254,12 @@ mod tests {
         [tag(field, 0), encode_varint(v)].concat()
     }
     fn msg(field: u64, body: &[u8]) -> Vec<u8> {
-        [tag(field, 2), encode_varint(body.len() as u64), body.to_vec()].concat()
+        [
+            tag(field, 2),
+            encode_varint(body.len() as u64),
+            body.to_vec(),
+        ]
+        .concat()
     }
     fn text(field: u64, s: &str) -> Vec<u8> {
         msg(field, s.as_bytes())
@@ -263,7 +273,14 @@ mod tests {
         let user = [
             int(1, 14),
             created(1_791_953_917),
-            msg(19, &[text(2, "fix the build"), msg(12, &msg(1, &msg(42, &msg(11, &text(1, "/Users/x/proj")))))].concat()),
+            msg(
+                19,
+                &[
+                    text(2, "fix the build"),
+                    msg(12, &msg(1, &msg(42, &msg(11, &text(1, "/Users/x/proj"))))),
+                ]
+                .concat(),
+            ),
         ]
         .concat();
         let usage = [
@@ -278,23 +295,56 @@ mod tests {
         .concat();
         let response = [
             int(1, 15),
-            msg(5, &[msg(1, &[int(1, 1_791_953_926)].concat()), msg(9, &usage)].concat()),
-            msg(20, &[text(3, "Looking at next.config.ts"), msg(7, &text(1, "call_1")), msg(7, &text(1, "call_2"))].concat()),
+            msg(
+                5,
+                &[msg(1, &[int(1, 1_791_953_926)].concat()), msg(9, &usage)].concat(),
+            ),
+            msg(
+                20,
+                &[
+                    text(3, "Looking at next.config.ts"),
+                    msg(7, &text(1, "call_1")),
+                    msg(7, &text(1, "call_2")),
+                ]
+                .concat(),
+            ),
         ]
         .concat();
-        let gen_row = msg(1, &[msg(4, &text(7, "bot-1")), text(19, "gemini-3.8-flash-high")].concat());
+        let gen_row = msg(
+            1,
+            &[msg(4, &text(7, "bot-1")), text(19, "gemini-3.8-flash-high")].concat(),
+        );
         let models = decode_models(&[gen_row]);
         let steps = decode_steps(&[(14, user), (15, response), (132, vec![1, 2, 3])], &models);
         assert_eq!(steps.len(), 2);
-        let Step::User { text, cwd, at } = &steps[0] else { panic!() };
+        let Step::User { text, cwd, at } = &steps[0] else {
+            panic!()
+        };
         assert_eq!(text.as_deref(), Some("fix the build"));
         assert_eq!(cwd.as_deref(), Some("/Users/x/proj"));
         assert_eq!(at.timestamp_subsec_millis(), 500);
-        let Step::Response { text, tool_calls, model, usage, .. } = &steps[1] else { panic!() };
+        let Step::Response {
+            text,
+            tool_calls,
+            model,
+            usage,
+            ..
+        } = &steps[1]
+        else {
+            panic!()
+        };
         assert_eq!(text.as_deref(), Some("Looking at next.config.ts"));
         assert_eq!(*tool_calls, 2);
         assert_eq!(model.as_deref(), Some("gemini-3.8-flash-high"));
-        assert_eq!(usage.clone().unwrap(), Usage { input: 1318, output: 652, cache_read: 13224, thinking: 582 });
+        assert_eq!(
+            usage.clone().unwrap(),
+            Usage {
+                input: 1318,
+                output: 652,
+                cache_read: 13224,
+                thinking: 582
+            }
+        );
     }
 
     #[test]

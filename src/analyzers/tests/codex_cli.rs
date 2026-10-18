@@ -372,7 +372,12 @@ async fn unchanged_session_files_are_served_from_the_cache() {
     // Same size and mtime but different bytes: a cache hit never reads them.
     let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
     std::fs::write(&path, " ".repeat(session.len())).unwrap();
-    std::fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
     let cached = analyzer.parse_conversations(sources()).await.unwrap();
     assert_eq!(cached.len(), first.len());
 

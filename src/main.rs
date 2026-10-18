@@ -4,37 +4,37 @@ use std::sync::{Arc, Mutex};
 
 use analyzer::AnalyzerRegistry;
 use analyzers::{
-    AntigravityAnalyzer, ClaudeCodeAnalyzer, CursorAgentAnalyzer, ClineAnalyzer, CodexCliAnalyzer, DroidCliAnalyzer,
-    CopilotCliAnalyzer, KiloCodeAnalyzer, KiroCliAnalyzer, PiAgentAnalyzer, OllamaAnalyzer, OpenCodeAnalyzer, QwenCodeAnalyzer,
-    WarpDevAnalyzer,
+    AntigravityAnalyzer, ClaudeCodeAnalyzer, ClineAnalyzer, CodexCliAnalyzer, CopilotCliAnalyzer,
+    CursorAgentAnalyzer, DroidCliAnalyzer, KiloCodeAnalyzer, KiroCliAnalyzer, OllamaAnalyzer,
+    OpenCodeAnalyzer, PiAgentAnalyzer, QwenCodeAnalyzer, WarpDevAnalyzer,
 };
 
 mod advisor;
 mod analyzer;
 mod analyzers;
 mod config;
-mod incremental;
-mod stamp_cache;
-mod models;
-mod mqtt;
-mod rollup;
-mod notifications;
-mod plan_limits;
-mod records;
-mod price_feed;
 mod cursor_limits;
 mod droid_limits;
-mod warp_limits;
+mod incremental;
 mod kiro_limits;
 mod mcp_server;
-mod self_update;
-mod status_file;
+mod models;
+mod mqtt;
+mod notifications;
+mod plan_limits;
+mod price_feed;
+mod records;
 mod reqwest_simd_json;
+mod rollup;
+mod self_update;
+mod stamp_cache;
+mod status_file;
 mod tui;
 mod types;
 mod upload;
 mod utils;
 mod warp;
+mod warp_limits;
 mod watcher;
 
 #[derive(Parser)]
@@ -215,7 +215,13 @@ fn print_quotas(as_json: bool) {
     let quotas = advisor::quotas_answer(&status, now);
     let spend = advisor::where_to_spend_answer(&status, now);
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"quotas": quotas, "where_to_spend": spend})).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({"quotas": quotas, "where_to_spend": spend})
+            )
+            .unwrap_or_default()
+        );
         return;
     }
     if let Some(note) = quotas["stale"].as_str() {
@@ -223,10 +229,23 @@ fn print_quotas(as_json: bool) {
     }
     println!(
         "{:<22} {:<24} {:<6} {:>5} {:>14} {:>9} {:>9} {:>9} {:>11}  {:<20} 5h now",
-        "Tool", "Account", "Plan", "Used", "Left", "Need", "Now", "Runs out", "Locked out", "Resets"
+        "Tool",
+        "Account",
+        "Plan",
+        "Used",
+        "Left",
+        "Need",
+        "Now",
+        "Runs out",
+        "Locked out",
+        "Resets"
     );
     let pct = |v: &serde_json::Value| v.as_f64().map_or("-".into(), |p| format!("{p:.0}%"));
-    let tks = |v: &serde_json::Value| v.as_f64().filter(|t| *t > 0.0).map_or("-".into(), |t| format!("{t:.0} tk/s"));
+    let tks = |v: &serde_json::Value| {
+        v.as_f64()
+            .filter(|t| *t > 0.0)
+            .map_or("-".into(), |t| format!("{t:.0} tk/s"))
+    };
     let text = |v: &serde_json::Value| v.as_str().unwrap_or("-").to_string();
     for row in quotas["plans"].as_array().into_iter().flatten() {
         let w = &row["plan"];
@@ -234,7 +253,11 @@ fn print_quotas(as_json: bool) {
         let five = if five.is_null() {
             "-".to_string()
         } else {
-            format!("{} · {}", pct(&five["used_percent"]), text(&five["resets_in"]))
+            format!(
+                "{} · {}",
+                pct(&five["used_percent"]),
+                text(&five["resets_in"])
+            )
         };
         let left = match (w["left_output_tokens"].as_f64(), w["left_dollars"].as_f64()) {
             (Some(t), Some(d)) => format!("{} · ${d:.0}", advisor::human_tokens(t)),
@@ -254,14 +277,31 @@ fn print_quotas(as_json: bool) {
             format!(
                 "{} ({})",
                 text(&w["resets_in"]),
-                w["resets_at"].as_str().map(|t| t.get(5..16).unwrap_or(t).replace('T', " ")).unwrap_or_default()
+                w["resets_at"]
+                    .as_str()
+                    .map(|t| t.get(5..16).unwrap_or(t).replace('T', " "))
+                    .unwrap_or_default()
             ),
         );
     }
     println!("\nWhere to spend next:");
-    for (i, pick) in spend["ranking"].as_array().into_iter().flatten().enumerate() {
-        let mark = if pick["available"].as_bool() == Some(true) { "" } else { " (unavailable)" };
-        println!("  {}. {}{mark}: {}", i + 1, pick["tool"].as_str().unwrap_or("?"), pick["reason"].as_str().unwrap_or(""));
+    for (i, pick) in spend["ranking"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let mark = if pick["available"].as_bool() == Some(true) {
+            ""
+        } else {
+            " (unavailable)"
+        };
+        println!(
+            "  {}. {}{mark}: {}",
+            i + 1,
+            pick["tool"].as_str().unwrap_or("?"),
+            pick["reason"].as_str().unwrap_or("")
+        );
     }
 }
 
@@ -444,7 +484,10 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
         });
     }
 
-    tokio::spawn(mqtt::run(config.mqtt.clone(), stats_manager.get_stats_receiver()));
+    tokio::spawn(mqtt::run(
+        config.mqtt.clone(),
+        stats_manager.get_stats_receiver(),
+    ));
 
     // Check if auto-upload is enabled and start background upload
     if config.upload.auto_upload {
@@ -507,7 +550,9 @@ async fn run_default(format_options: utils::NumberFormatOptions, config: config:
 /// `splitrail mqtt`: keep stats current from the file watcher and publish them, until Ctrl-C.
 async fn run_mqtt(config: config::Config) {
     let Some(host) = config.mqtt.host.clone() else {
-        eprintln!("No MQTT broker configured. Add to ~/.splitrail.toml:\n\n[mqtt]\nhost = \"<broker>\"\nusername = \"<user>\"\n\nwith the password in ~/.config/splitrail/mqtt_password");
+        eprintln!(
+            "No MQTT broker configured. Add to ~/.splitrail.toml:\n\n[mqtt]\nhost = \"<broker>\"\nusername = \"<user>\"\n\nwith the password in ~/.config/splitrail/mqtt_password"
+        );
         std::process::exit(1);
     };
     prepare_prices(config.pricing.feed_enabled).await;
@@ -530,7 +575,10 @@ async fn run_mqtt(config: config::Config) {
             std::process::exit(1);
         }
     };
-    tokio::spawn(mqtt::run(config.mqtt.clone(), stats_manager.get_stats_receiver()));
+    tokio::spawn(mqtt::run(
+        config.mqtt.clone(),
+        stats_manager.get_stats_receiver(),
+    ));
     // On a Mac, keep the menu bar's status file current too, other machines included. Linux
     // publishers have no menu bar and skip the roll-up subscription it needs.
     if cfg!(target_os = "macos") {
@@ -590,8 +638,7 @@ async fn run_upload() -> Result<()> {
     match config::Config::load() {
         Ok(Some(mut config)) if config.is_configured() => {
             // Clones only what is pending, not every retained message (BZL-14 phase 4).
-            let messages =
-                utils::messages_pending_upload(config.upload.last_date_uploaded, &stats);
+            let messages = utils::messages_pending_upload(config.upload.last_date_uploaded, &stats);
             let progress_callback = tui::create_upload_progress_callback(&format_options);
             upload::upload_message_stats(&messages, &mut config, progress_callback)
                 .await

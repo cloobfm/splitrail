@@ -323,7 +323,10 @@ mod watch_dir_tests {
     fn a_missing_tool_directory_never_falls_back_to_home() {
         let home = std::env::home_dir().unwrap();
         let missing = home.join(".splitrail-test-missing-tool/conversations/*.db");
-        assert_eq!(extract_watch_and_match_dirs(missing.to_str().unwrap()), None);
+        assert_eq!(
+            extract_watch_and_match_dirs(missing.to_str().unwrap()),
+            None
+        );
     }
 
     #[test]
@@ -331,7 +334,8 @@ mod watch_dir_tests {
         let root = std::env::temp_dir().join(format!("splitrail-watch-{}", std::process::id()));
         std::fs::create_dir_all(root.join("tool")).unwrap();
         let pattern = root.join("tool/sessions/**/*.jsonl");
-        let (match_dir, watch_dir) = extract_watch_and_match_dirs(pattern.to_str().unwrap()).unwrap();
+        let (match_dir, watch_dir) =
+            extract_watch_and_match_dirs(pattern.to_str().unwrap()).unwrap();
         assert_eq!(match_dir, root.join("tool/sessions"));
         assert_eq!(watch_dir, root.join("tool"));
         std::fs::remove_dir_all(root).unwrap();

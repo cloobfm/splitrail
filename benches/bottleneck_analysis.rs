@@ -1,10 +1,10 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
-use splitrail_dashboard::types::{ConversationMessage, Application, MessageRole};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use splitrail_dashboard::types::{Application, ConversationMessage, MessageRole};
 use splitrail_dashboard::utils::aggregate_by_date;
-use std::time::Duration;
-use tempfile::TempDir;
 use std::fs::File;
 use std::io::Write;
+use std::time::Duration;
+use tempfile::TempDir;
 
 // Benchmark the ACTUAL bottlenecks we suspect
 fn bench_real_bottlenecks(c: &mut Criterion) {
@@ -14,7 +14,7 @@ fn bench_real_bottlenecks(c: &mut Criterion) {
     // Test 1: JSON parsing performance (major suspect)
     let temp_dir = TempDir::new().unwrap();
     let test_files = create_test_jsonl_files(&temp_dir, &[100, 1000, 5000]);
-    
+
     for (file, line_count) in test_files.iter() {
         group.throughput(Throughput::Bytes(file.metadata().unwrap().len() as u64));
         group.bench_with_input(
@@ -66,8 +66,9 @@ fn bench_real_bottlenecks(c: &mut Criterion) {
             |b, &_len| {
                 b.iter(|| {
                     // Simulate UI string formatting
-                    let _ = black_box(format!("{}: {} tokens", 
-                        black_box(&string[..std::cmp::min(20, string.len())]), 
+                    let _ = black_box(format!(
+                        "{}: {} tokens",
+                        black_box(&string[..std::cmp::min(20, string.len())]),
                         black_box(1234567)
                     ));
                 });
@@ -81,22 +82,24 @@ fn bench_real_bottlenecks(c: &mut Criterion) {
 // Benchmark file system operations
 fn bench_file_system_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("file_system_ops");
-    
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Test glob pattern matching (file discovery)
     group.bench_function("glob_pattern_matching", |b| {
         b.iter(|| {
-            let _ = black_box(glob::glob("/Users/bzl/.claude/projects/*/conversations_*.jsonl")
-                .unwrap()
-                .count());
+            let _ = black_box(
+                glob::glob("/Users/bzl/.claude/projects/*/conversations_*.jsonl")
+                    .unwrap()
+                    .count(),
+            );
         });
     });
-    
+
     // Test file metadata operations
     let test_file = temp_dir.path().join("test.jsonl");
     std::fs::write(&test_file, "test content").unwrap();
-    
+
     group.bench_function("file_metadata", |b| {
         b.iter(|| {
             let _ = black_box(test_file.metadata().unwrap());
@@ -104,14 +107,14 @@ fn bench_file_system_ops(c: &mut Criterion) {
             let _ = black_box(test_file.metadata().unwrap().modified().unwrap());
         });
     });
-    
+
     group.finish();
 }
 
 // Benchmark memory allocation patterns
 fn bench_memory_patterns(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_patterns_real");
-    
+
     // Test Vec growth patterns (realistic sizes)
     for size in [1000, 5000, 10000].iter() {
         group.bench_with_input(
@@ -128,10 +131,12 @@ fn bench_memory_patterns(c: &mut Criterion) {
             },
         );
     }
-    
+
     // Test string cloning (common in message processing)
-    let test_string = "This is a test message content that simulates real message data with some length to it".to_string();
-    
+    let test_string =
+        "This is a test message content that simulates real message data with some length to it"
+            .to_string();
+
     group.bench_function("string_cloning_hot", |b| {
         b.iter(|| {
             for _ in 0..1000 {
@@ -139,19 +144,22 @@ fn bench_memory_patterns(c: &mut Criterion) {
             }
         });
     });
-    
+
     group.finish();
 }
 
 // Helper functions to create realistic test data
 
-fn create_test_jsonl_files(temp_dir: &TempDir, line_counts: &[usize]) -> Vec<(std::path::PathBuf, usize)> {
+fn create_test_jsonl_files(
+    temp_dir: &TempDir,
+    line_counts: &[usize],
+) -> Vec<(std::path::PathBuf, usize)> {
     let mut files = Vec::new();
-    
+
     for &line_count in line_counts {
         let file_path = temp_dir.path().join(format!("test_{}.jsonl", line_count));
         let mut file = File::create(&file_path).unwrap();
-        
+
         for i in 0..line_count {
             let json_line = serde_json::json!({
                 "type": "message",
@@ -169,30 +177,35 @@ fn create_test_jsonl_files(temp_dir: &TempDir, line_counts: &[usize]) -> Vec<(st
             });
             writeln!(file, "{}", json_line).unwrap();
         }
-        
+
         files.push((file_path, line_count));
     }
-    
+
     files
 }
 
 fn create_message_sets(counts: &[usize]) -> Vec<(usize, Vec<ConversationMessage>)> {
-    counts.iter().map(|&count| {
-        let messages: Vec<ConversationMessage> = (0..count)
-            .map(|i| create_test_message(i))
-            .collect();
-        (count, messages)
-    }).collect()
+    counts
+        .iter()
+        .map(|&count| {
+            let messages: Vec<ConversationMessage> =
+                (0..count).map(|i| create_test_message(i)).collect();
+            (count, messages)
+        })
+        .collect()
 }
 
 fn create_test_strings(lengths: &[usize]) -> Vec<(usize, String)> {
-    lengths.iter().map(|&len| {
-        let base = "This is test content that represents a typical message ";
-        let repeats = (len / base.len()) + 1;
-        let string = base.repeat(repeats);
-        let string = string[..len.min(string.len())].to_string();
-        (len, string)
-    }).collect()
+    lengths
+        .iter()
+        .map(|&len| {
+            let base = "This is test content that represents a typical message ";
+            let repeats = (len / base.len()) + 1;
+            let string = base.repeat(repeats);
+            let string = string[..len.min(string.len())].to_string();
+            (len, string)
+        })
+        .collect()
 }
 
 fn create_test_message(i: usize) -> ConversationMessage {
@@ -211,7 +224,11 @@ fn create_test_message(i: usize) -> ConversationMessage {
             tool_calls: (i % 10) as u32,
             ..Default::default()
         },
-        role: if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant },
+        role: if i % 2 == 0 {
+            MessageRole::User
+        } else {
+            MessageRole::Assistant
+        },
         content: Some(format!("Test message content {}", i)),
     }
 }
@@ -220,8 +237,9 @@ fn parse_jsonl_file_realistic(file_path: &std::path::Path) -> Vec<serde_json::Va
     use std::io::{BufRead, BufReader};
     let file = File::open(file_path).unwrap();
     let reader = BufReader::new(file);
-    
-    reader.lines()
+
+    reader
+        .lines()
         .filter_map(|line| line.ok())
         .filter_map(|line| serde_json::from_str(&line).ok())
         .collect()

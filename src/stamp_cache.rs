@@ -294,7 +294,11 @@ mod tests {
 
         assert_eq!(report.parsed, 1, "only b changed");
         assert_eq!(report.unchanged, 2);
-        assert_eq!(calls.load(Ordering::SeqCst), 4, "one extra parse, not three");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            4,
+            "one extra parse, not three"
+        );
         assert_eq!(tags(&all), ["a1", "b1", "b2", "c1"]);
     }
 

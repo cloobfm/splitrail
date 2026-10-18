@@ -129,7 +129,11 @@ const LOCAL_ONLY_MODELS: &[&str] = &["moondream"];
 /// Ollama's family as hosted providers spell it: `qwen3_5` and `qwen35` -> `qwen3.5`.
 pub fn family_name(family: &str) -> String {
     let lower = family.trim().to_lowercase().replace('_', ".");
-    let digits: Vec<char> = lower.chars().rev().take_while(char::is_ascii_digit).collect();
+    let digits: Vec<char> = lower
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .collect();
     if !lower.contains('.') && digits.len() == 2 {
         let (stem, number) = lower.split_at(lower.len() - 2);
         return format!("{stem}{}.{}", &number[..1], &number[1..]);
@@ -154,8 +158,14 @@ fn billions(param_size: &str) -> Option<f64> {
 /// below it if none is bigger). `sizes` is the family's hosted sizes in billions with their names.
 pub fn family_fallback(sizes: &[(f64, String)], own: Option<f64>) -> Option<String> {
     let own = own.unwrap_or(0.0);
-    let above = sizes.iter().filter(|(b, _)| *b >= own).min_by(|a, b| a.0.total_cmp(&b.0));
-    let below = sizes.iter().filter(|(b, _)| *b < own).max_by(|a, b| a.0.total_cmp(&b.0));
+    let above = sizes
+        .iter()
+        .filter(|(b, _)| *b >= own)
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    let below = sizes
+        .iter()
+        .filter(|(b, _)| *b < own)
+        .max_by(|a, b| a.0.total_cmp(&b.0));
     above.or(below).map(|(_, name)| name.clone())
 }
 
@@ -164,11 +174,16 @@ fn street_price(model: &str, param_size: Option<&str>, family: Option<&str>) -> 
         return Some(price);
     }
     let names = street_names(model, param_size);
-    let found = price_feed::median_price(&names).map(|(_, price)| price).or_else(|| {
-        let family = family_name(family?);
-        let name = family_fallback(&price_feed::family_sizes(&family), param_size.and_then(billions))?;
-        price_feed::median_price(&[name]).map(|(_, price)| price)
-    });
+    let found = price_feed::median_price(&names)
+        .map(|(_, price)| price)
+        .or_else(|| {
+            let family = family_name(family?);
+            let name = family_fallback(
+                &price_feed::family_sizes(&family),
+                param_size.and_then(billions),
+            )?;
+            price_feed::median_price(&[name]).map(|(_, price)| price)
+        });
     // No hosted service sells these per token, so there is no street price to find; their cost
     // is the electricity, which is tracked separately.
     let local_only = names
@@ -226,7 +241,10 @@ pub fn parse_usage_log(
             let cost = prices
                 .entry(event.model.clone())
                 .or_insert_with(|| {
-                    let family = event.family.as_deref().or(families.get(&event.model).map(String::as_str));
+                    let family = event
+                        .family
+                        .as_deref()
+                        .or(families.get(&event.model).map(String::as_str));
                     street_price(&event.model, event.param_size.as_deref(), family)
                 })
                 .as_ref()
@@ -413,9 +431,15 @@ mod tests {
         let log = r#"{"ts": 1790880000, "model": "qwen3-embedding:0.6b", "endpoint": "/api/embed", "prompt_tokens": 37, "cached_tokens": 0, "completion_tokens": 0, "duration_ms": 41, "wall_ms": 45, "client": "127.0.0.1", "prompt_preview": "a beach (+1 more)", "reply_preview": ""}"#;
         let messages = parse_usage_log(log, Path::new("/test.jsonl"), &OllamaConfig::default());
         // The prompt preview becomes the user's side; the reply carries the counts.
-        let reply = messages.iter().find(|m| m.role == MessageRole::Assistant).unwrap();
+        let reply = messages
+            .iter()
+            .find(|m| m.role == MessageRole::Assistant)
+            .unwrap();
         assert_eq!(reply.model.as_deref(), Some("qwen3-embedding:0.6b"));
-        assert_eq!((reply.stats.input_tokens, reply.stats.output_tokens), (37, 0));
+        assert_eq!(
+            (reply.stats.input_tokens, reply.stats.output_tokens),
+            (37, 0)
+        );
     }
 
     #[test]
@@ -503,12 +527,25 @@ mod tests {
         assert_eq!(family_name("llama"), "llama");
         assert_eq!(family_name("gemma3"), "gemma3");
         assert_eq!(billions("752.39M"), Some(0.75239));
-        let sizes = [(9.0, "qwen3.5-9b".to_string()), (27.0, "qwen3.5-27b".to_string()), (397.0, "qwen3.5-397b".to_string())];
+        let sizes = [
+            (9.0, "qwen3.5-9b".to_string()),
+            (27.0, "qwen3.5-27b".to_string()),
+            (397.0, "qwen3.5-397b".to_string()),
+        ];
         // A 0.8B fine-tune: the smallest hosted size above it.
-        assert_eq!(family_fallback(&sizes, Some(0.75)).as_deref(), Some("qwen3.5-9b"));
-        assert_eq!(family_fallback(&sizes, Some(20.0)).as_deref(), Some("qwen3.5-27b"));
+        assert_eq!(
+            family_fallback(&sizes, Some(0.75)).as_deref(),
+            Some("qwen3.5-9b")
+        );
+        assert_eq!(
+            family_fallback(&sizes, Some(20.0)).as_deref(),
+            Some("qwen3.5-27b")
+        );
         // Bigger than anything hosted: the largest.
-        assert_eq!(family_fallback(&sizes, Some(500.0)).as_deref(), Some("qwen3.5-397b"));
+        assert_eq!(
+            family_fallback(&sizes, Some(500.0)).as_deref(),
+            Some("qwen3.5-397b")
+        );
         assert_eq!(family_fallback(&[], Some(1.0)), None);
     }
 
@@ -518,6 +555,9 @@ mod tests {
     fn ollama_family_live_prices_a_fine_tune() {
         crate::price_feed::init(Default::default(), true);
         let price = street_price("tev1:0.8b-mxfp8", Some("752.39M"), Some("qwen3_5")).unwrap();
-        println!("tev1 at ${:.3} in / ${:.3} out per 1M", price.input_per_1m, price.output_per_1m);
+        println!(
+            "tev1 at ${:.3} in / ${:.3} out per 1M",
+            price.input_per_1m, price.output_per_1m
+        );
     }
 }

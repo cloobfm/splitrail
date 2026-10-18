@@ -52,7 +52,10 @@ pub fn index_charges(content: &str) -> ChargeIndex {
         .lines()
         .filter_map(|line| serde_json::from_str::<Charge>(line).ok())
     {
-        index.entry(charge.conversation_id.clone()).or_default().push(charge);
+        index
+            .entry(charge.conversation_id.clone())
+            .or_default()
+            .push(charge);
     }
     for charges in index.values_mut() {
         charges.sort_by_key(|c| c.ts);
@@ -84,7 +87,11 @@ struct HookLine {
 fn model_name(model: Option<&str>) -> String {
     match model.map(str::trim) {
         // Hooks say `default`, print mode's stream says `Auto`.
-        Some(m) if !m.is_empty() && !m.eq_ignore_ascii_case("default") && !m.eq_ignore_ascii_case("auto") => {
+        Some(m)
+            if !m.is_empty()
+                && !m.eq_ignore_ascii_case("default")
+                && !m.eq_ignore_ascii_case("auto") =>
+        {
             m.to_string()
         }
         _ => AUTO_MODEL.to_string(),
@@ -111,7 +118,10 @@ pub fn parse_usage_log(
         };
         if let Some(email) = event.user_email.as_deref().filter(|e| !e.is_empty()) {
             if login.as_ref().is_none_or(|(ts, _)| event.ts >= *ts) {
-                login = Some((event.ts, email.split('@').next().unwrap_or(email).to_string()));
+                login = Some((
+                    event.ts,
+                    email.split('@').next().unwrap_or(email).to_string(),
+                ));
             }
         }
         let key = event
@@ -162,7 +172,9 @@ pub fn parse_usage_log(
     let mut ends: HashMap<&str, Vec<i64>> = HashMap::new();
     for turn in turns.values() {
         if let Some(conversation) = turn.conversation_id.as_deref() {
-            ends.entry(conversation).or_default().push((turn.ts * 1000.0) as i64);
+            ends.entry(conversation)
+                .or_default()
+                .push((turn.ts * 1000.0) as i64);
         }
     }
     for list in ends.values_mut() {
@@ -193,14 +205,18 @@ pub fn parse_usage_log(
     let mut messages = Vec::new();
     for key in order {
         if let Some(prompt) = prompts.remove(&key) {
-            if let Some(date) = DateTime::<Utc>::from_timestamp_millis((prompt.ts * 1000.0) as i64) {
+            if let Some(date) = DateTime::<Utc>::from_timestamp_millis((prompt.ts * 1000.0) as i64)
+            {
                 let turn = turns.get(&key);
                 let conversation = prompt
                     .conversation_id
                     .clone()
                     .or_else(|| turn.and_then(|t| t.conversation_id.clone()))
                     .unwrap_or_else(|| key.clone());
-                let cwd = prompt.cwd.as_deref().or(turn.and_then(|t| t.cwd.as_deref()));
+                let cwd = prompt
+                    .cwd
+                    .as_deref()
+                    .or(turn.and_then(|t| t.cwd.as_deref()));
                 messages.push(ConversationMessage {
                     application: Application::CursorAgent,
                     date,
@@ -472,7 +488,9 @@ mod charge_tests {
             .join("\n"),
         );
         let messages = parse_usage_log(log, Path::new("/u.jsonl"), &charges);
-        let [g1, g2, g3] = &messages[..] else { panic!("{messages:?}") };
+        let [g1, g2, g3] = &messages[..] else {
+            panic!("{messages:?}")
+        };
         assert_eq!((g1.stats.input_tokens, g1.stats.output_tokens), (150, 2));
         assert!((g1.stats.cost - 0.04).abs() < 1e-9);
         assert_eq!(g1.model.as_deref(), Some(AUTO_MODEL));
@@ -493,9 +511,21 @@ mod live {
         use crate::analyzer::Analyzer;
         let stats = super::CursorAgentAnalyzer::new().get_stats().await.unwrap();
         for m in &stats.messages {
-            println!("{} {:?} in {} out {} cache {} cost {}", m.date, m.model, m.stats.input_tokens, m.stats.output_tokens, m.stats.cache_read_tokens, m.stats.cost);
+            println!(
+                "{} {:?} in {} out {} cache {} cost {}",
+                m.date,
+                m.model,
+                m.stats.input_tokens,
+                m.stats.output_tokens,
+                m.stats.cache_read_tokens,
+                m.stats.cost
+            );
         }
-        println!("conversations {} days {:?}", stats.num_conversations, stats.daily_stats.keys().collect::<Vec<_>>());
+        println!(
+            "conversations {} days {:?}",
+            stats.num_conversations,
+            stats.daily_stats.keys().collect::<Vec<_>>()
+        );
         assert!(!stats.messages.is_empty());
     }
 }

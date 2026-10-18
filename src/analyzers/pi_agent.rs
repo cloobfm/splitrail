@@ -28,7 +28,9 @@ pub struct PiAgentAnalyzer {
 
 impl PiAgentAnalyzer {
     pub fn new() -> Self {
-        Self { cache: crate::stamp_cache::StampCache::new() }
+        Self {
+            cache: crate::stamp_cache::StampCache::new(),
+        }
     }
 
     fn sessions_dir() -> Option<std::path::PathBuf> {
@@ -38,49 +40,83 @@ impl PiAgentAnalyzer {
 
 fn timestamp(entry: &Value) -> Option<DateTime<Utc>> {
     let text = entry.get("timestamp")?.as_str()?;
-    DateTime::parse_from_rfc3339(text).ok().map(|t| t.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|t| t.with_timezone(&Utc))
 }
 
 /// Messages in one session file.
 pub(crate) fn parse_session(path: &Path) -> Result<Vec<ConversationMessage>> {
     let content = std::fs::read_to_string(path)?;
     let mut messages = Vec::new();
-    let mut session_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+    let mut session_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
     let mut project = "unknown".to_string();
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
-        let Ok(entry) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         match entry.get("type").and_then(Value::as_str) {
             Some("session") => {
                 if let Some(id) = entry.get("id").and_then(Value::as_str) {
                     session_id = id.to_string();
                 }
                 if let Some(cwd) = entry.get("cwd").and_then(Value::as_str) {
-                    project = Path::new(cwd).file_name().and_then(|n| n.to_str()).unwrap_or(cwd).to_string();
+                    project = Path::new(cwd)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(cwd)
+                        .to_string();
                 }
             }
             Some("message") => {
-                let (Some(message), Some(date)) = (entry.get("message"), timestamp(&entry)) else { continue };
+                let (Some(message), Some(date)) = (entry.get("message"), timestamp(&entry)) else {
+                    continue;
+                };
                 let id = entry.get("id").and_then(Value::as_str).unwrap_or_default();
                 let mut stats = Stats::default();
                 let (role, model) = match message.get("role").and_then(Value::as_str) {
                     Some("user") => (MessageRole::User, None),
                     Some("assistant") => {
                         let usage = message.get("usage");
-                        let field = |key: &str| usage.and_then(|u| u.get(key)).and_then(Value::as_u64).unwrap_or(0);
+                        let field = |key: &str| {
+                            usage
+                                .and_then(|u| u.get(key))
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                        };
                         stats.input_tokens = field("input");
                         stats.output_tokens = field("output");
                         stats.cache_read_tokens = field("cacheRead");
                         stats.cache_creation_tokens = field("cacheWrite");
                         stats.cached_tokens = stats.cache_read_tokens;
-                        if stats.input_tokens + stats.output_tokens + stats.cache_read_tokens + stats.cache_creation_tokens == 0 {
+                        if stats.input_tokens
+                            + stats.output_tokens
+                            + stats.cache_read_tokens
+                            + stats.cache_creation_tokens
+                            == 0
+                        {
                             continue; // Failed before any tokens.
                         }
                         stats.tool_calls = message
                             .get("content")
                             .and_then(Value::as_array)
-                            .map(|parts| parts.iter().filter(|p| p.get("type").and_then(Value::as_str) == Some("toolCall")).count() as u32)
+                            .map(|parts| {
+                                parts
+                                    .iter()
+                                    .filter(|p| {
+                                        p.get("type").and_then(Value::as_str) == Some("toolCall")
+                                    })
+                                    .count() as u32
+                            })
                             .unwrap_or(0);
-                        let model = message.get("model").and_then(Value::as_str).map(str::to_string);
+                        let model = message
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
                         let reported = usage
                             .and_then(|u| u.pointer("/cost/total"))
                             .and_then(Value::as_f64)
@@ -141,16 +177,24 @@ impl Analyzer for PiAgentAnalyzer {
         Ok(sources)
     }
 
-    async fn parse_conversations(&self, sources: Vec<DataSource>) -> Result<Vec<ConversationMessage>> {
+    async fn parse_conversations(
+        &self,
+        sources: Vec<DataSource>,
+    ) -> Result<Vec<ConversationMessage>> {
         let (messages, _report) = self.cache.parse_all(&sources, parse_session);
         Ok(messages)
     }
 
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
-        let messages = self.parse_conversations(self.discover_data_sources()?).await?;
+        let messages = self
+            .parse_conversations(self.discover_data_sources()?)
+            .await?;
         let daily_stats = crate::utils::aggregate_by_date(&messages);
-        let num_conversations =
-            messages.iter().map(|m| &m.conversation_hash).collect::<std::collections::HashSet<_>>().len() as u64;
+        let num_conversations = messages
+            .iter()
+            .map(|m| &m.conversation_hash)
+            .collect::<std::collections::HashSet<_>>()
+            .len() as u64;
         Ok(AgenticCodingToolStats {
             daily_stats,
             num_conversations,
@@ -184,8 +228,18 @@ mod tests {
         let messages = parse_session(&path).unwrap();
         assert_eq!(messages.len(), 2);
         let reply = &messages[1];
-        assert_eq!((reply.role.clone(), reply.model.as_deref()), (MessageRole::Assistant, Some("gpt-5.5")));
-        assert_eq!((reply.stats.input_tokens, reply.stats.output_tokens, reply.stats.cache_read_tokens), (1069, 77, 5));
+        assert_eq!(
+            (reply.role.clone(), reply.model.as_deref()),
+            (MessageRole::Assistant, Some("gpt-5.5"))
+        );
+        assert_eq!(
+            (
+                reply.stats.input_tokens,
+                reply.stats.output_tokens,
+                reply.stats.cache_read_tokens
+            ),
+            (1069, 77, 5)
+        );
         assert_eq!(reply.stats.cost, 0.007655);
         assert_eq!(reply.stats.tool_calls, 1);
         assert_eq!(reply.project_hash, "shop");

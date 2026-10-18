@@ -4,7 +4,7 @@ use crate::utils::{
     read_log_tail, warn_once,
 };
 use crate::watcher::{FileWatcher, RealtimeStatsManager};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::style::{Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
@@ -16,9 +16,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Widget, Borders};
+use ratatui::widgets::{
+    Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Widget,
+};
 use ratatui::{Frame, Terminal};
-use std::io::{stdout, Write, IsTerminal};
+use std::io::{IsTerminal, Write, stdout};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -104,14 +106,12 @@ impl PerfOverlayState {
         #[cfg(unix)]
         {
             if let Some(proc_time) = read_process_cpu_time() {
-                if let (Some(prev_wall), Some(prev_proc)) =
-                    (self.cpu_last_wall, self.cpu_last_proc)
+                if let (Some(prev_wall), Some(prev_proc)) = (self.cpu_last_wall, self.cpu_last_proc)
                 {
                     let wall_delta = now.saturating_duration_since(prev_wall);
                     let proc_delta = proc_time.checked_sub(prev_proc)?;
                     if wall_delta.as_secs_f32() > 0.0 {
-                        let pct =
-                            (proc_delta.as_secs_f32() / wall_delta.as_secs_f32()) * 100.0;
+                        let pct = (proc_delta.as_secs_f32() / wall_delta.as_secs_f32()) * 100.0;
                         self.cpu_last_wall = Some(now);
                         self.cpu_last_proc = Some(proc_time);
                         return Some(pct);
@@ -263,7 +263,8 @@ impl SliceFilter {
     }
 
     fn admits(&self, slice: &crate::types::Slice) -> bool {
-        self.model.as_ref().is_none_or(|m| *m == slice.model) && self.project.as_ref().is_none_or(|p| *p == slice.project)
+        self.model.as_ref().is_none_or(|m| *m == slice.model)
+            && self.project.as_ref().is_none_or(|p| *p == slice.project)
     }
 
     /// `· model claude-opus-5-5 · project splitrail`, or empty.
@@ -281,7 +282,10 @@ impl SliceFilter {
 
 /// The next value after `current` among `options` (busiest first), wrapping to none.
 fn cycle(current: &Option<String>, options: &[String]) -> Option<String> {
-    match current.as_ref().and_then(|c| options.iter().position(|o| o == c)) {
+    match current
+        .as_ref()
+        .and_then(|c| options.iter().position(|o| o == c))
+    {
         None => options.first().cloned(),
         Some(i) => options.get(i + 1).cloned(),
     }
@@ -291,7 +295,11 @@ fn cycle(current: &Option<String>, options: &[String]) -> Option<String> {
 fn slice_options(stats: &AgenticCodingToolStats, by_model: bool) -> Vec<String> {
     let mut output: std::collections::HashMap<&str, u64> = Default::default();
     for slice in stats.daily_stats.values().flat_map(|d| &d.slices) {
-        let key = if by_model { slice.model.as_str() } else { slice.project.as_str() };
+        let key = if by_model {
+            slice.model.as_str()
+        } else {
+            slice.project.as_str()
+        };
         *output.entry(key).or_default() += slice.output_tokens.max(1);
     }
     let mut options: Vec<(&str, u64)> = output.into_iter().collect();
@@ -301,18 +309,25 @@ fn slice_options(stats: &AgenticCodingToolStats, by_model: bool) -> Vec<String> 
 
 /// Rows built from the days' slices: by hour, or by day/week/month under a filter. Slices carry
 /// tokens, cost and replies only, so the other columns stay empty.
-fn group_slices(stats: &AgenticCodingToolStats, period: Period, filter: &SliceFilter) -> AgenticCodingToolStats {
-    let mut grouped: std::collections::BTreeMap<String, crate::types::DailyStats> = Default::default();
+fn group_slices(
+    stats: &AgenticCodingToolStats,
+    period: Period,
+    filter: &SliceFilter,
+) -> AgenticCodingToolStats {
+    let mut grouped: std::collections::BTreeMap<String, crate::types::DailyStats> =
+        Default::default();
     for (day, day_stats) in &stats.daily_stats {
         for slice in day_stats.slices.iter().filter(|s| filter.admits(s)) {
             let key = match period {
                 Period::Hour => format!("{day} {:02}", slice.hour),
                 _ => period.key(day),
             };
-            let row = grouped.entry(key.clone()).or_insert_with(|| crate::types::DailyStats {
-                date: key,
-                ..Default::default()
-            });
+            let row = grouped
+                .entry(key.clone())
+                .or_insert_with(|| crate::types::DailyStats {
+                    date: key,
+                    ..Default::default()
+                });
             row.ai_messages += slice.replies;
             *row.models.entry(slice.model.clone()).or_default() += slice.replies;
             row.stats.input_tokens += slice.input_tokens;
@@ -334,13 +349,16 @@ fn group_slices(stats: &AgenticCodingToolStats, period: Period, filter: &SliceFi
 /// `stats` with its days merged into weeks or months. Only the daily totals are carried over,
 /// which is all the table reads.
 fn group_by_period(stats: &AgenticCodingToolStats, period: Period) -> AgenticCodingToolStats {
-    let mut grouped: std::collections::BTreeMap<String, crate::types::DailyStats> = Default::default();
+    let mut grouped: std::collections::BTreeMap<String, crate::types::DailyStats> =
+        Default::default();
     for (day, day_stats) in &stats.daily_stats {
         let key = period.key(day);
-        let row = grouped.entry(key.clone()).or_insert_with(|| crate::types::DailyStats {
-            date: key,
-            ..Default::default()
-        });
+        let row = grouped
+            .entry(key.clone())
+            .or_insert_with(|| crate::types::DailyStats {
+                date: key,
+                ..Default::default()
+            });
         row.user_messages += day_stats.user_messages;
         row.ai_messages += day_stats.ai_messages;
         row.conversations += day_stats.conversations;
@@ -422,7 +440,9 @@ pub fn run_tui(
 
     // Crossterm raw mode fails if stdout isn't a TTY (e.g., CI, log capture). Bail early with a clear message.
     if !stdout.is_terminal() {
-        bail!("Interactive TUI requires a terminal (stdout is not a TTY). Run from a terminal or use subcommands like `splitrail config`/`splitrail upload`.");
+        bail!(
+            "Interactive TUI requires a terminal (stdout is not a TTY). Run from a terminal or use subcommands like `splitrail config`/`splitrail upload`."
+        );
     }
 
     // Restore the terminal on a panic too, before the default hook prints the message.
@@ -607,10 +627,10 @@ async fn run_app(
     let mut last_warning_cleanup = std::time::Instant::now();
     let mut last_sparkline_refresh = Instant::now();
     let mut last_clock_tick = Instant::now();
-    
+
     // PERFORMANCE OPTIMIZATIONS APPLIED:
     // 1. Clock updates no longer trigger full UI redraws (was 38% CPU reduction)
-    // 2. Status message clears no longer trigger full UI redraws  
+    // 2. Status message clears no longer trigger full UI redraws
     // 3. Sparkline refresh reduced from 5s to 10s (50% reduction)
     // 4. More aggressive idle polling (2000ms option for background monitoring)
     // 5. Intelligent redraw system (prevents unnecessary renders)
@@ -723,11 +743,11 @@ async fn run_app(
         // OPTIMIZATION: Reduce sparkline refresh frequency from 5s to 10s
         // This cuts expensive sparkline recomputation in half
         let sparkline_interval_secs = if std::env::var("SPLITRAIL_FAST_SPARKLINES").is_ok() {
-            5  // Allow fast refresh for debugging
+            5 // Allow fast refresh for debugging
         } else {
-            10  // Default: slower refresh for CPU savings
+            10 // Default: slower refresh for CPU savings
         };
-        
+
         if last_sparkline_refresh.elapsed() >= Duration::from_secs(sparkline_interval_secs) {
             if let Some(summary) = cached_summary_data.as_mut() {
                 let now_utc = chrono::Utc::now();
@@ -797,10 +817,11 @@ async fn run_app(
                 }
             }
         }
-        
+
         // OPTIMIZATION: Auto-clear status messages after 3 seconds
         // This also triggers unnecessary full UI redraws
-        if let (Some(_), Some(timer)) = (&tui_state.status_message, &tui_state.status_message_timer) {
+        if let (Some(_), Some(timer)) = (&tui_state.status_message, &tui_state.status_message_timer)
+        {
             if timer.elapsed() >= Duration::from_secs(3) {
                 tui_state.status_message = None;
                 tui_state.status_message_timer = None;
@@ -814,9 +835,9 @@ async fn run_app(
         let poll_ms = if time_since_activity > idle_threshold {
             // Idle mode: very slow polling for maximum CPU savings
             if std::env::var("SPLITRAIL_ULTRA_SLOW").is_ok() {
-                2000  // Ultra-slow: 0.5 FPS for background monitoring
+                2000 // Ultra-slow: 0.5 FPS for background monitoring
             } else {
-                1000  // Normal idle: 1 FPS
+                1000 // Normal idle: 1 FPS
             }
         } else {
             // Active mode: use base rate
@@ -922,17 +943,22 @@ async fn run_app(
                         continue;
                     }
 
-                    if matches!(key.code, KeyCode::Char('f') | KeyCode::Char('o') | KeyCode::Char('x'))
-                        && tui_state.selected_tab > 0
+                    if matches!(
+                        key.code,
+                        KeyCode::Char('f') | KeyCode::Char('o') | KeyCode::Char('x')
+                    ) && tui_state.selected_tab > 0
                     {
                         if let Some(stats) = filtered_stats.get(tui_state.selected_tab - 1) {
                             match key.code {
                                 KeyCode::Char('f') => {
-                                    tui_state.filter.model = cycle(&tui_state.filter.model, &slice_options(stats, true))
+                                    tui_state.filter.model =
+                                        cycle(&tui_state.filter.model, &slice_options(stats, true))
                                 }
                                 KeyCode::Char('o') => {
-                                    tui_state.filter.project =
-                                        cycle(&tui_state.filter.project, &slice_options(stats, false))
+                                    tui_state.filter.project = cycle(
+                                        &tui_state.filter.project,
+                                        &slice_options(stats, false),
+                                    )
                                 }
                                 _ => tui_state.filter = SliceFilter::default(),
                             }
@@ -964,13 +990,14 @@ async fn run_app(
                         continue;
                     }
 
-                        // Handle Slack notifications toggle
+                    // Handle Slack notifications toggle
                     if key.code == KeyCode::Char('s') {
                         match crate::config::Config::load() {
                             Ok(Some(mut config)) => {
                                 let _was_enabled = config.notifications.slack.enabled;
-                                config.notifications.slack.enabled = !config.notifications.slack.enabled;
-                                
+                                config.notifications.slack.enabled =
+                                    !config.notifications.slack.enabled;
+
                                 // Save the updated config
                                 if let Err(e) = config.save(false) {
                                     crate::utils::report(format!("Failed to save config: {e}"));
@@ -982,7 +1009,8 @@ async fn run_app(
                                         "❌ Slack notifications disabled"
                                     };
                                     tui_state.status_message = Some(status.to_string());
-                                    tui_state.status_message_timer = Some(std::time::Instant::now());
+                                    tui_state.status_message_timer =
+                                        Some(std::time::Instant::now());
                                 }
                             }
                             Ok(None) => {
@@ -990,7 +1018,8 @@ async fn run_app(
                                 tui_state.status_message_timer = Some(std::time::Instant::now());
                             }
                             Err(e) => {
-                                tui_state.status_message = Some(format!("❌ Failed to load configuration: {}", e));
+                                tui_state.status_message =
+                                    Some(format!("❌ Failed to load configuration: {}", e));
                                 tui_state.status_message_timer = Some(std::time::Instant::now());
                             }
                         }
@@ -1293,20 +1322,16 @@ fn redraw_clock_only(
     ];
 
     let mut buf = Buffer::empty(cache.area);
-    let paragraph = Paragraph::new(Line::from(title_spans))
-        .style(Style::default().bold().fg(Color::Cyan));
+    let paragraph =
+        Paragraph::new(Line::from(title_spans)).style(Style::default().bold().fg(Color::Cyan));
 
     paragraph.render(cache.area, &mut buf);
     let area = cache.area;
-    let cells = buf
-        .content()
-        .iter()
-        .enumerate()
-        .map(|(i, cell)| {
-            let x = area.x + (i as u16 % area.width);
-            let y = area.y + (i as u16 / area.width);
-            (x, y, cell)
-        });
+    let cells = buf.content().iter().enumerate().map(|(i, cell)| {
+        let x = area.x + (i as u16 % area.width);
+        let y = area.y + (i as u16 / area.width);
+        (x, y, cell)
+    });
     terminal.backend_mut().draw(cells)?;
     Ok(true)
 }
@@ -1319,8 +1344,13 @@ fn redraw_clock_only(
 /// Personal bests (`records`), with where each stands now and the date it was set.
 fn draw_records_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCodingToolStats]) {
     use crate::records::Kind;
-    let goal = crate::config::Config::load().ok().flatten().map(|c| c.goal.monthly_tks).unwrap_or(150.0);
-    let board = crate::records::cached().unwrap_or_else(|| crate::records::board(filtered_stats, goal));
+    let goal = crate::config::Config::load()
+        .ok()
+        .flatten()
+        .map(|c| c.goal.monthly_tks)
+        .unwrap_or(150.0);
+    let board =
+        crate::records::cached().unwrap_or_else(|| crate::records::board(filtered_stats, goal));
     let dim = Style::default().fg(Color::DarkGray);
     let rows: Vec<Row> = Kind::ALL
         .iter()
@@ -1330,24 +1360,37 @@ fn draw_records_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCo
             // How close now is to the record: gold when it is the record (or ties it).
             let share = best.map(|b| now / b.value).unwrap_or(0.0);
             let now_style = if share >= 0.999 {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else if share >= 0.75 {
                 Style::default().fg(Color::Green)
             } else {
                 dim
             };
-            let now_text = if now > 0.0 { format!("{} ({:.0}%)", kind.format(now), share * 100.0) } else { "-".into() };
+            let now_text = if now > 0.0 {
+                format!("{} ({:.0}%)", kind.format(now), share * 100.0)
+            } else {
+                "-".into()
+            };
             Row::new(vec![
                 Cell::from(kind.label()).style(Style::default().add_modifier(Modifier::BOLD)),
-                Cell::from(best.map(|b| kind.format(b.value)).unwrap_or_else(|| "-".into()))
-                    .style(Style::default().fg(Color::Yellow)),
+                Cell::from(
+                    best.map(|b| kind.format(b.value))
+                        .unwrap_or_else(|| "-".into()),
+                )
+                .style(Style::default().fg(Color::Yellow)),
                 Cell::from(best.map(|b| b.when.clone()).unwrap_or_default()),
                 Cell::from(now_text).style(now_style),
             ])
         })
         .collect();
-    let [_, table_area, plans_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(13), Constraint::Min(4)]).areas(area);
+    let [_, table_area, plans_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(13),
+        Constraint::Min(4),
+    ])
+    .areas(area);
     let table = Table::new(
         rows,
         [Constraint::Length(23), Constraint::Length(12), Constraint::Length(62), Constraint::Min(16)],
@@ -1394,26 +1437,36 @@ fn draw_plan_closes(frame: &mut Frame, area: Rect) {
     let rows: Vec<Row> = groups
         .iter()
         .map(|(account, window)| {
-            let own: Vec<&crate::records::PlanWindow> =
-                windows.iter().filter(|w| &w.account == account && &w.window == window).collect();
-            let closed: Vec<&&crate::records::PlanWindow> = own.iter().filter(|w| w.resets_at <= now).collect();
+            let own: Vec<&crate::records::PlanWindow> = windows
+                .iter()
+                .filter(|w| &w.account == account && &w.window == window)
+                .collect();
+            let closed: Vec<&&crate::records::PlanWindow> =
+                own.iter().filter(|w| w.resets_at <= now).collect();
             let open = own.iter().find(|w| w.resets_at > now);
             let tool = own.last().map(|w| w.tool.clone()).unwrap_or_default();
             let last = closed.last().map(|w| {
-                Cell::from(format!("{:.0}% ({})", w.peak, date(w.resets_at))).style(fullness(w.peak))
+                Cell::from(format!("{:.0}% ({})", w.peak, date(w.resets_at)))
+                    .style(fullness(w.peak))
             });
-            let best = closed.iter().max_by(|a, b| a.peak.total_cmp(&b.peak)).map(|w| {
-                Cell::from(format!("{:.0}% ({})", w.peak, date(w.resets_at))).style(fullness(w.peak))
-            });
+            let best = closed
+                .iter()
+                .max_by(|a, b| a.peak.total_cmp(&b.peak))
+                .map(|w| {
+                    Cell::from(format!("{:.0}% ({})", w.peak, date(w.resets_at)))
+                        .style(fullness(w.peak))
+                });
             let recent: Vec<f64> = closed.iter().rev().take(4).map(|w| w.peak).collect();
             let average = (!recent.is_empty()).then(|| {
                 let avg = recent.iter().sum::<f64>() / recent.len() as f64;
                 Cell::from(format!("{avg:.0}% (last {})", recent.len())).style(fullness(avg))
             });
-            let now_cell = open.map(|w| Cell::from(format!("{:.0}% → {}", w.peak, date(w.resets_at))));
+            let now_cell =
+                open.map(|w| Cell::from(format!("{:.0}% → {}", w.peak, date(w.resets_at))));
             Row::new(vec![
                 Cell::from(tool).style(Style::default().add_modifier(Modifier::BOLD)),
-                Cell::from(account.replace(" (personal)", "")).style(Style::default().fg(Color::Cyan)),
+                Cell::from(account.replace(" (personal)", ""))
+                    .style(Style::default().fg(Color::Cyan)),
                 Cell::from(window.clone()),
                 last.unwrap_or_else(|| Cell::from("-").style(dim)),
                 best.unwrap_or_else(|| Cell::from("-").style(dim)),
@@ -1426,7 +1479,12 @@ fn draw_plan_closes(frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .title(" 📅 Plan closes · how full each week/month was when it reset (highest figure seen) · kept in plan_closes.json ");
     if rows.is_empty() {
-        frame.render_widget(Paragraph::new("No plan windows seen yet; the first close is recorded at its reset.").dim().block(block), area);
+        frame.render_widget(
+            Paragraph::new("No plan windows seen yet; the first close is recorded at its reset.")
+                .dim()
+                .block(block),
+            area,
+        );
         return;
     }
     let table = Table::new(
@@ -1442,9 +1500,17 @@ fn draw_plan_closes(frame: &mut Frame, area: Rect) {
         ],
     )
     .header(
-        Row::new(vec!["Tool", "Account", "Plan", "Last closed", "Best", "Average", "This one so far"])
-            .style(Style::default().add_modifier(Modifier::BOLD))
-            .bottom_margin(1),
+        Row::new(vec![
+            "Tool",
+            "Account",
+            "Plan",
+            "Last closed",
+            "Best",
+            "Average",
+            "This one so far",
+        ])
+        .style(Style::default().add_modifier(Modifier::BOLD))
+        .bottom_margin(1),
     )
     .column_spacing(1)
     .block(block);
@@ -1475,7 +1541,11 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
         .map(|row| {
             let w = &row.plan;
             // `ambertyeung@gmail.com (personal)` -> the email; a team name stays.
-            let account = w.account.clone().map(|a| a.replace(" (personal)", "")).unwrap_or_else(|| "-".into());
+            let account = w
+                .account
+                .clone()
+                .map(|a| a.replace(" (personal)", ""))
+                .unwrap_or_else(|| "-".into());
             let left = match (w.left_output(), w.left_dollars()) {
                 (Some(t), Some(d)) => format!("{} · ${d:.0}", human_tokens(t)),
                 _ => "-".into(),
@@ -1483,8 +1553,11 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             // Needed rate against the current one: green when keeping up, yellow when behind.
             let need = w.need_tks().map(|need| {
                 let keeping_up = w.now_tks >= need;
-                Cell::from(format!("{need:.0} tk/s"))
-                    .style(Style::default().fg(if keeping_up { Color::Green } else { Color::Yellow }))
+                Cell::from(format!("{need:.0} tk/s")).style(Style::default().fg(if keeping_up {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }))
             });
             let runs_out = w.runs_out_in_secs().map(human_secs);
             let locked = w.locked_out_secs().map(human_secs);
@@ -1493,13 +1566,20 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
                     "{} ({})",
                     human_secs(secs),
                     at.with_timezone(&chrono::Local)
-                        .format(if secs < 6 * 86_400 { "%a %H:%M" } else { "%b %-d" })
+                        .format(if secs < 6 * 86_400 {
+                            "%a %H:%M"
+                        } else {
+                            "%b %-d"
+                        })
                 ),
                 _ => "?".into(),
             };
             // The 5-hour window only says when to switch: yellow from 80%, red when full.
             let five = row.five_hour.as_ref().map(|f| {
-                let refill = f.resets_in_secs.map(human_secs).unwrap_or_else(|| "?".into());
+                let refill = f
+                    .resets_in_secs
+                    .map(human_secs)
+                    .unwrap_or_else(|| "?".into());
                 let color = if f.used >= 95.0 {
                     Color::Red
                 } else if f.used >= crate::advisor::SWITCH_SOON {
@@ -1511,16 +1591,35 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             });
             Row::new(vec![
                 Cell::from(w.tool.clone()),
-                Cell::from(account).style(Style::default().fg(if w.account.is_some() { Color::Cyan } else { Color::DarkGray })),
+                Cell::from(account).style(Style::default().fg(if w.account.is_some() {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                })),
                 Cell::from(w.window),
-                Cell::from(format!("{:>3.0}%", w.used)).style(Style::default().fg(used_color(w.used))),
+                Cell::from(format!("{:>3.0}%", w.used))
+                    .style(Style::default().fg(used_color(w.used))),
                 Cell::from(left),
                 need.unwrap_or_else(|| Cell::from("-").style(dim)),
-                Cell::from(if w.now_tks > 0.0 { format!("{:.0} tk/s", w.now_tks) } else { "-".into() }),
-                Cell::from(runs_out.clone().unwrap_or_else(|| "-".into()))
-                    .style(if runs_out.is_some() { Style::default().fg(Color::Red) } else { dim }),
-                Cell::from(locked.clone().unwrap_or_else(|| "-".into()))
-                    .style(if locked.is_some() { Style::default().fg(Color::Red) } else { dim }),
+                Cell::from(if w.now_tks > 0.0 {
+                    format!("{:.0} tk/s", w.now_tks)
+                } else {
+                    "-".into()
+                }),
+                Cell::from(runs_out.clone().unwrap_or_else(|| "-".into())).style(
+                    if runs_out.is_some() {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        dim
+                    },
+                ),
+                Cell::from(locked.clone().unwrap_or_else(|| "-".into())).style(
+                    if locked.is_some() {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        dim
+                    },
+                ),
                 Cell::from(resets),
                 five.unwrap_or_else(|| Cell::from("-").style(dim)),
             ])
@@ -1528,8 +1627,12 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
         .collect();
     let table_height = (rows.len() as u16 + 4).min(area.height.saturating_sub(5).max(3));
     // A blank line under the tabs, as the other views have.
-    let [_, table_area, picks_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(table_height), Constraint::Min(3)]).areas(area);
+    let [_, table_area, picks_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(table_height),
+        Constraint::Min(3),
+    ])
+    .areas(area);
     let table = Table::new(
         rows,
         [
@@ -1573,34 +1676,68 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
                 _ => Color::DarkGray,
             };
             let w = pick.window.as_ref();
-            let wasted = w.filter(|w| w.expiring() >= 1.0).map(|w| match w.left_dollars() {
-                Some(d) if w.projected.is_some() => format!("{:.0}% · ${:.0}", w.expiring(), d * w.expiring() / (100.0 - w.used).max(1.0)),
-                _ => format!("{:.0}%", w.expiring()),
-            });
+            let wasted = w
+                .filter(|w| w.expiring() >= 1.0)
+                .map(|w| match w.left_dollars() {
+                    Some(d) if w.projected.is_some() => format!(
+                        "{:.0}% · ${:.0}",
+                        w.expiring(),
+                        d * w.expiring() / (100.0 - w.used).max(1.0)
+                    ),
+                    _ => format!("{:.0}%", w.expiring()),
+                });
             let need = w.and_then(|w| w.need_tks()).filter(|_| pick.available);
             let now_tks = w.map(|w| w.now_tks).unwrap_or(0.0);
             let need_cell = match need {
-                Some(n) => Cell::from(format!("{n:.0} tk/s"))
-                    .style(Style::default().fg(if now_tks >= n { Color::Green } else { Color::Yellow })),
+                Some(n) => {
+                    Cell::from(format!("{n:.0} tk/s")).style(Style::default().fg(if now_tks >= n {
+                        Color::Green
+                    } else {
+                        Color::Yellow
+                    }))
+                }
                 None => Cell::from("-").style(dim),
             };
-            let resets = w.and_then(|w| w.resets_in_secs).map(human_secs).unwrap_or_else(|| "?".into());
-            let style = if pick.available { Style::default() } else { dim };
+            let resets = w
+                .and_then(|w| w.resets_in_secs)
+                .map(human_secs)
+                .unwrap_or_else(|| "?".into());
+            let style = if pick.available {
+                Style::default()
+            } else {
+                dim
+            };
             Row::new(vec![
                 Cell::from(format!("{}", i + 1)).style(dim),
-                Cell::from(action).style(Style::default().fg(action_color).add_modifier(Modifier::BOLD)),
+                Cell::from(action).style(
+                    Style::default()
+                        .fg(action_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Cell::from(pick.tool.clone()).style(style.add_modifier(Modifier::BOLD)),
                 Cell::from(wasted.unwrap_or_else(|| "-".into())).style(style),
                 need_cell,
-                Cell::from(if now_tks > 0.0 { format!("{now_tks:.0} tk/s") } else { "-".into() }).style(style),
+                Cell::from(if now_tks > 0.0 {
+                    format!("{now_tks:.0} tk/s")
+                } else {
+                    "-".into()
+                })
+                .style(style),
                 Cell::from(resets).style(style),
                 Cell::from(pick.why()).style(dim),
             ])
         })
         .collect();
-    let block = Block::default().borders(Borders::ALL).title(" Where to spend next · top first ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Where to spend next · top first ");
     if pick_rows.is_empty() {
-        frame.render_widget(Paragraph::new("No plan limits known yet.").dim().block(block), picks_area);
+        frame.render_widget(
+            Paragraph::new("No plan limits known yet.")
+                .dim()
+                .block(block),
+            picks_area,
+        );
         return;
     }
     let picks_table = Table::new(
@@ -1617,9 +1754,11 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
         ],
     )
     .header(
-        Row::new(vec!["#", "Do", "Tool", "Wasted", "Need", "Now", "Resets", "Why"])
-            .style(Style::default().add_modifier(Modifier::BOLD))
-            .bottom_margin(1),
+        Row::new(vec![
+            "#", "Do", "Tool", "Wasted", "Need", "Now", "Resets", "Why",
+        ])
+        .style(Style::default().add_modifier(Modifier::BOLD))
+        .bottom_margin(1),
     )
     .column_spacing(1)
     .block(block);
@@ -1653,10 +1792,10 @@ fn draw_ui(
         let summary_stats_height = if tui_state.selected_tab == 0 { 0 } else { 9 };
         let has_status_message = tui_state.status_message.is_some();
         Layout::vertical([
-            Constraint::Length(3),                             // Header
-            Constraint::Length(1),                             // Tabs
-            Constraint::Min(3),                                // Main table
-            Constraint::Length(summary_stats_height),          // Summary stats (0 for Summary tab)
+            Constraint::Length(3),                                      // Header
+            Constraint::Length(1),                                      // Tabs
+            Constraint::Min(3),                                         // Main table
+            Constraint::Length(summary_stats_height), // Summary stats (0 for Summary tab)
             Constraint::Length(if has_error { 3 } else { 1 }), // Help text
             Constraint::Length(if has_status_message { 1 } else { 0 }), // Status bar
         ])
@@ -1703,7 +1842,10 @@ fn draw_ui(
     }
 
     // The update state goes beside the version, the perf readout (if on) after it.
-    let mut header_spans = vec![Span::styled(version.to_string(), Style::new().cyan().bold())];
+    let mut header_spans = vec![Span::styled(
+        version.to_string(),
+        Style::new().cyan().bold(),
+    )];
     header_spans.extend(crate::tui::summary_dashboard::update_spans());
     if header_line.len() > version.len() {
         header_spans.push(Span::styled(
@@ -1902,19 +2044,32 @@ fn draw_ui(
                 frame.render_widget(status_widget, help_chunks[1]);
             }
         }
-        
+
         // Status bar for temporary messages (Slack toggle, etc.)
-        if let (Some(status_msg), Some(timer)) = (&tui_state.status_message, &tui_state.status_message_timer) {
+        if let (Some(status_msg), Some(timer)) =
+            (&tui_state.status_message, &tui_state.status_message_timer)
+        {
             // Auto-clear after 3 seconds
             if timer.elapsed().as_secs() >= 3 {
                 tui_state.status_message = None;
                 tui_state.status_message_timer = None;
             } else {
                 let status_widget = Paragraph::new(status_msg.clone())
-                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                    .style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )
                     .alignment(ratatui::layout::Alignment::Center)
                     .wrap(ratatui::widgets::Wrap { trim: true });
-                frame.render_widget(status_widget, help_chunks[if tui_state.status_message.is_some() { 2 } else { 1 }]);
+                frame.render_widget(
+                    status_widget,
+                    help_chunks[if tui_state.status_message.is_some() {
+                        2
+                    } else {
+                        1
+                    }],
+                );
             }
         }
     } else {
@@ -2778,7 +2933,11 @@ mod period_tests {
             analyzer_name: "t".into(),
         };
         // Sun Dec 28 2025 is ISO week 52 of 2025; Mon Dec 29 starts 2026-W01.
-        for (day, output, cost) in [("2025-12-28", 1, 1.0), ("2025-12-29", 10, 2.0), ("2026-01-02", 100, 4.0)] {
+        for (day, output, cost) in [
+            ("2025-12-28", 1, 1.0),
+            ("2025-12-29", 10, 2.0),
+            ("2026-01-02", 100, 4.0),
+        ] {
             let mut d = crate::types::DailyStats::default();
             d.stats.output_tokens = output;
             d.stats.cost = cost;
@@ -2788,12 +2947,27 @@ mod period_tests {
             stats.daily_stats.insert(day.into(), d);
         }
         let weeks = group_by_period(&stats, Period::Week);
-        assert_eq!(weeks.daily_stats.keys().collect::<Vec<_>>(), ["2025-W52", "2026-W01"]);
+        assert_eq!(
+            weeks.daily_stats.keys().collect::<Vec<_>>(),
+            ["2025-W52", "2026-W01"]
+        );
         let w1 = &weeks.daily_stats["2026-W01"];
-        assert_eq!((w1.stats.output_tokens, w1.stats.cost, w1.models["m"]), (110, 6.0, 2));
-        assert_eq!((w1.stats.cache_creation_tokens, w1.stats.cache_creation_1h_tokens), (14, 10));
+        assert_eq!(
+            (w1.stats.output_tokens, w1.stats.cost, w1.models["m"]),
+            (110, 6.0, 2)
+        );
+        assert_eq!(
+            (
+                w1.stats.cache_creation_tokens,
+                w1.stats.cache_creation_1h_tokens
+            ),
+            (14, 10)
+        );
         let months = group_by_period(&stats, Period::Month);
-        assert_eq!(months.daily_stats.keys().collect::<Vec<_>>(), ["2025-12", "2026-01"]);
+        assert_eq!(
+            months.daily_stats.keys().collect::<Vec<_>>(),
+            ["2025-12", "2026-01"]
+        );
         assert_eq!(months.daily_stats["2025-12"].stats.output_tokens, 11);
     }
 
@@ -2826,21 +3000,47 @@ mod period_tests {
         stats.daily_stats.insert("2026-10-17".into(), day);
 
         let hours = group_slices(&stats, Period::Hour, &SliceFilter::default());
-        assert_eq!(hours.daily_stats.keys().collect::<Vec<_>>(), ["2026-10-17 09", "2026-10-17 14"]);
+        assert_eq!(
+            hours.daily_stats.keys().collect::<Vec<_>>(),
+            ["2026-10-17 09", "2026-10-17 14"]
+        );
         assert_eq!(hours.daily_stats["2026-10-17 09"].stats.output_tokens, 110);
-        assert_eq!(crate::utils::format_date_for_display("2026-10-17 09"), "10/17 09:00");
+        assert_eq!(
+            crate::utils::format_date_for_display("2026-10-17 09"),
+            "10/17 09:00"
+        );
 
-        let opus = SliceFilter { model: Some("opus".into()), project: None };
+        let opus = SliceFilter {
+            model: Some("opus".into()),
+            project: None,
+        };
         let days = group_slices(&stats, Period::Day, &opus);
-        assert_eq!((days.daily_stats["2026-10-17"].stats.output_tokens, days.daily_stats["2026-10-17"].stats.cost), (1100, 6.0));
-        let both = SliceFilter { model: Some("opus".into()), project: Some("splitrail".into()) };
-        assert_eq!(group_slices(&stats, Period::Month, &both).daily_stats["2026-10"].stats.output_tokens, 100);
+        assert_eq!(
+            (
+                days.daily_stats["2026-10-17"].stats.output_tokens,
+                days.daily_stats["2026-10-17"].stats.cost
+            ),
+            (1100, 6.0)
+        );
+        let both = SliceFilter {
+            model: Some("opus".into()),
+            project: Some("splitrail".into()),
+        };
+        assert_eq!(
+            group_slices(&stats, Period::Month, &both).daily_stats["2026-10"]
+                .stats
+                .output_tokens,
+            100
+        );
 
         // `f` steps through models busiest first, then back to all.
         let models = slice_options(&stats, true);
         assert_eq!(models, ["opus", "sonnet"]);
         assert_eq!(cycle(&None, &models).as_deref(), Some("opus"));
-        assert_eq!(cycle(&Some("opus".into()), &models).as_deref(), Some("sonnet"));
+        assert_eq!(
+            cycle(&Some("opus".into()), &models).as_deref(),
+            Some("sonnet")
+        );
         assert_eq!(cycle(&Some("sonnet".into()), &models), None);
     }
 }

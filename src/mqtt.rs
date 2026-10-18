@@ -14,11 +14,11 @@
 
 use crate::config::MqttConfig;
 use crate::plan_limits::{self, AccountLimits};
+use crate::rollup;
 use crate::types::{MessageRole, MultiAnalyzerStats};
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS};
 use serde_json::{Value, json};
-use crate::rollup;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -192,10 +192,25 @@ pub enum SensorKind {
 }
 
 pub fn sensors(tools: &[ToolState]) -> Vec<Sensor> {
-    let sensor = |key: String, name: String, path: String, kind| Sensor { key, name, path, kind };
+    let sensor = |key: String, name: String, path: String, kind| Sensor {
+        key,
+        name,
+        path,
+        kind,
+    };
     let mut out = vec![
-        sensor("tks".into(), "Output tk/s".into(), "value_json.tks".into(), SensorKind::Rate),
-        sensor("cost_today".into(), "Cost today".into(), "value_json.cost_today".into(), SensorKind::Cost),
+        sensor(
+            "tks".into(),
+            "Output tk/s".into(),
+            "value_json.tks".into(),
+            SensorKind::Rate,
+        ),
+        sensor(
+            "cost_today".into(),
+            "Cost today".into(),
+            "value_json.cost_today".into(),
+            SensorKind::Cost,
+        ),
         sensor(
             "output_tokens_today".into(),
             "Output tokens today".into(),
@@ -247,7 +262,10 @@ impl Topics {
             s if s.is_empty() => "splitrail".to_string(),
             s => s,
         };
-        Self { host: host.to_string(), host_slug }
+        Self {
+            host: host.to_string(),
+            host_slug,
+        }
     }
     pub fn state(&self) -> String {
         format!("{TOPIC_ROOT}/{}/state", self.host_slug)
@@ -260,7 +278,10 @@ impl Topics {
         format!("{TOPIC_ROOT}/{}/{kind}", self.host_slug)
     }
     pub fn discovery(&self, sensor: &Sensor) -> String {
-        format!("{DISCOVERY_ROOT}/sensor/splitrail_{}_{}/config", self.host_slug, sensor.key)
+        format!(
+            "{DISCOVERY_ROOT}/sensor/splitrail_{}_{}/config",
+            self.host_slug, sensor.key
+        )
     }
 
     pub fn discovery_payload(&self, sensor: &Sensor) -> Value {
@@ -324,7 +345,10 @@ pub fn password(config: &MqttConfig) -> Option<String> {
         },
         None => std::env::home_dir()?.join(".config/splitrail/mqtt_password"),
     };
-    let password = std::fs::read_to_string(path).ok()?.trim_end_matches(['\n', '\r']).to_string();
+    let password = std::fs::read_to_string(path)
+        .ok()?
+        .trim_end_matches(['\n', '\r'])
+        .to_string();
     (!password.is_empty()).then_some(password)
 }
 
@@ -343,7 +367,12 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
     options.set_keep_alive(Duration::from_secs(30));
     // The roll-up's daily totals run to tens of KB; rumqttc's default cap is 10 KB.
     options.set_max_packet_size(4 * 1024 * 1024, 4 * 1024 * 1024);
-    options.set_last_will(LastWill::new(topics.status(), "offline", QoS::AtLeastOnce, true));
+    options.set_last_will(LastWill::new(
+        topics.status(),
+        "offline",
+        QoS::AtLeastOnce,
+        true,
+    ));
     if let Some(username) = &config.username {
         options.set_credentials(username, password(&config).unwrap_or_default());
     }
@@ -401,7 +430,10 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
                 continue;
             }
             let payload = topics.discovery_payload(&sensor).to_string();
-            if client.try_publish(topics.discovery(&sensor), QoS::AtLeastOnce, true, payload).is_ok() {
+            if client
+                .try_publish(topics.discovery(&sensor), QoS::AtLeastOnce, true, payload)
+                .is_ok()
+            {
                 discovered.insert(sensor.key);
             }
         }
@@ -409,7 +441,10 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
         let _ = client.try_publish(topics.state(), QoS::AtLeastOnce, true, state);
 
         let rollups = [
-            ("daily", serde_json::to_string(&rollup::daily_payload(&topics.host, &stats, now))),
+            (
+                "daily",
+                serde_json::to_string(&rollup::daily_payload(&topics.host, &stats, now)),
+            ),
             (
                 "recent",
                 serde_json::to_string(&rollup::recent_payload(
@@ -419,12 +454,19 @@ pub async fn run(config: MqttConfig, mut stats_rx: watch::Receiver<MultiAnalyzer
                     config.share_previews,
                 )),
             ),
-            ("limits", serde_json::to_string(&rollup::limits_payload(now.timestamp() as f64))),
+            (
+                "limits",
+                serde_json::to_string(&rollup::limits_payload(now.timestamp() as f64)),
+            ),
         ];
         for (kind, payload) in rollups {
             let Ok(payload) = payload else { continue };
             // Daily totals change with every message but are large: at most once a minute.
-            let min_gap = if kind == "recent" { Duration::ZERO } else { ROLLUP_MIN_GAP };
+            let min_gap = if kind == "recent" {
+                Duration::ZERO
+            } else {
+                ROLLUP_MIN_GAP
+            };
             let stale = last_sent.get(kind).is_none_or(|(sent, at)| {
                 (*sent != payload && at.elapsed() >= min_gap) || at.elapsed() >= ROLLUP_REFRESH
             });
@@ -455,7 +497,12 @@ mod tests {
     use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, Stats};
     use std::sync::Arc;
 
-    fn message(date: DateTime<Utc>, role: MessageRole, output: u64, cost: f64) -> ConversationMessage {
+    fn message(
+        date: DateTime<Utc>,
+        role: MessageRole,
+        output: u64,
+        cost: f64,
+    ) -> ConversationMessage {
         ConversationMessage {
             application: Application::ClaudeCode,
             date,
@@ -464,7 +511,11 @@ mod tests {
             local_hash: None,
             global_hash: format!("{date}{output}"),
             model: Some("m".into()),
-            stats: Stats { output_tokens: output, cost, ..Default::default() },
+            stats: Stats {
+                output_tokens: output,
+                cost,
+                ..Default::default()
+            },
             role,
             content: None,
         }
@@ -494,12 +545,30 @@ mod tests {
                 tool(
                     "Claude Code",
                     vec![
-                        message(now - ChronoDuration::minutes(5), MessageRole::Assistant, 9000, 1.5),
-                        message(now - ChronoDuration::minutes(20), MessageRole::Assistant, 500, 0.0),
+                        message(
+                            now - ChronoDuration::minutes(5),
+                            MessageRole::Assistant,
+                            9000,
+                            1.5,
+                        ),
+                        message(
+                            now - ChronoDuration::minutes(20),
+                            MessageRole::Assistant,
+                            500,
+                            0.0,
+                        ),
                         message(now - ChronoDuration::minutes(1), MessageRole::User, 0, 0.0),
                     ],
                 ),
-                tool("Cline", vec![message(now - ChronoDuration::days(90), MessageRole::Assistant, 10, 1.0)]),
+                tool(
+                    "Cline",
+                    vec![message(
+                        now - ChronoDuration::days(90),
+                        MessageRole::Assistant,
+                        10,
+                        1.0,
+                    )],
+                ),
                 tool("Cursor Agent", vec![]),
             ],
         };
@@ -507,7 +576,10 @@ mod tests {
             (name == "Cursor Agent").then_some(AccountLimits {
                 five_hour: None,
                 seven_day: None,
-                monthly: Some(WindowStatus { used_percentage: 9.04, resets_in_secs: Some(10) }),
+                monthly: Some(WindowStatus {
+                    used_percentage: 9.04,
+                    resets_in_secs: Some(10),
+                }),
             })
         };
         let tools = tool_states(&stats, now, limits);
@@ -520,7 +592,10 @@ mod tests {
         assert_eq!(state["tks"], 10.0);
         assert_eq!(state["tools"]["cursor_agent"]["monthly"], 9.0);
         assert_eq!(state["tools"]["cursor_agent"]["five_hour"], Value::Null);
-        assert!(state["tools"]["cline"].is_object(), "every tool stays in the state");
+        assert!(
+            state["tools"]["cline"].is_object(),
+            "every tool stays in the state"
+        );
 
         let keys: Vec<_> = sensors(&tools).into_iter().map(|s| s.key).collect();
         assert!(keys.contains(&"claude_code_tks".to_string()));
@@ -543,9 +618,15 @@ mod tests {
             "homeassistant/sensor/splitrail_amberts_macbook_pro_tks/config"
         );
         let payload = topics.discovery_payload(&sensor);
-        assert_eq!(payload["state_topic"], "splitrail/amberts_macbook_pro/state");
+        assert_eq!(
+            payload["state_topic"],
+            "splitrail/amberts_macbook_pro/state"
+        );
         assert_eq!(payload["value_template"], "{{ value_json.tks }}");
-        assert_eq!(payload["availability_topic"], "splitrail/amberts_macbook_pro/status");
+        assert_eq!(
+            payload["availability_topic"],
+            "splitrail/amberts_macbook_pro/status"
+        );
         assert_eq!(payload["unit_of_measurement"], "tk/s");
     }
 

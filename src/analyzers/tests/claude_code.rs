@@ -430,15 +430,22 @@ fn test_unknown_entry_types_do_not_warn() {
     // Claude Code writes many housekeeping record types (attachment, cost-state, last-prompt, ...)
     // that carry no token usage. They must be skipped silently, not reported as invalid entries.
     let jsonl = concat!(
-        r#"{"type":"last-prompt","leafUuid":"abc","sessionId":"s1"}"#, "\n",
-        r#"{"type":"attachment","attachment":{"type":"file"},"cwd":"/tmp","sessionId":"s1","timestamp":"2026-09-05T00:00:00.000Z","uuid":"u1","parentUuid":null,"isSidechain":false,"userType":"external","version":"2.0.0","entrypoint":"cli","gitBranch":"main"}"#, "\n",
-        r#"{"type":"cost-state","sessionId":"s1","totalCostUSD":1.5,"modelUsage":{}}"#, "\n",
-        r#"{"type":"some-future-record","sessionId":"s1"}"#, "\n",
+        r#"{"type":"last-prompt","leafUuid":"abc","sessionId":"s1"}"#,
+        "\n",
+        r#"{"type":"attachment","attachment":{"type":"file"},"cwd":"/tmp","sessionId":"s1","timestamp":"2026-09-05T00:00:00.000Z","uuid":"u1","parentUuid":null,"isSidechain":false,"userType":"external","version":"2.0.0","entrypoint":"cli","gitBranch":"main"}"#,
+        "\n",
+        r#"{"type":"cost-state","sessionId":"s1","totalCostUSD":1.5,"modelUsage":{}}"#,
+        "\n",
+        r#"{"type":"some-future-record","sessionId":"s1"}"#,
+        "\n",
         // ToolSearch results: tool_result whose content is a list of `tool_reference` blocks.
-        r#"{"parentUuid":"u2","isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"s1","version":"2.0.0","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"tool_reference","tool_name":"WebSearch"}]}]},"uuid":"u3","timestamp":"2026-09-05T00:00:02.000Z","toolUseResult":{"matches":["WebSearch"],"query":"select:WebSearch"}}"#, "\n",
+        r#"{"parentUuid":"u2","isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"s1","version":"2.0.0","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"tool_reference","tool_name":"WebSearch"}]}]},"uuid":"u3","timestamp":"2026-09-05T00:00:02.000Z","toolUseResult":{"matches":["WebSearch"],"query":"select:WebSearch"}}"#,
+        "\n",
         // Assistant message with an unmodeled `fallback` block: its usage must still be counted.
-        r#"{"parentUuid":"u3","isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"s1","version":"2.0.0","type":"assistant","message":{"id":"msg_2","role":"assistant","model":"claude-opus-5","content":[{"type":"fallback","model":"claude-opus-4-8"},{"type":"text","text":"ok"}],"usage":{"input_tokens":7,"output_tokens":3}},"uuid":"u4","timestamp":"2026-09-05T00:00:03.000Z","requestId":"req_2"}"#, "\n",
-        r#"{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"s1","version":"2.0.0","type":"assistant","message":{"id":"msg_1","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":5}},"uuid":"u2","timestamp":"2026-09-05T00:00:01.000Z","requestId":"req_1"}"#, "\n",
+        r#"{"parentUuid":"u3","isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"s1","version":"2.0.0","type":"assistant","message":{"id":"msg_2","role":"assistant","model":"claude-opus-5","content":[{"type":"fallback","model":"claude-opus-4-8"},{"type":"text","text":"ok"}],"usage":{"input_tokens":7,"output_tokens":3}},"uuid":"u4","timestamp":"2026-09-05T00:00:03.000Z","requestId":"req_2"}"#,
+        "\n",
+        r#"{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/tmp","sessionId":"s1","version":"2.0.0","type":"assistant","message":{"id":"msg_1","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":5}},"uuid":"u2","timestamp":"2026-09-05T00:00:01.000Z","requestId":"req_1"}"#,
+        "\n",
     );
     let path = Path::new("/unknown-types-test/s1.jsonl");
     let mut reader = BufReader::new(Cursor::new(jsonl));
@@ -455,7 +462,10 @@ fn test_unknown_entry_types_do_not_warn() {
         .into_iter()
         .filter(|w| w.contains("unknown-types-test"))
         .collect();
-    assert!(noisy.is_empty(), "unknown entry types should not warn, got: {noisy:?}");
+    assert!(
+        noisy.is_empty(),
+        "unknown entry types should not warn, got: {noisy:?}"
+    );
 }
 
 /// Safety net for BZL-14 phase 2. Folding stats across incremental appends must produce exactly
@@ -480,16 +490,37 @@ async fn incremental_accumulation_matches_a_cold_full_parse() {
     // Includes a repeated request/message id, so the split-message fold is exercised across
     // refreshes rather than within a single batch.
     let rows = [
-        (r#""id":"msg_a","type":"message","role":"assistant","model":"claude-opus-5""#, "req_a", 10, 20, "11"),
-        (r#""id":"msg_a","type":"message","role":"assistant","model":"claude-opus-5""#, "req_a", 7, 5, "12"),
-        (r#""id":"msg_b","type":"message","role":"assistant","model":"claude-sonnet-5""#, "req_b", 4, 9, "13"),
+        (
+            r#""id":"msg_a","type":"message","role":"assistant","model":"claude-opus-5""#,
+            "req_a",
+            10,
+            20,
+            "11",
+        ),
+        (
+            r#""id":"msg_a","type":"message","role":"assistant","model":"claude-opus-5""#,
+            "req_a",
+            7,
+            5,
+            "12",
+        ),
+        (
+            r#""id":"msg_b","type":"message","role":"assistant","model":"claude-sonnet-5""#,
+            "req_b",
+            4,
+            9,
+            "13",
+        ),
     ];
     for (i, (msg, req, inp, out, hour)) in rows.iter().enumerate() {
         let line = format!(
             r#"{{"parentUuid":"x","isSidechain":false,"userType":"external","cwd":"D:\\splitrail","sessionId":"s-1","version":"1.0.51","type":"assistant","message":{{{msg},"content":[{{"type":"text","text":"t"}}],"usage":{{"input_tokens":{inp},"output_tokens":{out}}}}},"requestId":"{req}","uuid":"u-{i}","timestamp":"2025-08-02T{hour}:00:00.000Z"}}"#
         );
         {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file)
+                .unwrap();
             writeln!(f, "{line}").unwrap();
         }
         incremental.parse_conversations_with_report(&sources);
@@ -549,7 +580,10 @@ async fn test_analyzer_reloads_incrementally() {
     // even though the entry that defined it is in the already-parsed prefix.
     let appended = r#"{"parentUuid":"x","isSidechain":false,"userType":"external","cwd":"D:\\splitrail","sessionId":"502be1cb-cf86-ecce-fe62-89ddec1e7563","version":"1.0.51","type":"assistant","message":{"id":"msg_new","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"later"}],"usage":{"input_tokens":3,"output_tokens":4}},"requestId":"req_new","uuid":"new-uuid","timestamp":"2025-08-02T15:00:00.000Z"}"#;
     {
-        let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap();
         writeln!(f, "{appended}").unwrap();
     }
     let (_, report) = analyzer.parse_conversations_with_report(&sources);
@@ -564,7 +598,9 @@ async fn test_analyzer_reloads_incrementally() {
         "only the appended message's tokens were added"
     );
     assert!(
-        daily.values().any(|d| d.models.contains_key("claude-opus-5")),
+        daily
+            .values()
+            .any(|d| d.models.contains_key("claude-opus-5")),
         "the appended turn's model reached the daily aggregate"
     );
 }
@@ -593,12 +629,23 @@ async fn subagent_transcripts_roll_into_their_parent_session() {
 
     let analyzer = ClaudeCodeAnalyzer::for_account(None, config_dir.path().to_path_buf());
     let sources = analyzer.discover_data_sources().unwrap();
-    assert_eq!(sources.len(), 2, "parent and subagent transcripts are both discovered");
+    assert_eq!(
+        sources.len(),
+        2,
+        "parent and subagent transcripts are both discovered"
+    );
 
     let stats = analyzer.get_stats().await.unwrap();
-    let output: u64 = stats.daily_stats.values().map(|d| d.stats.output_tokens).sum();
+    let output: u64 = stats
+        .daily_stats
+        .values()
+        .map(|d| d.stats.output_tokens)
+        .sum();
     assert_eq!(output, 7 + 15 + 1000, "subagent output tokens are counted");
-    assert_eq!(stats.num_conversations, 1, "a subagent is not a session of its own");
+    assert_eq!(
+        stats.num_conversations, 1,
+        "a subagent is not a session of its own"
+    );
 }
 
 /// BZL-64: each account reads only its own config directory and gets its own name.

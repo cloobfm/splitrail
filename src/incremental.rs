@@ -447,7 +447,10 @@ mod tests {
         let (msgs, report) = cache.refresh(&src(&a), line_parser(&calls));
         assert!(contents(&msgs).is_empty());
         assert_eq!(report.removed, 1);
-        assert!(report.needs_rebuild, "a vanished file invalidates folded state");
+        assert!(
+            report.needs_rebuild,
+            "a vanished file invalidates folded state"
+        );
 
         // a is deleted from disk while still listed
         fs::remove_file(&a).unwrap();

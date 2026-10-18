@@ -373,7 +373,10 @@ fn merge_snapshots(snapshots: Vec<serde_json::Value>) -> Option<serde_json::Valu
         .1
         .clone();
     let mut windows = serde_json::Map::new();
-    for limits in snapshots.iter().filter_map(|s| s.get("rate_limits")?.as_object()) {
+    for limits in snapshots
+        .iter()
+        .filter_map(|s| s.get("rate_limits")?.as_object())
+    {
         for (key, window) in limits {
             let best = match windows.get(key) {
                 Some(current) => better_window(current, window).clone(),
@@ -418,7 +421,9 @@ fn remote_column_snapshot(column: &str) -> Option<String> {
     }
     let captured = |s: &serde_json::Value| s.get("captured_at").and_then(|a| a.as_f64());
     let hash_of = |s: &serde_json::Value| {
-        s.get("login_hash").and_then(|h| h.as_str()).map(str::to_string)
+        s.get("login_hash")
+            .and_then(|h| h.as_str())
+            .map(str::to_string)
     };
     let mut candidates: Vec<serde_json::Value> = Vec::new();
     {
@@ -431,7 +436,12 @@ fn remote_column_snapshot(column: &str) -> Option<String> {
             .1
             .clone();
         if let Some(hash) = hash_of(&own) {
-            candidates.extend(all.values().flatten().filter(|s| hash_of(s).as_ref() == Some(&hash)).cloned());
+            candidates.extend(
+                all.values()
+                    .flatten()
+                    .filter(|s| hash_of(s).as_ref() == Some(&hash))
+                    .cloned(),
+            );
         }
         candidates.push(own);
     }
@@ -443,7 +453,11 @@ fn remote_column_snapshot(column: &str) -> Option<String> {
             if path.extension().is_some_and(|e| e == "json")
                 && let Ok(content) = std::fs::read_to_string(&path)
                 && let Ok(local) = serde_json::from_str::<serde_json::Value>(&content)
-                && local.get("login").and_then(|l| l.as_str()).map(crate::rollup::login_hash).as_ref()
+                && local
+                    .get("login")
+                    .and_then(|l| l.as_str())
+                    .map(crate::rollup::login_hash)
+                    .as_ref()
                     == Some(&hash)
             {
                 candidates.push(local);
@@ -497,7 +511,9 @@ pub fn login_for_analyzer(analyzer_name: &str) -> Option<String> {
 pub fn account_for_analyzer(analyzer_name: &str) -> Option<String> {
     let full = |content: &str| {
         let file = serde_json::from_str::<SnapshotFile>(content).ok()?;
-        file.login.filter(|l| !l.is_empty()).or(file.login_name.filter(|n| !n.is_empty()))
+        file.login
+            .filter(|l| !l.is_empty())
+            .or(file.login_name.filter(|n| !n.is_empty()))
     };
     if let Some(content) = remote_column_snapshot(analyzer_name) {
         return full(&content);
@@ -704,11 +720,19 @@ mod tests {
         };
         set_remote_snapshots(
             "test-devbox",
-            vec![remote(900.0, "me@x.com", 1.0), remote(2000.0, "other@x.com", 2.0), remote(1500.0, "ME@x.com", 25.0)],
+            vec![
+                remote(900.0, "me@x.com", 1.0),
+                remote(2000.0, "other@x.com", 2.0),
+                remote(1500.0, "ME@x.com", 25.0),
+            ],
         );
         let chosen = with_remote_snapshots(local).unwrap();
         let limits = parse_snapshot(&chosen, 1600.0).unwrap();
-        assert_eq!(limits.five_hour.unwrap().used_percentage, 25.0, "the other login's 2% is ignored");
+        assert_eq!(
+            limits.five_hour.unwrap().used_percentage,
+            25.0,
+            "the other login's 2% is ignored"
+        );
         // The newest snapshot (1500) repeats an older 70% for the week; the higher figure stays.
         assert_eq!(limits.seven_day.unwrap().used_percentage, 79.0);
         set_remote_snapshots("test-devbox", vec![]);
@@ -721,13 +745,26 @@ mod tests {
         crate::rollup::register_remote_column("Codex@test-box", "test_box", "Codex");
         set_remote_snapshots(
             "test_box",
-            vec![serde_json::json!({"captured_at": 1000.0, "login_hash": crate::rollup::login_hash("dev@x.com"),
-                "login_name": "dev", "rate_limits": {"five_hour": {"used_percentage": 40.0, "resets_at": 9000.0}}})],
+            vec![
+                serde_json::json!({"captured_at": 1000.0, "login_hash": crate::rollup::login_hash("dev@x.com"),
+                "login_name": "dev", "rate_limits": {"five_hour": {"used_percentage": 40.0, "resets_at": 9000.0}}}),
+            ],
         );
         let snapshot = remote_column_snapshot("Claude@tes-box").unwrap();
         assert_eq!(parse_login(&snapshot).as_deref(), Some("dev"));
-        assert_eq!(parse_snapshot(&snapshot, 1500.0).unwrap().five_hour.unwrap().used_percentage, 40.0);
-        assert_eq!(remote_column_snapshot("Codex@test-box"), None, "only Claude has snapshots");
+        assert_eq!(
+            parse_snapshot(&snapshot, 1500.0)
+                .unwrap()
+                .five_hour
+                .unwrap()
+                .used_percentage,
+            40.0
+        );
+        assert_eq!(
+            remote_column_snapshot("Codex@test-box"),
+            None,
+            "only Claude has snapshots"
+        );
         set_remote_snapshots("test_box", vec![]);
     }
 
@@ -738,6 +775,10 @@ mod tests {
         assert_eq!(better_window(&old, &new), &new);
         assert_eq!(better_window(&new, &old), &new);
         let (stale, current) = (w(70.0, 1000.0), w(79.0, 1060.0));
-        assert_eq!(better_window(&current, &stale), &current, "same window: the higher figure");
+        assert_eq!(
+            better_window(&current, &stale),
+            &current,
+            "same window: the higher figure"
+        );
     }
 }

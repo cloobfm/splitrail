@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json;
 use simd_json::prelude::*;
 use std::collections::HashSet;
@@ -55,9 +55,7 @@ struct KiroUserMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum KiroUserContent {
     #[serde(rename = "Prompt")]
-    Prompt {
-        prompt: String,
-    },
+    Prompt { prompt: String },
     #[serde(rename = "ToolUseResults")]
     ToolUseResults {
         tool_use_results: Vec<KiroToolUseResult>,
@@ -225,9 +223,9 @@ impl KiroCliAnalyzer {
         project_path: &str,
         conversation_json: &str,
     ) -> Result<Vec<ConversationMessage>> {
-    // Parse using regular serde for better error messages
-    let conversation: KiroConversation = serde_json::from_str(conversation_json)
-        .context("Failed to parse Kiro CLI conversation JSON structure")?;
+        // Parse using regular serde for better error messages
+        let conversation: KiroConversation = serde_json::from_str(conversation_json)
+            .context("Failed to parse Kiro CLI conversation JSON structure")?;
 
         let project_hash = Path::new(project_path)
             .file_name()
@@ -272,7 +270,7 @@ impl KiroCliAnalyzer {
             ));
 
             let user_content = Self::format_kiro_user_message(&history_entry.user);
-            
+
             // Check if this is actually tool results (should be assistant message)
             let (role, content) = match &history_entry.user.content {
                 KiroUserContent::ToolUseResults { .. } => {
@@ -284,7 +282,7 @@ impl KiroCliAnalyzer {
                     (MessageRole::User, user_content)
                 }
             };
-            
+
             entries.push(ConversationMessage {
                 application: Application::KiroCli,
                 date: timestamp,
@@ -354,7 +352,7 @@ impl KiroCliAnalyzer {
         match &user.content {
             KiroUserContent::Prompt { prompt } => {
                 let mut content = prompt.clone();
-                
+
                 if let Some(env_ctx) = &user.env_context {
                     if let Some(env_state) = &env_ctx.env_state {
                         if let Some(cwd) = &env_state.current_working_directory {
@@ -362,13 +360,13 @@ impl KiroCliAnalyzer {
                         }
                     }
                 }
-                
+
                 if let Some(additional) = &user.additional_context {
                     if !additional.is_empty() {
                         content.push_str(&format!("\n\n[Additional Context: {}]", additional));
                     }
                 }
-                
+
                 content
             }
             KiroUserContent::ToolUseResults { tool_use_results } => {
@@ -410,8 +408,7 @@ impl KiroCliAnalyzer {
             for tool in &tool_use.tool_uses {
                 content.push_str(&format!(
                     "\n\n[Tool Use: {}]\nArgs: {}",
-                    tool.name,
-                    tool.args
+                    tool.name, tool.args
                 ));
             }
 
@@ -553,9 +550,7 @@ impl Analyzer for KiroCliAnalyzer {
                 // SQLite commits land in the WAL before the database file itself changes.
                 Some("sqlite3") => ["-wal", "-shm"]
                     .iter()
-                    .map(|suffix| {
-                        PathBuf::from(format!("{}{suffix}", path.display()))
-                    })
+                    .map(|suffix| PathBuf::from(format!("{}{suffix}", path.display())))
                     .collect(),
                 // The session's events live beside its metadata and are what grow.
                 Some("json") => vec![path.with_extension("jsonl")],
@@ -652,6 +647,10 @@ mod live {
         let stats = super::KiroCliAnalyzer::new().get_stats().await.unwrap();
         let cost: f64 = stats.daily_stats.values().map(|d| d.stats.cost).sum();
         let latest = stats.messages.iter().map(|m| m.date).max();
-        println!("messages {} conversations {} cost ${cost:.4} latest {latest:?}", stats.messages.len(), stats.num_conversations);
+        println!(
+            "messages {} conversations {} cost ${cost:.4} latest {latest:?}",
+            stats.messages.len(),
+            stats.num_conversations
+        );
     }
 }

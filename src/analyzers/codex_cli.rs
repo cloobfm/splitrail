@@ -55,7 +55,10 @@ mod fallback_model_tests {
 model = "gpt-6.1-sol"
 model_reasoning_effort = "low"
 "#;
-        assert_eq!(fallback_model_from_toml(cfg).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(
+            fallback_model_from_toml(cfg).as_deref(),
+            Some("gpt-6.1-sol")
+        );
     }
 
     /// A `model` inside a profile is not the default the session ran, so it must not be picked up.
@@ -73,7 +76,10 @@ model = "o3-pro"
         assert_eq!(fallback_model_from_toml(""), None);
         assert_eq!(fallback_model_from_toml("model = \"\""), None);
         assert_eq!(fallback_model_from_toml("this is not toml ["), None);
-        assert_eq!(DEFAULT_FALLBACK_MODEL, "gpt-5", "the documented last resort");
+        assert_eq!(
+            DEFAULT_FALLBACK_MODEL, "gpt-5",
+            "the documented last resort"
+        );
     }
 }
 
@@ -195,14 +201,17 @@ impl Analyzer for CodexCliAnalyzer {
         }
 
         // Parse changed files in parallel, propagating the first error.
-        let parsed: Vec<(PathBuf, Option<(u64, Option<SystemTime>)>, Vec<ConversationMessage>)> =
-            stale
-                .into_par_iter()
-                .map(|(path, current)| {
-                    let messages = parse_codex_source(&path)?;
-                    Ok((path, current, messages))
-                })
-                .collect::<Result<_>>()?;
+        let parsed: Vec<(
+            PathBuf,
+            Option<(u64, Option<SystemTime>)>,
+            Vec<ConversationMessage>,
+        )> = stale
+            .into_par_iter()
+            .map(|(path, current)| {
+                let messages = parse_codex_source(&path)?;
+                Ok((path, current, messages))
+            })
+            .collect::<Result<_>>()?;
 
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.retain(|path, _| live.contains(path)); // Forget deleted sessions.
@@ -907,8 +916,14 @@ mod codex_home_tests {
         let home = std::env::home_dir().unwrap();
         assert_eq!(codex_home_from(None), Some(home.join(".codex")));
         assert_eq!(codex_home_from(Some("".into())), Some(home.join(".codex")));
-        assert_eq!(codex_home_from(Some("~/work/codex".into())), Some(home.join("work/codex")));
-        assert_eq!(codex_home_from(Some("/srv/codex".into())), Some("/srv/codex".into()));
+        assert_eq!(
+            codex_home_from(Some("~/work/codex".into())),
+            Some(home.join("work/codex"))
+        );
+        assert_eq!(
+            codex_home_from(Some("/srv/codex".into())),
+            Some("/srv/codex".into())
+        );
     }
 }
 

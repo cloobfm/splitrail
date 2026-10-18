@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 const EXCLUDED: [&str; 3] = ["src/tui.rs", "src/tui", "src/self_update.rs"];
 
 fn files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let relative = path.to_string_lossy().replace('\\', "/");
@@ -55,7 +57,10 @@ fn main() {
     paths.sort();
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for path in &paths {
-        fnv(&mut hash, path.to_string_lossy().replace('\\', "/").as_bytes());
+        fnv(
+            &mut hash,
+            path.to_string_lossy().replace('\\', "/").as_bytes(),
+        );
         let mut bytes = std::fs::read(path).unwrap_or_default();
         if path == Path::new("Cargo.lock") {
             bytes = without_own_version(&String::from_utf8_lossy(&bytes)).into_bytes();

@@ -55,13 +55,18 @@ pub fn handle(request: &Value) -> Option<Value> {
         "ping" => json!({}),
         "tools/list" => json!({"tools": tools()}),
         "tools/call" => {
-            let name = request.pointer("/params/name").and_then(Value::as_str).unwrap_or("");
+            let name = request
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             match call(name) {
                 Ok(answer) => json!({
                     "content": [{"type": "text", "text": serde_json::to_string_pretty(&answer).unwrap_or_default()}],
                     "structuredContent": answer,
                 }),
-                Err(message) => json!({"content": [{"type": "text", "text": message}], "isError": true}),
+                Err(message) => {
+                    json!({"content": [{"type": "text", "text": message}], "isError": true})
+                }
             }
         }
         _ => {
@@ -83,7 +88,9 @@ pub fn run() {
         }
         let reply = match serde_json::from_str::<Value>(&line) {
             Ok(request) => handle(&request),
-            Err(e) => Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}})),
+            Err(e) => Some(
+                json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": e.to_string()}}),
+            ),
         };
         if let Some(reply) = reply {
             let _ = writeln!(stdout, "{reply}");
@@ -99,13 +106,22 @@ mod tests {
     #[test]
     fn speaks_the_handshake_and_lists_its_tools() {
         let init = handle(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2025-06-18"}})).unwrap();
+            "params": {"protocolVersion": "2025-06-18"}}))
+        .unwrap();
         assert_eq!(init["result"]["serverInfo"]["name"], "splitrail");
-        assert!(handle(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none());
+        assert!(
+            handle(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none()
+        );
         let list = handle(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).unwrap();
-        let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
         assert_eq!(names, ["quotas", "where_to_spend", "usage"]);
-        let missing = handle(&json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"})).unwrap();
+        let missing =
+            handle(&json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"})).unwrap();
         assert_eq!(missing["error"]["code"], -32601);
     }
 }

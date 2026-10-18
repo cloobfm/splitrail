@@ -14,14 +14,14 @@ static HOME_LOCK: Mutex<()> = Mutex::new(());
 #[tokio::test]
 async fn test_analyzer_registry_creation() {
     let registry = create_test_registry();
-    
+
     // Test that all expected analyzers are registered
     let available_analyzers = registry.available_analyzers();
     let analyzer_names: HashSet<&str> = available_analyzers
         .iter()
         .map(|a| a.display_name())
         .collect();
-    
+
     // Should contain our test analyzers (if they're available on the system)
     assert!(!analyzer_names.is_empty());
 }
@@ -30,17 +30,20 @@ async fn test_analyzer_registry_creation() {
 async fn test_analyzer_stats_loading() {
     let _home = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let registry = create_test_registry();
-    
+
     // This test will only work if the actual data sources exist
     // In a real test environment, you'd set up test data
     let result = registry.load_all_stats().await;
-    
+
     // Should not panic, even if no data is available
     match result {
         Ok(stats) => {
             // Verify structure is correct
-            assert_eq!(stats.analyzer_stats.len(), registry.available_analyzers().len());
-            
+            assert_eq!(
+                stats.analyzer_stats.len(),
+                registry.available_analyzers().len()
+            );
+
             for analyzer_stats in &stats.analyzer_stats {
                 // Verify required fields are present
                 assert!(!analyzer_stats.analyzer_name.is_empty());
@@ -87,13 +90,13 @@ async fn test_claude_code_analyzer_with_test_data() {
 async fn test_message_deduplication() {
     // Create test data with duplicates
     let messages = create_test_messages_with_duplicates();
-    
+
     // Test that deduplication works
     let unique_messages = deduplicate_test_messages(messages);
-    
+
     // Should have fewer messages after deduplication
     assert!(unique_messages.len() <= 10); // Started with 10, some duplicates
-    
+
     // Verify no duplicates remain
     let mut local_hashes = HashSet::new();
     for msg in &unique_messages {
@@ -107,27 +110,27 @@ async fn test_message_deduplication() {
 #[tokio::test]
 async fn test_parallel_vs_sequential_parsing() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create multiple test files
     let files = create_multiple_test_files(&temp_dir, 5, 1000).await;
-    
+
     // Test sequential parsing
     let start = std::time::Instant::now();
     let sequential_results = parse_files_sequential_test(&files).await;
     let sequential_time = start.elapsed();
-    
+
     // Test parallel parsing
     let start = std::time::Instant::now();
     let parallel_results = parse_files_parallel_test(&files).await;
     let parallel_time = start.elapsed();
-    
+
     // Results should be identical
     assert_eq!(sequential_results.len(), parallel_results.len());
-    
+
     // Parallel should generally be faster (though not guaranteed in all environments)
     println!("Sequential time: {:?}", sequential_time);
     println!("Parallel time: {:?}", parallel_time);
-    
+
     // At minimum, both should succeed
     assert!(!sequential_results.is_empty());
     assert!(!parallel_results.is_empty());
@@ -136,11 +139,11 @@ async fn test_parallel_vs_sequential_parsing() {
 #[test]
 fn test_file_watcher_integration() {
     let registry = create_test_registry();
-    
+
     // Test directory mapping
     let mapping = registry.get_directory_to_analyzer_mapping();
     assert!(!mapping.is_empty());
-    
+
     // Verify mapping structure
     for entry in &mapping {
         assert!(!entry.analyzer_name.is_empty());
@@ -152,13 +155,13 @@ fn test_file_watcher_integration() {
 #[test]
 fn test_memory_usage_patterns() {
     // Test that we don't have obvious memory leaks
-    
+
     // Create a large number of messages
     let messages = create_large_test_dataset(10000);
-    
+
     // Process them
     let _aggregated = splitrail_dashboard::utils::aggregate_by_date(&messages);
-    
+
     // The key test is that this doesn't crash or use excessive memory
     // In a real scenario, you'd use memory profiling tools
     assert!(messages.len() == 10000);
@@ -228,7 +231,7 @@ async fn create_test_claude_file(file_path: &std::path::Path) {
 
 fn create_test_messages_with_duplicates() -> Vec<ConversationMessage> {
     let mut messages = Vec::new();
-    
+
     for i in 0..10 {
         messages.push(ConversationMessage {
             application: splitrail_dashboard::types::Application::ClaudeCode,
@@ -243,14 +246,14 @@ fn create_test_messages_with_duplicates() -> Vec<ConversationMessage> {
             content: Some(format!("Message {}", i)),
         });
     }
-    
+
     messages
 }
 
 fn deduplicate_test_messages(messages: Vec<ConversationMessage>) -> Vec<ConversationMessage> {
     let mut result = Vec::new();
     let mut seen_hashes = HashSet::new();
-    
+
     for msg in messages {
         if let Some(local_hash) = &msg.local_hash {
             if !seen_hashes.contains(local_hash) {
@@ -261,17 +264,21 @@ fn deduplicate_test_messages(messages: Vec<ConversationMessage>) -> Vec<Conversa
             result.push(msg);
         }
     }
-    
+
     result
 }
 
-async fn create_multiple_test_files(temp_dir: &TempDir, file_count: usize, lines_per_file: usize) -> Vec<std::path::PathBuf> {
+async fn create_multiple_test_files(
+    temp_dir: &TempDir,
+    file_count: usize,
+    lines_per_file: usize,
+) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
-    
+
     for i in 0..file_count {
         let file_path = temp_dir.path().join(format!("test_{}.jsonl", i));
         let mut file = File::create(&file_path).unwrap();
-        
+
         for j in 0..lines_per_file {
             let line = serde_json::json!({
                 "id": format!("msg_{}_{}", i, j),
@@ -280,21 +287,21 @@ async fn create_multiple_test_files(temp_dir: &TempDir, file_count: usize, lines
             });
             writeln!(file, "{}", line).unwrap();
         }
-        
+
         files.push(file_path);
     }
-    
+
     files
 }
 
 async fn parse_files_sequential_test(files: &[std::path::PathBuf]) -> Vec<serde_json::Value> {
     use std::io::BufRead;
     let mut all_values = Vec::new();
-    
+
     for file_path in files {
         let file = File::open(file_path).unwrap();
         let reader = std::io::BufReader::new(file);
-        
+
         for line in reader.lines() {
             let line = line.unwrap();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
@@ -302,20 +309,22 @@ async fn parse_files_sequential_test(files: &[std::path::PathBuf]) -> Vec<serde_
             }
         }
     }
-    
+
     all_values
 }
 
 async fn parse_files_parallel_test(files: &[std::path::PathBuf]) -> Vec<serde_json::Value> {
     use rayon::prelude::*;
     use std::io::BufRead;
-    
-    files.par_iter()
+
+    files
+        .par_iter()
         .flat_map(|file_path| {
             let file = File::open(file_path).unwrap();
             let reader = std::io::BufReader::new(file);
-            
-            reader.lines()
+
+            reader
+                .lines()
                 .filter_map(|line| line.ok())
                 .filter_map(|line| serde_json::from_str(&line).ok())
                 .collect::<Vec<_>>()
@@ -325,7 +334,7 @@ async fn parse_files_parallel_test(files: &[std::path::PathBuf]) -> Vec<serde_js
 
 fn create_large_test_dataset(size: usize) -> Vec<ConversationMessage> {
     let mut messages = Vec::with_capacity(size);
-    
+
     for i in 0..size {
         messages.push(ConversationMessage {
             application: splitrail_dashboard::types::Application::ClaudeCode,
@@ -342,14 +351,14 @@ fn create_large_test_dataset(size: usize) -> Vec<ConversationMessage> {
                 tool_calls: (i % 10) as u32,
                 ..Default::default()
             },
-            role: if i % 2 == 0 { 
-                splitrail_dashboard::types::MessageRole::User 
-            } else { 
-                splitrail_dashboard::types::MessageRole::Assistant 
+            role: if i % 2 == 0 {
+                splitrail_dashboard::types::MessageRole::User
+            } else {
+                splitrail_dashboard::types::MessageRole::Assistant
             },
             content: Some(format!("Test message {}", i)),
         });
     }
-    
+
     messages
 }

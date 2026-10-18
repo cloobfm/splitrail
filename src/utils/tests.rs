@@ -1,16 +1,18 @@
 #[cfg(test)]
 mod tests {
-    use crate::utils::{hash_text, aggregate_by_date, format_number, warn_once, get_warnings, NumberFormatOptions, WARNINGS, WARNED_MESSAGES};
-    use crate::types::{ConversationMessage, Stats, Application, MessageRole};
+    use crate::types::{Application, ConversationMessage, MessageRole, Stats};
+    use crate::utils::{
+        NumberFormatOptions, WARNED_MESSAGES, WARNINGS, aggregate_by_date, format_number,
+        get_warnings, hash_text, warn_once,
+    };
     use chrono::{DateTime, Utc};
-
 
     #[test]
     fn test_hash_text_consistency() {
         let text = "test message content";
         let hash1 = hash_text(text);
         let hash2 = hash_text(text);
-        
+
         assert_eq!(hash1, hash2);
         assert!(!hash1.is_empty());
         assert_eq!(hash1.len(), 64); // SHA256 produces 64-char hex string
@@ -20,10 +22,10 @@ mod tests {
     fn test_hash_text_uniqueness() {
         let text1 = "test message content 1";
         let text2 = "test message content 2";
-        
+
         let hash1 = hash_text(text1);
         let hash2 = hash_text(text2);
-        
+
         assert_ne!(hash1, hash2);
     }
 
@@ -58,7 +60,12 @@ mod tests {
 
         // 12:00 -> 12:05 counts (300 s). 12:05 -> 12:40 is a 35 min gap, so it does not.
         // 12:40 -> 12:50 counts (600 s). Deliberately out of order to prove sorting happens.
-        let messages = vec![at("12:40:00"), at("12:00:00"), at("12:50:00"), at("12:05:00")];
+        let messages = vec![
+            at("12:40:00"),
+            at("12:00:00"),
+            at("12:50:00"),
+            at("12:05:00"),
+        ];
 
         let result = aggregate_by_date(&messages);
         let day = result
@@ -66,7 +73,10 @@ mod tests {
             .find(|d| d.active_seconds > 0)
             .expect("the populated day should record active time");
 
-        assert_eq!(day.active_seconds, 900, "300 s + 600 s, excluding the 35 min gap");
+        assert_eq!(
+            day.active_seconds, 900,
+            "300 s + 600 s, excluding the 35 min gap"
+        );
     }
 
     /// Only the last day or so of raw messages feeds the live views; everything older is already
@@ -106,7 +116,11 @@ mod tests {
         // No upload configured, so nothing pending has to be preserved.
         retain_live_window(&mut stats, live_window_cutoff(now, None));
 
-        assert_eq!(stats.messages.len(), 1, "only the message inside the window survives");
+        assert_eq!(
+            stats.messages.len(),
+            1,
+            "only the message inside the window survives"
+        );
         assert_eq!(stats.daily_stats, daily_stats, "aggregates are untouched");
         assert!(
             stats.daily_stats.contains_key("2024-01-15"),
@@ -124,7 +138,10 @@ mod tests {
 
         let cutoff = live_window_cutoff(now, Some(watermark.timestamp_millis()));
 
-        assert_eq!(cutoff, watermark, "a lagging watermark pulls the cutoff back");
+        assert_eq!(
+            cutoff, watermark,
+            "a lagging watermark pulls the cutoff back"
+        );
     }
 
     /// The upload path collected every retained message and *then* filtered to the handful past
@@ -181,7 +198,11 @@ mod tests {
         got.sort();
 
         assert_eq!(got, expected, "same messages as clone-then-filter");
-        assert_eq!(got, ["3000", "5000", "9000"], "the message exactly at the watermark counts");
+        assert_eq!(
+            got,
+            ["3000", "5000", "9000"],
+            "the message exactly at the watermark counts"
+        );
     }
 
     /// Numeric cells sit in fixed-width columns (13 for the per-CLI and per-period ones), and
@@ -210,7 +231,10 @@ mod tests {
             "must fit the column: {wide:?} is {} chars",
             wide.chars().count()
         );
-        assert_ne!(wide, "13,378,482,61", "a clipped number is the thing to avoid");
+        assert_ne!(
+            wide, "13,378,482,61",
+            "a clipped number is the thing to avoid"
+        );
         // Lowercase suffix is this codebase's convention ("13.38b"), not upstream's.
         assert!(
             wide.to_lowercase().contains('b'),
@@ -233,13 +257,16 @@ mod tests {
     fn test_aggregate_by_date_single_message() {
         let message = create_test_message("2024-01-01");
         let messages = vec![message];
-        
+
         let result = aggregate_by_date(&messages);
         // aggregate_by_date fills every day from the earliest message through today with
         // empty stats so the TUI has a continuous series, so only check the populated day.
         assert!(result.contains_key("2024-01-01"));
-        assert!(result.contains_key(&today_key()), "gaps are filled through today");
-        
+        assert!(
+            result.contains_key(&today_key()),
+            "gaps are filled through today"
+        );
+
         let day_stats = &result["2024-01-01"];
         assert_eq!(day_stats.user_messages, 1);
         assert_eq!(day_stats.ai_messages, 0);
@@ -253,16 +280,16 @@ mod tests {
             create_test_message_with_role("2024-01-01", MessageRole::Assistant),
             create_test_message_with_role("2024-01-02", MessageRole::User),
         ];
-        
+
         let result = aggregate_by_date(&messages);
         assert!(result.contains_key("2024-01-01"));
         assert!(result.contains_key("2024-01-02"));
-        
+
         let day1 = &result["2024-01-01"];
         assert_eq!(day1.user_messages, 1);
         assert_eq!(day1.ai_messages, 1);
         assert_eq!(day1.conversations, 1);
-        
+
         // All three messages share one conversation hash, and a conversation is attributed to
         // the day it started, so day 2 has messages but no new conversation.
         let day2 = &result["2024-01-02"];
@@ -275,18 +302,42 @@ mod tests {
     fn test_aggregate_by_date_stats_accumulation() {
         // Token/cost stats are only summed for AI messages (those with a model).
         let messages = vec![
-            create_test_message_with_stats_and_role("2024-01-01", 1000, 500, 1.0, MessageRole::Assistant),
-            create_test_message_with_stats_and_role("2024-01-01", 2000, 1000, 2.0, MessageRole::Assistant),
+            create_test_message_with_stats_and_role(
+                "2024-01-01",
+                1000,
+                500,
+                1.0,
+                MessageRole::Assistant,
+            ),
+            create_test_message_with_stats_and_role(
+                "2024-01-01",
+                2000,
+                1000,
+                2.0,
+                MessageRole::Assistant,
+            ),
         ];
-        
+
         let result = aggregate_by_date(&messages);
         let day_stats = &result["2024-01-01"];
-        
+
         // 1000+2000 input, 500+1000 output, 1.0+2.0 cost, 1+1 tool calls
-        assert_eq!(day_stats.stats.input_tokens, 3000, "Input tokens should be sum of all messages");
-        assert_eq!(day_stats.stats.output_tokens, 1500, "Output tokens should be sum of all messages");
-        assert_eq!(day_stats.stats.cost, 3.0, "Cost should be sum of all message costs");
-        assert_eq!(day_stats.stats.tool_calls, 2, "Tool calls should be sum of all message tool calls");
+        assert_eq!(
+            day_stats.stats.input_tokens, 3000,
+            "Input tokens should be sum of all messages"
+        );
+        assert_eq!(
+            day_stats.stats.output_tokens, 1500,
+            "Output tokens should be sum of all messages"
+        );
+        assert_eq!(
+            day_stats.stats.cost, 3.0,
+            "Cost should be sum of all message costs"
+        );
+        assert_eq!(
+            day_stats.stats.tool_calls, 2,
+            "Tool calls should be sum of all message tool calls"
+        );
     }
 
     #[test]
@@ -296,10 +347,10 @@ mod tests {
             create_test_message_with_model("2024-01-01", "claude-3-sonnet"),
             create_test_message_with_model("2024-01-01", "claude-3-haiku"),
         ];
-        
+
         let result = aggregate_by_date(&messages);
         let day_stats = &result["2024-01-01"];
-        
+
         assert_eq!(day_stats.models.len(), 2);
         assert_eq!(day_stats.models.get("claude-3-sonnet"), Some(&2));
         assert_eq!(day_stats.models.get("claude-3-haiku"), Some(&1));
@@ -308,7 +359,7 @@ mod tests {
     #[test]
     fn test_format_number_basic() {
         let options = NumberFormatOptions::default();
-        
+
         assert_eq!(format_number(0, &options), "0");
         assert_eq!(format_number(123, &options), "123");
         assert_eq!(format_number(1234567, &options), "1234567");
@@ -322,7 +373,7 @@ mod tests {
             locale: "en".to_string(),
             decimal_places: 0,
         };
-        
+
         assert_eq!(format_number(1234567, &options), "1,234,567");
         assert_eq!(format_number(1234567890, &options), "1,234,567,890");
     }
@@ -335,7 +386,7 @@ mod tests {
             locale: "en".to_string(),
             decimal_places: 1,
         };
-        
+
         assert_eq!(format_number(999, &options), "999"); // No decimal for < 1000
         assert_eq!(format_number(1000, &options), "1.0k");
         assert_eq!(format_number(1500, &options), "1.5k");
@@ -356,18 +407,18 @@ mod tests {
                 warn_set.clear();
             }
         }
-        
+
         // First call should add warning
         warn_once("Test warning message");
         let warnings = get_warnings();
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Test warning message"));
-        
+
         // Second call should not add duplicate
         warn_once("Test warning message");
         let warnings = get_warnings();
         assert_eq!(warnings.len(), 1); // Still only one warning
-        
+
         // Different message should be added
         warn_once("Different warning message");
         let warnings = get_warnings();
@@ -405,11 +456,11 @@ mod tests {
     }
 
     fn create_test_message_with_stats_and_role(
-        date_str: &str, 
-        input_tokens: u64, 
-        output_tokens: u64, 
+        date_str: &str,
+        input_tokens: u64,
+        output_tokens: u64,
         cost: f64,
-        role: MessageRole
+        role: MessageRole,
     ) -> ConversationMessage {
         ConversationMessage {
             application: Application::ClaudeCode,

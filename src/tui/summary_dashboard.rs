@@ -92,7 +92,10 @@ pub fn build_activity_sparkline_cache_with_prev(
         (OVERALL_SPARKLINE_VERBOSE, OVERALL_BARS_VERBOSE),
     ] {
         let shown = &overall[overall.len() - bars..];
-        sparkline_cache.insert(key.to_string(), sparkline_spans(shown, overall_scale(shown)));
+        sparkline_cache.insert(
+            key.to_string(),
+            sparkline_spans(shown, overall_scale(shown)),
+        );
     }
     (sparkline_cache, max_cache, buffer_cache)
 }
@@ -114,7 +117,11 @@ const OVERALL_FLOOR_TOKENS: u64 = 600;
 fn overall_scale(shown: &[u64]) -> u64 {
     let mut active: Vec<u64> = shown.iter().copied().filter(|&n| n > 0).collect();
     active.sort_unstable_by(|a, b| b.cmp(a));
-    active.get(active.len() / 10).copied().unwrap_or(0).max(OVERALL_FLOOR_TOKENS)
+    active
+        .get(active.len() / 10)
+        .copied()
+        .unwrap_or(0)
+        .max(OVERALL_FLOOR_TOKENS)
 }
 /// The most recent slots drawn (30s each: 40 minutes).
 const SPARKLINE_SHOWN: usize = 80;
@@ -331,8 +338,11 @@ pub fn draw_summary_view(
                     .right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number(thirty_day_stats.output_tokens, format_options))
-                    .right_aligned(),
+                Line::from(format_number(
+                    thirty_day_stats.output_tokens,
+                    format_options,
+                ))
+                .right_aligned(),
             ),
         ]),
         Row::new(vec![
@@ -374,26 +384,54 @@ pub fn draw_summary_view(
                     .right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number(thirty_day_stats.conversations, format_options))
-                    .right_aligned(),
+                Line::from(format_number(
+                    thirty_day_stats.conversations,
+                    format_options,
+                ))
+                .right_aligned(),
             ),
         ]),
         Row::new(vec![
             Cell::new(Line::from("📊 CLIs Active").style(Style::default().fg(Color::Magenta))),
             Cell::new(
-                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
+                Line::from(format_number_fit(
+                    *active_clis as u64,
+                    NUMERIC_COLUMN_WIDTH,
+                    format_options,
+                ))
+                .right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
+                Line::from(format_number_fit(
+                    *active_clis as u64,
+                    NUMERIC_COLUMN_WIDTH,
+                    format_options,
+                ))
+                .right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
+                Line::from(format_number_fit(
+                    *active_clis as u64,
+                    NUMERIC_COLUMN_WIDTH,
+                    format_options,
+                ))
+                .right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
+                Line::from(format_number_fit(
+                    *active_clis as u64,
+                    NUMERIC_COLUMN_WIDTH,
+                    format_options,
+                ))
+                .right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
+                Line::from(format_number_fit(
+                    *active_clis as u64,
+                    NUMERIC_COLUMN_WIDTH,
+                    format_options,
+                ))
+                .right_aligned(),
             ),
         ]),
         Row::new(vec![
@@ -410,7 +448,7 @@ pub fn draw_summary_view(
     let overview_chunks = Layout::horizontal([
         Constraint::Length(82), // Table (15 + 13*5 + 2*5 spacing)
         Constraint::Length(2),  // Spacing between table and chart
-        Constraint::Min(40),    // Chart (30 bars + borders + scale + stats) - use Min to expand as needed
+        Constraint::Min(40), // Chart (30 bars + borders + scale + stats) - use Min to expand as needed
     ])
     .split(chunks[1]);
 
@@ -444,20 +482,10 @@ pub fn draw_summary_view(
     .split(chart_area);
 
     // Draw total tokens chart on the left
-    draw_total_tokens_chart(
-        frame,
-        chart_chunks[0],
-        filtered_stats,
-        format_options,
-    );
+    draw_total_tokens_chart(frame, chart_chunks[0], filtered_stats, format_options);
 
     // Draw output tokens chart on the right
-    draw_output_tokens_chart(
-        frame,
-        chart_chunks[1],
-        filtered_stats,
-        format_options,
-    );
+    draw_output_tokens_chart(frame, chart_chunks[1], filtered_stats, format_options);
 
     // Calculate stats for the selected day for each CLI
     let now = chrono::Local::now();
@@ -528,7 +556,9 @@ pub fn draw_summary_view(
         let message_count = selected_day
             .map(|d| u64::from(d.user_messages) + u64::from(d.ai_messages))
             .unwrap_or(0);
-        let session_count = selected_day.map(|d| u64::from(d.conversations)).unwrap_or(0);
+        let session_count = selected_day
+            .map(|d| u64::from(d.conversations))
+            .unwrap_or(0);
 
         let active_time = {
             let total_active_seconds = selected_day.map(|d| d.active_seconds).unwrap_or(0);
@@ -664,7 +694,12 @@ pub fn draw_summary_view(
             for &idx in visible_indices {
                 let (_, _, input, _, _, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
-                    Line::from(format_number_fit(*input, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
+                    Line::from(format_number_fit(
+                        *input,
+                        NUMERIC_COLUMN_WIDTH,
+                        format_options,
+                    ))
+                    .right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -677,7 +712,12 @@ pub fn draw_summary_view(
             for &idx in visible_indices {
                 let (_, _, _, output, _, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
-                    Line::from(format_number_fit(*output, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
+                    Line::from(format_number_fit(
+                        *output,
+                        NUMERIC_COLUMN_WIDTH,
+                        format_options,
+                    ))
+                    .right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -690,7 +730,12 @@ pub fn draw_summary_view(
             for &idx in visible_indices {
                 let (_, _, _, _, _, _, _, _, sessions, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
-                    Line::from(format_number_fit(*sessions, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
+                    Line::from(format_number_fit(
+                        *sessions,
+                        NUMERIC_COLUMN_WIDTH,
+                        format_options,
+                    ))
+                    .right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -703,7 +748,12 @@ pub fn draw_summary_view(
             for &idx in visible_indices {
                 let (_, _, _, _, _, _, _, _, _, messages, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
-                    Line::from(format_number_fit(*messages, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
+                    Line::from(format_number_fit(
+                        *messages,
+                        NUMERIC_COLUMN_WIDTH,
+                        format_options,
+                    ))
+                    .right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -786,10 +836,9 @@ pub fn draw_summary_view(
 
                 // A Claude account with captured plan limits reports the room actually left in
                 // its 5h/weekly windows (BZL-65); everything else keeps the token estimate.
-                let plan_health = crate::plan_limits::limits_for_analyzer(
-                    &analyzer_stats.analyzer_name,
-                )
-                .and_then(|limits| limits.health());
+                let plan_health =
+                    crate::plan_limits::limits_for_analyzer(&analyzer_stats.analyzer_name)
+                        .and_then(|limits| limits.health());
                 let health = if let Some(health) = plan_health {
                     health
                 } else if cli_messages.is_empty() {
@@ -1172,7 +1221,11 @@ pub fn update_spans() -> Vec<Span<'static>> {
     let short = |v: &str| v.rsplit('-').next().unwrap_or(v).to_string();
     for publisher in crate::rollup::publishers() {
         use crate::rollup::PublisherUpdate;
-        let version = publisher.version.as_deref().map(short).unwrap_or_else(|| "old".into());
+        let version = publisher
+            .version
+            .as_deref()
+            .map(short)
+            .unwrap_or_else(|| "old".into());
         let (text, color) = match publisher.update {
             // Its turn has come (a progress entry) or it waits for the machine before it.
             PublisherUpdate::Updating => match crate::self_update::progress(&publisher.slug) {
@@ -1184,7 +1237,10 @@ pub fn update_spans() -> Vec<Span<'static>> {
             PublisherUpdate::Idle if publisher.behind() => (format!("{version}⬆"), Color::Yellow),
             PublisherUpdate::Idle => (version, Color::Green),
         };
-        spans.push(Span::raw(format!("  {} ", crate::rollup::short_host(&publisher.host))));
+        spans.push(Span::raw(format!(
+            "  {} ",
+            crate::rollup::short_host(&publisher.host)
+        )));
         spans.push(Span::styled(text, Style::default().fg(color)));
     }
     let publishers_behind = !crate::self_update::publishers_to_update().is_empty();
@@ -1200,12 +1256,18 @@ pub fn update_spans() -> Vec<Span<'static>> {
             let progress = crate::self_update::progress(crate::self_update::LOCAL)
                 .map(|p| format!(" · {}", p.label()))
                 .unwrap_or_default();
-            Some((format!("⏳ building {}{progress}", short(&v)), Color::Yellow))
+            Some((
+                format!("⏳ building {}{progress}", short(&v)),
+                Color::Yellow,
+            ))
         }
-        crate::self_update::State::Ready(v) => Some((format!("🔄 restarting into {}", short(&v)), Color::Green)),
-        crate::self_update::State::Failed(_) => {
-            Some(("❌ update failed: ~/.config/splitrail/update.log".to_string(), Color::Red))
+        crate::self_update::State::Ready(v) => {
+            Some((format!("🔄 restarting into {}", short(&v)), Color::Green))
         }
+        crate::self_update::State::Failed(_) => Some((
+            "❌ update failed: ~/.config/splitrail/update.log".to_string(),
+            Color::Red,
+        )),
     };
     if let Some((text, color)) = update {
         spans.push(Span::raw("   "));
@@ -1571,7 +1633,7 @@ pub fn draw_visual_cli_panels(
             // Add padding after bracket to align sparklines (total width: 1 + 2 + model_display + 1 = variable, pad to 19)
             let padding_needed = 19usize.saturating_sub(3 + model_display.len());
             line_spans.push(Span::raw(" ".repeat(padding_needed)));
-            
+
             // Add tokens per second (fixed width: 10 chars "42.3 tk/s ")
             let tks_display = if *tks_per_sec >= 100.0 {
                 format!("{:>3.0} tk/s ", tks_per_sec)
@@ -1584,7 +1646,10 @@ pub fn draw_visual_cli_panels(
             };
 
             line_spans.push(Span::raw("| "));
-            line_spans.push(Span::styled(tks_display, Style::default().fg(Color::Cyan).dim()));
+            line_spans.push(Span::styled(
+                tks_display,
+                Style::default().fg(Color::Cyan).dim(),
+            ));
         } else {
             line_spans.push(Span::styled(
                 format!("{:12}", cli_name),
@@ -1603,7 +1668,10 @@ pub fn draw_visual_cli_panels(
             };
 
             line_spans.push(Span::raw("| "));
-            line_spans.push(Span::styled(tks_display, Style::default().fg(Color::Cyan).dim()));
+            line_spans.push(Span::styled(
+                tks_display,
+                Style::default().fg(Color::Cyan).dim(),
+            ));
         }
 
         line_spans.extend(sparkline);
@@ -1739,9 +1807,8 @@ pub fn draw_visual_cli_panels(
         .unwrap_or(None)
         .unwrap_or_default();
     let notif_cfg = &config.notifications;
-    let notifications_enabled = notif_cfg.enabled
-        && notif_cfg.slack.enabled
-        && notif_cfg.slack.webhook_url.is_some();
+    let notifications_enabled =
+        notif_cfg.enabled && notif_cfg.slack.enabled && notif_cfg.slack.webhook_url.is_some();
     let waiting_secs = notif_cfg.waiting_seconds as i64;
     let stale_secs = (notif_cfg.stale_minutes * 60) as i64;
 
@@ -1765,7 +1832,7 @@ pub fn draw_visual_cli_panels(
         crate::mqtt::Link::Failing => ("❌", Color::Red),
         crate::mqtt::Link::Off => ("⬜", Color::DarkGray),
     };
-    
+
     // Create braille countdown indicator like the health bar
     let (countdown_bar, countdown_color, remaining_display) = if let Some(remaining) = eta {
         // eta is remaining time, so we want full when remaining=180s, empty when remaining=0s
@@ -1774,11 +1841,11 @@ pub fn draw_visual_cli_panels(
         let bar_width = 16; // Width for countdown bar
         let total_dots = bar_width * 8;
         let dots_to_show = ((progress * total_dots as f64).round() as usize).max(4);
-        
+
         // Calculate full characters + partial character at boundary
         let full_chars = dots_to_show / 8;
         let remaining_dots = dots_to_show % 8;
-        
+
         // Braille characters for partial filling (right-to-left within character)
         // These fill from right side first, so bar depletes from left (counting down)
         let partial_chars = [
@@ -1791,10 +1858,10 @@ pub fn draw_visual_cli_panels(
             '⣼', // 6 dots (right column + top-left + middle-left)
             '⣾', // 7 dots (all but bottom-left)
         ];
-        
+
         // Calculate how many empty spaces to add at the left
         let empty_chars = bar_width - full_chars - if remaining_dots > 0 { 1 } else { 0 };
-        
+
         // Build the bar: empty spaces (left) -> partial char -> full chars (right)
         let mut bar_chars = Vec::new();
         for i in 0..bar_width {
@@ -1807,7 +1874,7 @@ pub fn draw_visual_cli_panels(
             };
             bar_chars.push(ch);
         }
-        
+
         // Hot colors as it gets closer to zero (more urgent)
         let color = if remaining >= 120 {
             Color::Cyan // Cool - plenty of time
@@ -1820,25 +1887,33 @@ pub fn draw_visual_cli_panels(
         } else {
             Color::Red // EXTREME - about to send!
         };
-        
-        (bar_chars.into_iter().collect::<String>(), color, format!("{remaining:>3}s"))
+
+        (
+            bar_chars.into_iter().collect::<String>(),
+            color,
+            format!("{remaining:>3}s"),
+        )
     } else {
-        ("                ".to_string(), Color::DarkGray, "  — ".to_string())
+        (
+            "                ".to_string(),
+            Color::DarkGray,
+            "  — ".to_string(),
+        )
     };
-    
+
     let _countdown_indicator = format!("|{countdown_bar}| {remaining_display}");
-    
+
     let last_icon = if last_age.is_some() { "✅" } else { "⬜" };
     let last_text = last_age
         .map(|s| format!("{s}s ago"))
         .unwrap_or_else(|| "—".to_string());
-    
+
     // Fixed width sections to prevent position shifts - everything has fixed width
     // Slack: Slack ✅ = 8 chars (fixed)
     // Last: last ✅ 67s ago = 16 chars (fixed)
     // Countdown: |⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿| 108s = 30 chars
     // Total right section: 8 + 3 + 30 + 3 + 16 = 60 chars fixed
-    
+
     let _slack_section = format!("| {} Slack", slack_icon); // Fixed 8 chars
     let next_section = format!("|{countdown_bar}| {remaining_display}"); // Fixed 25 chars with left boundary
     let last_section = format!("last {last_icon} {last_text:>7}"); // Fixed 16 chars for "XXs ago" or "—"
@@ -1847,13 +1922,13 @@ pub fn draw_visual_cli_panels(
     let tks_per_sec = summary_data.tokens_per_second;
     // Fixed-width format: 10 chars total to match CLI lines "42.3 tk/s "
     let tks_display = if tks_per_sec >= 100.0 {
-        format!("{:>3.0} tk/s ", tks_per_sec)        // "123 tk/s " (9 chars)
+        format!("{:>3.0} tk/s ", tks_per_sec) // "123 tk/s " (9 chars)
     } else if tks_per_sec >= 1.0 {
-        format!("{:>4.1} tk/s ", tks_per_sec)        // "42.3 tk/s " (10 chars)
+        format!("{:>4.1} tk/s ", tks_per_sec) // "42.3 tk/s " (10 chars)
     } else if tks_per_sec > 0.0 {
-        format!("{:>4.1} tk/s ", tks_per_sec)        // " 0.7 tk/s " (10 chars)
+        format!("{:>4.1} tk/s ", tks_per_sec) // " 0.7 tk/s " (10 chars)
     } else {
-        "   — tk/s ".to_string()                     // "   — tk/s " (10 chars)
+        "   — tk/s ".to_string() // "   — tk/s " (10 chars)
     };
 
     let left_text = format!("📊 Activity: {} | {}", clock_text, tks_display);
@@ -1880,14 +1955,18 @@ pub fn draw_visual_cli_panels(
     title_spans.extend(activity_spans);
     title_spans.extend([
         Span::styled(next_section, Style::default().fg(countdown_color)), // Countdown with color
-        Span::raw(" | "), // Fixed separator
+        Span::raw(" | "),                                                 // Fixed separator
         Span::raw(last_section), // Fixed width last section
-        Span::raw("     "), // Normal spacing before Slack
+        Span::raw("     "),      // Normal spacing before Slack
         Span::styled(
             slack_icon.to_string(),
-            Style::default().fg(if notifications_enabled { Color::Green } else { Color::DarkGray })
+            Style::default().fg(if notifications_enabled {
+                Color::Green
+            } else {
+                Color::DarkGray
+            }),
         ), // Colored checkmark only
-        Span::raw(" Slack"), // Normal white text for "Slack"
+        Span::raw(" Slack"),     // Normal white text for "Slack"
         Span::raw("   "),
         Span::styled(mqtt_icon, Style::default().fg(mqtt_color)),
         Span::raw(" MQTT"),
@@ -1910,8 +1989,8 @@ fn draw_total_tokens_chart(
     filtered_stats: &[&AgenticCodingToolStats],
     _format_options: &NumberFormatOptions,
 ) {
-    use std::collections::BTreeMap;
     use ratatui::widgets::Borders;
+    use std::collections::BTreeMap;
 
     // Aggregate tokens by date across all analyzers
     let mut daily_tokens: BTreeMap<chrono::NaiveDate, u64> = BTreeMap::new();
@@ -1952,11 +2031,12 @@ fn draw_total_tokens_chart(
 
     // If no data, show empty chart
     if max_total == 0 {
-        let empty = Paragraph::new("No data")
-            .block(Block::default()
+        let empty = Paragraph::new("No data").block(
+            Block::default()
                 .title("Total Tokens")
                 .title_style(Style::default().bold())
-                .borders(Borders::ALL));
+                .borders(Borders::ALL),
+        );
         frame.render_widget(empty, area);
         return;
     }
@@ -1980,9 +2060,7 @@ fn draw_total_tokens_chart(
 
     if chart_height < 3 {
         let empty = Paragraph::new("Too small")
-            .block(Block::default()
-                .title("Total")
-                .borders(Borders::ALL));
+            .block(Block::default().title("Total").borders(Borders::ALL));
         frame.render_widget(empty, area);
         return;
     }
@@ -2076,7 +2154,10 @@ fn draw_total_tokens_chart(
         if i % 7 == 0 {
             let date = thirty_days_ago + ChronoDuration::days(i);
             let date_label = date.format("%m/%d").to_string();
-            x_labels.push(Span::styled(date_label, Style::default().fg(Color::DarkGray)));
+            x_labels.push(Span::styled(
+                date_label,
+                Style::default().fg(Color::DarkGray),
+            ));
             if i < 28 {
                 x_labels.push(Span::raw("  "));
             }
@@ -2100,11 +2181,12 @@ fn draw_total_tokens_chart(
     ];
     lines.push(Line::from(stats));
 
-    let paragraph = Paragraph::new(lines)
-        .block(Block::default()
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
             .title("📊 Total Tokens/Day")
             .title_style(Style::default().bold())
-            .borders(Borders::ALL));
+            .borders(Borders::ALL),
+    );
 
     frame.render_widget(paragraph, area);
 }
@@ -2116,8 +2198,8 @@ fn draw_output_tokens_chart(
     filtered_stats: &[&AgenticCodingToolStats],
     _format_options: &NumberFormatOptions,
 ) {
-    use std::collections::BTreeMap;
     use ratatui::widgets::Borders;
+    use std::collections::BTreeMap;
 
     // Aggregate output tokens by date across all analyzers
     let mut daily_output: BTreeMap<chrono::NaiveDate, u64> = BTreeMap::new();
@@ -2158,11 +2240,12 @@ fn draw_output_tokens_chart(
 
     // If no data, show empty chart
     if max_output == 0 {
-        let empty = Paragraph::new("No data")
-            .block(Block::default()
+        let empty = Paragraph::new("No data").block(
+            Block::default()
                 .title("Output Tokens")
                 .title_style(Style::default().bold())
-                .borders(Borders::ALL));
+                .borders(Borders::ALL),
+        );
         frame.render_widget(empty, area);
         return;
     }
@@ -2186,9 +2269,7 @@ fn draw_output_tokens_chart(
 
     if chart_height < 3 {
         let empty = Paragraph::new("Too small")
-            .block(Block::default()
-                .title("Output")
-                .borders(Borders::ALL));
+            .block(Block::default().title("Output").borders(Borders::ALL));
         frame.render_widget(empty, area);
         return;
     }
@@ -2221,7 +2302,8 @@ fn draw_output_tokens_chart(
             if max_output == 0 {
                 0
             } else {
-                let numerator = output as u128 * 8 * chart_height as u128 + (max_output as u128 / 2);
+                let numerator =
+                    output as u128 * 8 * chart_height as u128 + (max_output as u128 / 2);
                 (numerator / max_output as u128) as usize
             }
         })
@@ -2282,7 +2364,10 @@ fn draw_output_tokens_chart(
         if i % 7 == 0 {
             let date = thirty_days_ago + ChronoDuration::days(i);
             let date_label = date.format("%m/%d").to_string();
-            x_labels.push(Span::styled(date_label, Style::default().fg(Color::DarkGray)));
+            x_labels.push(Span::styled(
+                date_label,
+                Style::default().fg(Color::DarkGray),
+            ));
             if i < 28 {
                 x_labels.push(Span::raw("  "));
             }
@@ -2302,19 +2387,22 @@ fn draw_output_tokens_chart(
         Span::raw(" "),
         Span::styled("Avg:", Style::default().fg(Color::DarkGray)),
         Span::raw(" "),
-        Span::styled(format_tokens(avg_output), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            format_tokens(avg_output),
+            Style::default().fg(Color::Yellow),
+        ),
     ];
     lines.push(Line::from(stats));
 
-    let paragraph = Paragraph::new(lines)
-        .block(Block::default()
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
             .title("📤 Output Tokens/Day")
             .title_style(Style::default().bold())
-            .borders(Borders::ALL));
+            .borders(Borders::ALL),
+    );
 
     frame.render_widget(paragraph, area);
 }
-
 
 /// Days in the trailing 30-day window (inclusive of `today`) on which this tool was actually used.
 ///
@@ -2397,7 +2485,12 @@ mod overall_sparkline_tests {
     use super::*;
     use crate::types::{Application, ConversationMessage, MessageRole, Stats};
 
-    fn tool(name: &str, ages_secs: &[i64], output: u64, now: chrono::DateTime<chrono::Utc>) -> AgenticCodingToolStats {
+    fn tool(
+        name: &str,
+        ages_secs: &[i64],
+        output: u64,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AgenticCodingToolStats {
         AgenticCodingToolStats {
             daily_stats: Default::default(),
             num_conversations: 1,
@@ -2412,7 +2505,11 @@ mod overall_sparkline_tests {
                     local_hash: None,
                     global_hash: format!("{name}{age}"),
                     model: None,
-                    stats: Stats { output_tokens: output, input_tokens: 50_000, ..Default::default() },
+                    stats: Stats {
+                        output_tokens: output,
+                        input_tokens: 50_000,
+                        ..Default::default()
+                    },
                     role: MessageRole::Assistant,
                     content: None,
                 })
@@ -2448,9 +2545,22 @@ mod overall_sparkline_tests {
         let (cache, _, _) = build_activity_sparkline_cache(&[&e, &spike], now);
         let bars = heights(&cache[OVERALL_SPARKLINE]);
         assert_eq!(bars.chars().last(), Some('⣿'));
-        assert_eq!(bars.chars().rev().nth(1), Some('⣿'), "steady slots stay tall: {bars}");
-        let colors: Vec<_> = cache[OVERALL_SPARKLINE].iter().rev().take(2).map(|s| s.style.fg).collect();
-        assert_eq!(colors, [Some(Color::White), Some(Color::Red)], "the burst burns white-hot");
+        assert_eq!(
+            bars.chars().rev().nth(1),
+            Some('⣿'),
+            "steady slots stay tall: {bars}"
+        );
+        let colors: Vec<_> = cache[OVERALL_SPARKLINE]
+            .iter()
+            .rev()
+            .take(2)
+            .map(|s| s.style.fg)
+            .collect();
+        assert_eq!(
+            colors,
+            [Some(Color::White), Some(Color::Red)],
+            "the burst burns white-hot"
+        );
 
         // Each mode is scaled to the bars it draws: a burst only verbose mode shows.
         let g = tool("G", &[5], 2000, now);

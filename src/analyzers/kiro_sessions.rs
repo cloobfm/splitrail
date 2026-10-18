@@ -22,12 +22,19 @@ use crate::utils::hash_text;
 pub const DOLLARS_PER_CREDIT: f64 = 0.02;
 
 pub fn sessions_dir() -> Option<PathBuf> {
-    Some(std::env::home_dir()?.join(".kiro").join("sessions").join("cli"))
+    Some(
+        std::env::home_dir()?
+            .join(".kiro")
+            .join("sessions")
+            .join("cli"),
+    )
 }
 
 /// Every session's metadata file.
 pub fn session_files() -> Vec<PathBuf> {
-    let Some(dir) = sessions_dir() else { return Vec::new() };
+    let Some(dir) = sessions_dir() else {
+        return Vec::new();
+    };
     std::fs::read_dir(dir)
         .map(|entries| {
             entries
@@ -55,7 +62,10 @@ pub fn parse_session(meta: &str, events: &str) -> Vec<ConversationMessage> {
     let Ok(meta) = serde_json::from_str::<Value>(meta) else {
         return Vec::new();
     };
-    let session_id = meta.get("session_id").and_then(Value::as_str).unwrap_or_default();
+    let session_id = meta
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if session_id.is_empty() {
         return Vec::new();
     }
@@ -73,7 +83,9 @@ pub fn parse_session(meta: &str, events: &str) -> Vec<ConversationMessage> {
     let mut messages = Vec::new();
 
     for line in events.lines() {
-        let Ok(event) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         if event.get("kind").and_then(Value::as_str) != Some("Prompt") {
             continue;
         }
@@ -85,14 +97,20 @@ pub fn parse_session(meta: &str, events: &str) -> Vec<ConversationMessage> {
         else {
             continue;
         };
-        let id = data.and_then(|d| d.get("message_id")).and_then(Value::as_str).unwrap_or_default();
+        let id = data
+            .and_then(|d| d.get("message_id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         messages.push(ConversationMessage {
             application: Application::KiroCli,
             date: at,
             project_hash: project.clone(),
             conversation_hash: conversation_hash.clone(),
             local_hash: None,
-            global_hash: hash_text(&format!("kiro-session:{session_id}:prompt:{id}:{}", at.timestamp())),
+            global_hash: hash_text(&format!(
+                "kiro-session:{session_id}:prompt:{id}:{}",
+                at.timestamp()
+            )),
             model: None,
             stats: Stats::default(),
             role: MessageRole::User,
@@ -130,7 +148,10 @@ pub fn parse_session(meta: &str, events: &str) -> Vec<ConversationMessage> {
             project_hash: project.clone(),
             conversation_hash: conversation_hash.clone(),
             local_hash: None,
-            global_hash: hash_text(&format!("kiro-session:{session_id}:turn:{i}:{}", at.timestamp_millis())),
+            global_hash: hash_text(&format!(
+                "kiro-session:{session_id}:turn:{i}:{}",
+                at.timestamp_millis()
+            )),
             model: model.clone().or_else(|| Some("kiro".to_string())),
             stats: Stats {
                 input_tokens: count("input_token_count"),
