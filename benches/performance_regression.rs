@@ -4,8 +4,8 @@ use splitrail_dashboard::types::{Application, ConversationMessage, MessageRole, 
 use splitrail_dashboard::utils::{aggregate_by_date, hash_text};
 use std::time::Duration;
 
-/// Performance regression tests to ensure optimizations don't break functionality
-/// and maintain or improve performance characteristics.
+// Performance regression tests to ensure optimizations don't break functionality
+// and maintain or improve performance characteristics.
 
 const BASELINE_MESSAGE_COUNT: usize = 10000;
 const BASELINE_TEXT_SIZE: usize = 1000;

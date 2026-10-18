@@ -299,7 +299,7 @@ impl Feed {
                 }
                 values.sort_by(f64::total_cmp);
                 let mid = values.len() / 2;
-                Some(if values.len() % 2 == 0 {
+                Some(if values.len().is_multiple_of(2) {
                     (values[mid - 1] + values[mid]) / 2.0
                 } else {
                     values[mid]

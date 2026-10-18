@@ -212,26 +212,27 @@ impl Accumulator {
 
 /// How much each activity counter would rise if `from` were merged in at its maximum.
 fn max_activity_delta(current: &Stats, from: &Stats) -> Stats {
-    let mut delta = Stats::default();
-    delta.tool_calls = from.tool_calls.saturating_sub(current.tool_calls);
-    delta.files_read = from.files_read.saturating_sub(current.files_read);
-    delta.files_edited = from.files_edited.saturating_sub(current.files_edited);
-    delta.files_added = from.files_added.saturating_sub(current.files_added);
-    delta.terminal_commands = from
-        .terminal_commands
-        .saturating_sub(current.terminal_commands);
-    delta.file_searches = from.file_searches.saturating_sub(current.file_searches);
-    delta.file_content_searches = from
-        .file_content_searches
-        .saturating_sub(current.file_content_searches);
-    delta.todo_writes = from.todo_writes.saturating_sub(current.todo_writes);
-    delta.todo_reads = from.todo_reads.saturating_sub(current.todo_reads);
-    delta.todos_created = from.todos_created.saturating_sub(current.todos_created);
-    delta.todos_completed = from.todos_completed.saturating_sub(current.todos_completed);
-    delta.todos_in_progress = from
-        .todos_in_progress
-        .saturating_sub(current.todos_in_progress);
-    delta
+    Stats {
+        tool_calls: from.tool_calls.saturating_sub(current.tool_calls),
+        files_read: from.files_read.saturating_sub(current.files_read),
+        files_edited: from.files_edited.saturating_sub(current.files_edited),
+        files_added: from.files_added.saturating_sub(current.files_added),
+        terminal_commands: from
+            .terminal_commands
+            .saturating_sub(current.terminal_commands),
+        file_searches: from.file_searches.saturating_sub(current.file_searches),
+        file_content_searches: from
+            .file_content_searches
+            .saturating_sub(current.file_content_searches),
+        todo_writes: from.todo_writes.saturating_sub(current.todo_writes),
+        todo_reads: from.todo_reads.saturating_sub(current.todo_reads),
+        todos_created: from.todos_created.saturating_sub(current.todos_created),
+        todos_completed: from.todos_completed.saturating_sub(current.todos_completed),
+        todos_in_progress: from
+            .todos_in_progress
+            .saturating_sub(current.todos_in_progress),
+        ..Default::default()
+    }
 }
 
 fn apply_max_activity(into: &mut Stats, from: &Stats) {
@@ -950,13 +951,11 @@ where
                                                 // i.e. Claude Code-generated system messages.  These have their token usage all
                                                 // 0 anyway.
                                             })) if !matches!(model.as_deref(), Some("<synthetic>")) => {
-                    if state.project_label.is_none() {
-                        if let Some(cwd) = &entry.cwd {
-                            if let Some(label) = Path::new(cwd).file_name().and_then(|n| n.to_str()) {
+                    if state.project_label.is_none()
+                        && let Some(cwd) = &entry.cwd
+                            && let Some(label) = Path::new(cwd).file_name().and_then(|n| n.to_str()) {
                                 state.project_label = Some(label.to_string());
                             }
-                        }
-                    }
                     (
                         message_id.clone(),
                         model.clone(),
@@ -1003,7 +1002,7 @@ where
                 stats.cache_read_tokens = usage.cache_read_input_tokens;
                 stats.cached_tokens =
                     usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
-                stats.cost = calculate_cost_from_tokens(&usage, &model);
+                stats.cost = calculate_cost_from_tokens(usage, &model);
                 stats.tool_calls = match content {
                     Content::Blocks(blocks) => blocks
                         .iter()
@@ -1027,10 +1026,10 @@ where
             }
             None => {
                 // For user messages, try to extract content from the message if available
-                if let Some(message) = &entry.message {
-                    if let Some(content) = &message.content {
-                        content_opt = extract_text_content(content);
-                    }
+                if let Some(message) = &entry.message
+                    && let Some(content) = &message.content
+                {
+                    content_opt = extract_text_content(content);
                 }
             }
         }

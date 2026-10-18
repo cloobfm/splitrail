@@ -16,6 +16,12 @@ use tiktoken_rs::get_bpe_from_model;
 
 pub struct CopilotAnalyzer;
 
+impl Default for CopilotAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CopilotAnalyzer {
     pub fn new() -> Self {
         Self

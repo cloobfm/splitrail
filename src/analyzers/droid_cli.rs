@@ -80,6 +80,12 @@ pub struct DroidCliAnalyzer {
     cache: crate::stamp_cache::StampCache,
 }
 
+impl Default for DroidCliAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DroidCliAnalyzer {
     pub fn new() -> Self {
         Self {
@@ -220,37 +226,37 @@ impl DroidCliAnalyzer {
             }
 
             // Try to parse as a generic JSON value to check the type
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
-                if let Some(msg_type) = value.get("type").and_then(|v| v.as_str()) {
-                    match msg_type {
-                        "session_start" => {
-                            // Parse session info
-                            if let Ok(session) = serde_json::from_str::<DroidSession>(line) {
-                                session_info = Some(session);
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(line)
+                && let Some(msg_type) = value.get("type").and_then(|v| v.as_str())
+            {
+                match msg_type {
+                    "session_start" => {
+                        // Parse session info
+                        if let Ok(session) = serde_json::from_str::<DroidSession>(line) {
+                            session_info = Some(session);
+                        }
+                    }
+                    "message" => {
+                        // Parse individual messages
+                        if let (Some(session), Some(settings)) = (&session_info, &settings) {
+                            // Skip messages that only contain tool_result content
+                            // These are API plumbing, not meaningful conversation turns
+                            if self.is_tool_result_only_message(&value) {
+                                continue;
+                            }
+                            if let Ok(message) =
+                                self.create_message_from_line(&value, session, settings, file_path)
+                            {
+                                last_timestamp = match last_timestamp {
+                                    Some(prev) if prev > message.date => Some(prev),
+                                    _ => Some(message.date),
+                                };
+                                messages.push(message);
                             }
                         }
-                        "message" => {
-                            // Parse individual messages
-                            if let (Some(session), Some(settings)) = (&session_info, &settings) {
-                                // Skip messages that only contain tool_result content
-                                // These are API plumbing, not meaningful conversation turns
-                                if self.is_tool_result_only_message(&value) {
-                                    continue;
-                                }
-                                if let Ok(message) = self
-                                    .create_message_from_line(&value, session, settings, file_path)
-                                {
-                                    last_timestamp = match last_timestamp {
-                                        Some(prev) if prev > message.date => Some(prev),
-                                        _ => Some(message.date),
-                                    };
-                                    messages.push(message);
-                                }
-                            }
-                        }
-                        _ => {
-                            // Ignore other event types (todo_state, etc.)
-                        }
+                    }
+                    _ => {
+                        // Ignore other event types (todo_state, etc.)
                     }
                 }
             }
@@ -473,12 +479,11 @@ impl DroidCliAnalyzer {
         // Look for text content only - tool_use and tool_result messages are not interesting
         // for message previews. Tool stats are tracked separately.
         for item in content {
-            if let Some(obj) = item.as_object() {
-                if obj.get("type").and_then(|v| v.as_str()) == Some("text") {
-                    if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
-                        return text.to_string();
-                    }
-                }
+            if let Some(obj) = item.as_object()
+                && obj.get("type").and_then(|v| v.as_str()) == Some("text")
+                && let Some(text) = obj.get("text").and_then(|v| v.as_str())
+            {
+                return text.to_string();
             }
         }
 
@@ -489,12 +494,11 @@ impl DroidCliAnalyzer {
     fn count_tool_calls(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
-            if let Some(obj) = item.as_object() {
-                if let Some(text_type) = obj.get("type").and_then(|v| v.as_str()) {
-                    if text_type == "tool_use" {
-                        count += 1;
-                    }
-                }
+            if let Some(obj) = item.as_object()
+                && let Some(text_type) = obj.get("type").and_then(|v| v.as_str())
+                && text_type == "tool_use"
+            {
+                count += 1;
             }
         }
         count
@@ -503,15 +507,15 @@ impl DroidCliAnalyzer {
     fn count_terminal_commands(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
-            if let Some(obj) = item.as_object() {
-                if let (Some(text_type), Some(name)) = (
+            if let Some(obj) = item.as_object()
+                && let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
                     obj.get("name").and_then(|v| v.as_str()),
-                ) {
-                    if text_type == "tool_use" && name == "Execute" {
-                        count += 1;
-                    }
-                }
+                )
+                && text_type == "tool_use"
+                && name == "Execute"
+            {
+                count += 1;
             }
         }
         count
@@ -520,15 +524,15 @@ impl DroidCliAnalyzer {
     fn count_file_searches(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
-            if let Some(obj) = item.as_object() {
-                if let (Some(text_type), Some(name)) = (
+            if let Some(obj) = item.as_object()
+                && let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
                     obj.get("name").and_then(|v| v.as_str()),
-                ) {
-                    if text_type == "tool_use" && (name == "Grep" || name == "Glob") {
-                        count += 1;
-                    }
-                }
+                )
+                && text_type == "tool_use"
+                && (name == "Grep" || name == "Glob")
+            {
+                count += 1;
             }
         }
         count
@@ -537,15 +541,15 @@ impl DroidCliAnalyzer {
     fn count_file_reads(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
-            if let Some(obj) = item.as_object() {
-                if let (Some(text_type), Some(name)) = (
+            if let Some(obj) = item.as_object()
+                && let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
                     obj.get("name").and_then(|v| v.as_str()),
-                ) {
-                    if text_type == "tool_use" && name == "Read" {
-                        count += 1;
-                    }
-                }
+                )
+                && text_type == "tool_use"
+                && name == "Read"
+            {
+                count += 1;
             }
         }
         count
@@ -554,15 +558,15 @@ impl DroidCliAnalyzer {
     fn count_file_edits(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
-            if let Some(obj) = item.as_object() {
-                if let (Some(text_type), Some(name)) = (
+            if let Some(obj) = item.as_object()
+                && let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
                     obj.get("name").and_then(|v| v.as_str()),
-                ) {
-                    if text_type == "tool_use" && name == "Edit" {
-                        count += 1;
-                    }
-                }
+                )
+                && text_type == "tool_use"
+                && name == "Edit"
+            {
+                count += 1;
             }
         }
         count
@@ -571,15 +575,15 @@ impl DroidCliAnalyzer {
     fn count_todo_writes(&self, content: &[serde_json::Value]) -> u64 {
         let mut count = 0;
         for item in content {
-            if let Some(obj) = item.as_object() {
-                if let (Some(text_type), Some(name)) = (
+            if let Some(obj) = item.as_object()
+                && let (Some(text_type), Some(name)) = (
                     obj.get("type").and_then(|v| v.as_str()),
                     obj.get("name").and_then(|v| v.as_str()),
-                ) {
-                    if text_type == "tool_use" && name == "TodoWrite" {
-                        count += 1;
-                    }
-                }
+                )
+                && text_type == "tool_use"
+                && name == "TodoWrite"
+            {
+                count += 1;
             }
         }
         count
@@ -588,19 +592,19 @@ impl DroidCliAnalyzer {
     /// Check if a message only contains tool_result content blocks
     /// These are API plumbing (passing tool outputs back to the model) and shouldn't be shown as conversation turns
     fn is_tool_result_only_message(&self, value: &serde_json::Value) -> bool {
-        if let Some(message) = value.get("message") {
-            if let Some(content) = message.get("content").and_then(|c| c.as_array()) {
-                if content.is_empty() {
-                    return false;
-                }
-                return content.iter().all(|item| {
-                    item.as_object()
-                        .and_then(|obj| obj.get("type"))
-                        .and_then(|t| t.as_str())
-                        .map(|t| t == "tool_result")
-                        .unwrap_or(false)
-                });
+        if let Some(message) = value.get("message")
+            && let Some(content) = message.get("content").and_then(|c| c.as_array())
+        {
+            if content.is_empty() {
+                return false;
             }
+            return content.iter().all(|item| {
+                item.as_object()
+                    .and_then(|obj| obj.get("type"))
+                    .and_then(|t| t.as_str())
+                    .map(|t| t == "tool_result")
+                    .unwrap_or(false)
+            });
         }
         false
     }

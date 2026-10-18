@@ -38,6 +38,12 @@ pub struct CopilotCliAnalyzer {
     cache: crate::stamp_cache::StampCache,
 }
 
+impl Default for CopilotCliAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CopilotCliAnalyzer {
     pub fn new() -> Self {
         Self {

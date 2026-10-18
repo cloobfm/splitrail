@@ -148,10 +148,10 @@ impl StampCache {
             })
             .collect();
 
-        if let Some(entry) = self.lock().get(path) {
-            if entry.stamp == stamp {
-                return (Some(Arc::clone(&entry.messages)), Outcome::Unchanged);
-            }
+        if let Some(entry) = self.lock().get(path)
+            && entry.stamp == stamp
+        {
+            return (Some(Arc::clone(&entry.messages)), Outcome::Unchanged);
         }
 
         match parse(path) {
@@ -335,12 +335,12 @@ mod tests {
             Ok(std::fs::read_to_string(path)?.lines().map(msg).collect())
         };
 
-        let (first, report) = cache.parse_all(&src(&[&file]), &flaky);
+        let (first, report) = cache.parse_all(&src(&[&file]), flaky);
         assert!(first.is_empty());
         assert_eq!(report.failed, 1);
 
         // Same size and mtime, but the failure was not cached, so it is tried again.
-        let (second, report) = cache.parse_all(&src(&[&file]), &flaky);
+        let (second, report) = cache.parse_all(&src(&[&file]), flaky);
         assert_eq!(tags(&second), ["one"]);
         assert_eq!(report.parsed, 1);
     }
@@ -372,13 +372,13 @@ mod tests {
             Ok(out)
         };
 
-        let (first, _) = cache.parse_all_stamping(&src(&[&meta]), companions, &parse);
+        let (first, _) = cache.parse_all_stamping(&src(&[&meta]), companions, parse);
         assert_eq!(tags(&first), ["e1", "m1"]);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         // Only the companion grows; the discovered path is byte-identical.
         std::fs::write(&events, "e1\ne2\n").unwrap();
-        let (after, report) = cache.parse_all_stamping(&src(&[&meta]), companions, &parse);
+        let (after, report) = cache.parse_all_stamping(&src(&[&meta]), companions, parse);
 
         assert_eq!(report.parsed, 1, "the companion moved, so re-parse");
         assert_eq!(tags(&after), ["e1", "e2", "m1"]);

@@ -116,13 +116,13 @@ pub fn parse_usage_log(
         let Ok(event) = serde_json::from_str::<HookLine>(line) else {
             continue;
         };
-        if let Some(email) = event.user_email.as_deref().filter(|e| !e.is_empty()) {
-            if login.as_ref().is_none_or(|(ts, _)| event.ts >= *ts) {
-                login = Some((
-                    event.ts,
-                    email.split('@').next().unwrap_or(email).to_string(),
-                ));
-            }
+        if let Some(email) = event.user_email.as_deref().filter(|e| !e.is_empty())
+            && login.as_ref().is_none_or(|(ts, _)| event.ts >= *ts)
+        {
+            login = Some((
+                event.ts,
+                email.split('@').next().unwrap_or(email).to_string(),
+            ));
         }
         let key = event
             .generation_id
@@ -162,10 +162,10 @@ pub fn parse_usage_log(
             }
         }
     }
-    if let Some((ts, name)) = login {
-        if let Some(at) = DateTime::<Utc>::from_timestamp_millis((ts * 1000.0) as i64) {
-            crate::plan_limits::observe_login(DISPLAY_NAME, at, name);
-        }
+    if let Some((ts, name)) = login
+        && let Some(at) = DateTime::<Utc>::from_timestamp_millis((ts * 1000.0) as i64)
+    {
+        crate::plan_limits::observe_login(DISPLAY_NAME, at, name);
     }
 
     // Turn end times per conversation, to split its billed events between turns.
@@ -204,32 +204,31 @@ pub fn parse_usage_log(
 
     let mut messages = Vec::new();
     for key in order {
-        if let Some(prompt) = prompts.remove(&key) {
-            if let Some(date) = DateTime::<Utc>::from_timestamp_millis((prompt.ts * 1000.0) as i64)
-            {
-                let turn = turns.get(&key);
-                let conversation = prompt
-                    .conversation_id
-                    .clone()
-                    .or_else(|| turn.and_then(|t| t.conversation_id.clone()))
-                    .unwrap_or_else(|| key.clone());
-                let cwd = prompt
-                    .cwd
-                    .as_deref()
-                    .or(turn.and_then(|t| t.cwd.as_deref()));
-                messages.push(ConversationMessage {
-                    application: Application::CursorAgent,
-                    date,
-                    project_hash: project_name(cwd),
-                    conversation_hash: hash_text(&conversation),
-                    local_hash: None,
-                    global_hash: hash_text(&format!("cursor-agent:{key}:user")),
-                    model: None,
-                    stats: Stats::default(),
-                    role: MessageRole::User,
-                    content: prompt.prompt_preview,
-                });
-            }
+        if let Some(prompt) = prompts.remove(&key)
+            && let Some(date) = DateTime::<Utc>::from_timestamp_millis((prompt.ts * 1000.0) as i64)
+        {
+            let turn = turns.get(&key);
+            let conversation = prompt
+                .conversation_id
+                .clone()
+                .or_else(|| turn.and_then(|t| t.conversation_id.clone()))
+                .unwrap_or_else(|| key.clone());
+            let cwd = prompt
+                .cwd
+                .as_deref()
+                .or(turn.and_then(|t| t.cwd.as_deref()));
+            messages.push(ConversationMessage {
+                application: Application::CursorAgent,
+                date,
+                project_hash: project_name(cwd),
+                conversation_hash: hash_text(&conversation),
+                local_hash: None,
+                global_hash: hash_text(&format!("cursor-agent:{key}:user")),
+                model: None,
+                stats: Stats::default(),
+                role: MessageRole::User,
+                content: prompt.prompt_preview,
+            });
         }
         if let Some(msg) = turns.remove(&key).and_then(|mut turn| {
             let date = DateTime::<Utc>::from_timestamp_millis((turn.ts * 1000.0) as i64)?;

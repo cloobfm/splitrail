@@ -21,6 +21,12 @@ pub struct QwenCodeAnalyzer {
     cache: crate::stamp_cache::StampCache,
 }
 
+impl Default for QwenCodeAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QwenCodeAnalyzer {
     pub fn new() -> Self {
         Self {
@@ -33,7 +39,7 @@ impl QwenCodeAnalyzer {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 enum QwenAutoStatsData {
-    RequestLog(QwenRequestLogEntry),
+    RequestLog(Box<QwenRequestLogEntry>),
     StatsLog(QwenStatsLogEntry),
 }
 
@@ -341,118 +347,101 @@ fn parse_request_log_from_json_value(
     file_path_str: &str,
 ) -> Result<Vec<ConversationMessage>, ()> {
     // Check if this looks like a request log entry
-    if let Some(obj) = json_value.as_object() {
-        if let Some(session_id_val) = obj.get("sessionId") {
-            if let Some(session_id) = session_id_val.as_str() {
-                if let Some(type_val) = obj.get("type").and_then(|v| v.as_str()) {
-                    if type_val == "auto_request_log" {
-                        let timestamp =
-                            if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
-                                chrono::DateTime::parse_from_rfc3339(ts_str)
-                                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                                    .ok()
-                            } else {
-                                None
-                            };
+    if let Some(obj) = json_value.as_object()
+        && let Some(session_id_val) = obj.get("sessionId")
+        && let Some(session_id) = session_id_val.as_str()
+        && let Some(type_val) = obj.get("type").and_then(|v| v.as_str())
+        && type_val == "auto_request_log"
+    {
+        let timestamp = if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
+            chrono::DateTime::parse_from_rfc3339(ts_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .ok()
+        } else {
+            None
+        };
 
-                        let event = obj
-                            .get("event")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
+        let event = obj
+            .get("event")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
-                        if let Some(data_obj) = obj.get("data").and_then(|v| v.as_object()) {
-                            let model = data_obj
-                                .get("model")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
+        if let Some(data_obj) = obj.get("data").and_then(|v| v.as_object()) {
+            let model = data_obj
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
-                            if let Some(timestamp) = timestamp {
-                                let mut stats = Stats::default();
+            if let Some(timestamp) = timestamp {
+                let mut stats = Stats::default();
 
-                                // Extract token stats if available
-                                if let Some(usage_obj) =
-                                    data_obj.get("usageMetadata").and_then(|v| v.as_object())
-                                {
-                                    let prompt_tokens = usage_obj
-                                        .get("promptTokenCount")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0);
-                                    let candidates_tokens = usage_obj
-                                        .get("candidatesTokenCount")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0);
-                                    let cached_tokens = usage_obj
-                                        .get("cachedContentTokenCount")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0);
+                // Extract token stats if available
+                if let Some(usage_obj) = data_obj.get("usageMetadata").and_then(|v| v.as_object()) {
+                    let prompt_tokens = usage_obj
+                        .get("promptTokenCount")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let candidates_tokens = usage_obj
+                        .get("candidatesTokenCount")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let cached_tokens = usage_obj
+                        .get("cachedContentTokenCount")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
 
-                                    // Apply same heuristic as in JSON session parsing - if prompt includes cached content
-                                    let real_input_tokens = if prompt_tokens >= cached_tokens {
-                                        // prompt_tokens likely includes cached tokens, subtract to get real new tokens
-                                        prompt_tokens.saturating_sub(cached_tokens)
-                                    } else {
-                                        // prompt_tokens is less than cached, so likely new content only
-                                        prompt_tokens
-                                    };
+                    // Apply same heuristic as in JSON session parsing - if prompt includes cached content
+                    let real_input_tokens = if prompt_tokens >= cached_tokens {
+                        // prompt_tokens likely includes cached tokens, subtract to get real new tokens
+                        prompt_tokens.saturating_sub(cached_tokens)
+                    } else {
+                        // prompt_tokens is less than cached, so likely new content only
+                        prompt_tokens
+                    };
 
-                                    stats.input_tokens = real_input_tokens;
-                                    stats.output_tokens = candidates_tokens;
-                                    stats.cached_tokens = cached_tokens;
-                                    if let Some(ref model_name) = model {
-                                        stats.cost =
-                                            calculate_input_cost(model_name, real_input_tokens)
-                                                + calculate_output_cost(
-                                                    model_name,
-                                                    candidates_tokens,
-                                                )
-                                                + calculate_cache_cost(
-                                                    model_name,
-                                                    0,
-                                                    cached_tokens,
-                                                );
-                                    }
-                                }
-
-                                let role = if event == "request" {
-                                    MessageRole::User
-                                } else {
-                                    MessageRole::Assistant
-                                };
-
-                                // Extract content if available
-                                let content = if let Some(user_prompt_id) =
-                                    data_obj.get("userPromptId").and_then(|v| v.as_str())
-                                {
-                                    Some(user_prompt_id.chars().take(200).collect())
-                                } else {
-                                    None
-                                };
-
-                                let msg = ConversationMessage {
-                                    date: timestamp,
-                                    application: Application::QwenCode,
-                                    project_hash: String::new(), // Not available in request logs
-                                    local_hash: Some(format!("req-{}-{}", session_id, event)),
-                                    global_hash: hash_text(&format!(
-                                        "{}:{}:{}:{}",
-                                        file_path_str,
-                                        session_id,
-                                        timestamp.to_rfc3339(),
-                                        event
-                                    )),
-                                    conversation_hash: hash_text(&session_id),
-                                    model,
-                                    stats,
-                                    role,
-                                    content,
-                                };
-
-                                return Ok(vec![msg]);
-                            }
-                        }
+                    stats.input_tokens = real_input_tokens;
+                    stats.output_tokens = candidates_tokens;
+                    stats.cached_tokens = cached_tokens;
+                    if let Some(ref model_name) = model {
+                        stats.cost = calculate_input_cost(model_name, real_input_tokens)
+                            + calculate_output_cost(model_name, candidates_tokens)
+                            + calculate_cache_cost(model_name, 0, cached_tokens);
                     }
                 }
+
+                let role = if event == "request" {
+                    MessageRole::User
+                } else {
+                    MessageRole::Assistant
+                };
+
+                // Extract content if available
+                let content = data_obj
+                    .get("userPromptId")
+                    .and_then(|v| v.as_str())
+                    .map(|user_prompt_id| user_prompt_id.chars().take(200).collect());
+
+                let msg = ConversationMessage {
+                    date: timestamp,
+                    application: Application::QwenCode,
+                    project_hash: String::new(), // Not available in request logs
+                    local_hash: Some(format!("req-{}-{}", session_id, event)),
+                    global_hash: hash_text(&format!(
+                        "{}:{}:{}:{}",
+                        file_path_str,
+                        session_id,
+                        timestamp.to_rfc3339(),
+                        event
+                    )),
+                    conversation_hash: hash_text(session_id),
+                    model,
+                    stats,
+                    role,
+                    content,
+                };
+
+                return Ok(vec![msg]);
             }
         }
     }
@@ -466,130 +455,115 @@ fn parse_stats_log_from_json_value(
     file_path_str: &str,
 ) -> Result<Vec<ConversationMessage>, ()> {
     // Check if this looks like a stats log entry
-    if let Some(obj) = json_value.as_object() {
-        if let Some(session_id_val) = obj.get("sessionId") {
-            if let Some(session_id) = session_id_val.as_str() {
-                if let Some(type_val) = obj.get("type").and_then(|v| v.as_str()) {
-                    if type_val == "auto_stats" {
-                        let timestamp =
-                            if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
-                                chrono::DateTime::parse_from_rfc3339(ts_str)
-                                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                                    .ok()
+    if let Some(obj) = json_value.as_object()
+        && let Some(session_id_val) = obj.get("sessionId")
+        && let Some(session_id) = session_id_val.as_str()
+        && let Some(type_val) = obj.get("type").and_then(|v| v.as_str())
+        && type_val == "auto_stats"
+    {
+        let timestamp = if let Some(ts_str) = obj.get("timestamp").and_then(|v| v.as_str()) {
+            chrono::DateTime::parse_from_rfc3339(ts_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .ok()
+        } else {
+            None
+        };
+
+        if let Some(stats_obj) = obj.get("stats").and_then(|v| v.as_object()) {
+            let mut messages = Vec::new();
+
+            // Process model-specific stats if available
+            if let Some(models_obj) = stats_obj.get("models").and_then(|v| v.as_object()) {
+                for (model_name, model_value) in models_obj {
+                    if let Some(model_obj) = model_value.as_object() {
+                        let requests = model_obj
+                            .get("requests")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let errors = model_obj
+                            .get("errors")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let latency_ms = model_obj
+                            .get("latency_ms")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+
+                        if let Some(tokens_obj) =
+                            model_obj.get("tokens").and_then(|v| v.as_object())
+                        {
+                            let prompt_tokens = tokens_obj
+                                .get("prompt")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let candidates_tokens = tokens_obj
+                                .get("candidates")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let cached_tokens = tokens_obj
+                                .get("cached")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+
+                            // Apply same heuristic as in JSON session parsing - if prompt includes cached content
+                            let real_input_tokens = if prompt_tokens >= cached_tokens {
+                                // prompt_tokens likely includes cached tokens, subtract to get real new tokens
+                                prompt_tokens.saturating_sub(cached_tokens)
                             } else {
-                                None
+                                // prompt_tokens is less than cached, so likely new content only
+                                prompt_tokens
                             };
 
-                        if let Some(stats_obj) = obj.get("stats").and_then(|v| v.as_object()) {
-                            let mut messages = Vec::new();
+                            let stats = Stats {
+                                tool_calls: requests as u32,
+                                cost: if !model_name.is_empty() {
+                                    calculate_input_cost(model_name, real_input_tokens)
+                                        + calculate_output_cost(model_name, candidates_tokens)
+                                        + calculate_cache_cost(model_name, 0, cached_tokens)
+                                } else {
+                                    0.0
+                                },
+                                cached_tokens,
+                                input_tokens: real_input_tokens,
+                                output_tokens: candidates_tokens,
+                                ..Default::default()
+                            };
 
-                            // Process model-specific stats if available
-                            if let Some(models_obj) =
-                                stats_obj.get("models").and_then(|v| v.as_object())
-                            {
-                                for (model_name, model_value) in models_obj {
-                                    if let Some(model_obj) = model_value.as_object() {
-                                        let requests = model_obj
-                                            .get("requests")
-                                            .and_then(|v| v.as_u64())
-                                            .unwrap_or(0);
-                                        let errors = model_obj
-                                            .get("errors")
-                                            .and_then(|v| v.as_u64())
-                                            .unwrap_or(0);
-                                        let latency_ms = model_obj
-                                            .get("latency_ms")
-                                            .and_then(|v| v.as_u64())
-                                            .unwrap_or(0);
+                            if let Some(timestamp) = timestamp {
+                                let msg = ConversationMessage {
+                                    date: timestamp,
+                                    application: Application::QwenCode,
+                                    project_hash: String::new(), // Not available in stats logs
+                                    local_hash: Some(format!(
+                                        "stats-{}-{}",
+                                        session_id, model_name
+                                    )),
+                                    global_hash: hash_text(&format!(
+                                        "{}:{}:stats:{}",
+                                        file_path_str, session_id, model_name
+                                    )),
+                                    conversation_hash: hash_text(session_id),
+                                    model: Some(model_name.clone()),
+                                    stats,
+                                    role: MessageRole::Assistant, // Treat stats as system info
+                                    content: Some(format!(
+                                        "Session stats: {} requests, {} errors, {}ms latency, {} total tokens",
+                                        requests,
+                                        errors,
+                                        latency_ms,
+                                        prompt_tokens + candidates_tokens
+                                    )),
+                                };
 
-                                        if let Some(tokens_obj) =
-                                            model_obj.get("tokens").and_then(|v| v.as_object())
-                                        {
-                                            let prompt_tokens = tokens_obj
-                                                .get("prompt")
-                                                .and_then(|v| v.as_u64())
-                                                .unwrap_or(0);
-                                            let candidates_tokens = tokens_obj
-                                                .get("candidates")
-                                                .and_then(|v| v.as_u64())
-                                                .unwrap_or(0);
-                                            let cached_tokens = tokens_obj
-                                                .get("cached")
-                                                .and_then(|v| v.as_u64())
-                                                .unwrap_or(0);
-
-                                            // Apply same heuristic as in JSON session parsing - if prompt includes cached content
-                                            let real_input_tokens =
-                                                if prompt_tokens >= cached_tokens {
-                                                    // prompt_tokens likely includes cached tokens, subtract to get real new tokens
-                                                    prompt_tokens.saturating_sub(cached_tokens)
-                                                } else {
-                                                    // prompt_tokens is less than cached, so likely new content only
-                                                    prompt_tokens
-                                                };
-
-                                            let stats = Stats {
-                                                tool_calls: requests as u32,
-                                                cost: if !model_name.is_empty() {
-                                                    calculate_input_cost(
-                                                        &model_name,
-                                                        real_input_tokens,
-                                                    ) + calculate_output_cost(
-                                                        &model_name,
-                                                        candidates_tokens,
-                                                    ) + calculate_cache_cost(
-                                                        &model_name,
-                                                        0,
-                                                        cached_tokens,
-                                                    )
-                                                } else {
-                                                    0.0
-                                                },
-                                                cached_tokens,
-                                                input_tokens: real_input_tokens,
-                                                output_tokens: candidates_tokens,
-                                                ..Default::default()
-                                            };
-
-                                            if let Some(timestamp) = timestamp {
-                                                let msg = ConversationMessage {
-                                                    date: timestamp,
-                                                    application: Application::QwenCode,
-                                                    project_hash: String::new(), // Not available in stats logs
-                                                    local_hash: Some(format!(
-                                                        "stats-{}-{}",
-                                                        session_id, model_name
-                                                    )),
-                                                    global_hash: hash_text(&format!(
-                                                        "{}:{}:stats:{}",
-                                                        file_path_str, session_id, model_name
-                                                    )),
-                                                    conversation_hash: hash_text(&session_id),
-                                                    model: Some(model_name.clone()),
-                                                    stats,
-                                                    role: MessageRole::Assistant, // Treat stats as system info
-                                                    content: Some(format!(
-                                                        "Session stats: {} requests, {} errors, {}ms latency, {} total tokens",
-                                                        requests,
-                                                        errors,
-                                                        latency_ms,
-                                                        prompt_tokens + candidates_tokens
-                                                    )),
-                                                };
-
-                                                messages.push(msg);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if !messages.is_empty() {
-                                return Ok(messages);
+                                messages.push(msg);
                             }
                         }
                     }
                 }
+            }
+
+            if !messages.is_empty() {
+                return Ok(messages);
             }
         }
     }

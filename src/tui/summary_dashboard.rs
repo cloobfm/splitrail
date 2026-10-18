@@ -42,14 +42,44 @@ pub struct SummaryData {
     pub tokens_per_second: f64,
 }
 
-pub fn build_activity_sparkline_cache(
-    filtered_stats: &[&AgenticCodingToolStats],
-    render_time: chrono::DateTime<chrono::Utc>,
-) -> (
+/// Sparkline spans, the max per tool and the rolling buffers, by tool.
+pub type SparklineCaches = (
     HashMap<String, Vec<Span<'static>>>,
     HashMap<String, u64>,
     HashMap<String, SparklineState>,
-) {
+);
+
+/// One CLI's row for the selected day: name, cached, input, output and reasoning tokens, cost,
+/// idle and active time, sessions, messages, state and tokens per second.
+pub type CliRow = (
+    String,
+    u64,
+    u64,
+    u64,
+    u64,
+    f64,
+    String,
+    String,
+    u64,
+    u64,
+    String,
+    f64,
+);
+
+/// A message line in the verbose view: when, who, name, content, project and application.
+pub type PreviewLine = (
+    chrono::DateTime<chrono::Utc>,
+    crate::types::MessageRole,
+    String,
+    String,
+    String,
+    crate::types::Application,
+);
+
+pub fn build_activity_sparkline_cache(
+    filtered_stats: &[&AgenticCodingToolStats],
+    render_time: chrono::DateTime<chrono::Utc>,
+) -> SparklineCaches {
     build_activity_sparkline_cache_with_prev(filtered_stats, render_time, None, None)
 }
 
@@ -58,11 +88,7 @@ pub fn build_activity_sparkline_cache_with_prev(
     render_time: chrono::DateTime<chrono::Utc>,
     prev_max: Option<&HashMap<String, u64>>,
     prev_buffers: Option<&HashMap<String, SparklineState>>,
-) -> (
-    HashMap<String, Vec<Span<'static>>>,
-    HashMap<String, u64>,
-    HashMap<String, SparklineState>,
-) {
+) -> SparklineCaches {
     let mut sparkline_cache = HashMap::new();
     let mut max_cache = HashMap::new();
     let mut buffer_cache = HashMap::new();
@@ -241,6 +267,8 @@ pub fn calculate_summary_data(
     }
 }
 
+// Draw functions take what they draw; a parameter struct would only move this list.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_summary_view(
     frame: &mut Frame,
     area: Rect,
@@ -492,20 +520,7 @@ pub fn draw_summary_view(
     let selected_day_date = (now - ChronoDuration::days(*selected_day_offset as i64)).date_naive();
 
     // Collect data for the selected day for each CLI
-    let mut cli_data: Vec<(
-        String,
-        u64,
-        u64,
-        u64,
-        u64,
-        f64,
-        String,
-        String,
-        u64,
-        u64,
-        String,
-        f64, // New field: tokens per second
-    )> = Vec::new();
+    let mut cli_data: Vec<CliRow> = Vec::new();
     let mut cli_meta: Vec<(i64, u8)> = Vec::new();
     for analyzer_stats in filtered_stats {
         let now_utc = render_time_utc; // Use cached time instead of syscall
@@ -516,14 +531,14 @@ pub fn draw_summary_view(
         let mut cost = 0.0;
 
         for (date_str, day_stats) in &analyzer_stats.daily_stats {
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                if date == selected_day_date {
-                    cached += day_stats.stats.cached_tokens;
-                    input += day_stats.stats.input_tokens;
-                    output += day_stats.stats.output_tokens;
-                    reasoning += day_stats.stats.reasoning_tokens;
-                    cost += day_stats.stats.cost;
-                }
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+                && date == selected_day_date
+            {
+                cached += day_stats.stats.cached_tokens;
+                input += day_stats.stats.input_tokens;
+                output += day_stats.stats.output_tokens;
+                reasoning += day_stats.stats.reasoning_tokens;
+                cost += day_stats.stats.cost;
             }
         }
 
@@ -878,21 +893,21 @@ pub fn draw_summary_view(
             "⏳ 5h Limit",
             Color::LightMagenta,
             visible_indices,
-            &filtered_stats,
+            filtered_stats,
             |limits| limits.five_hour,
         ),
         limit_row(
             "📅 Week Limit",
             Color::Magenta,
             visible_indices,
-            &filtered_stats,
+            filtered_stats,
             |limits| limits.seven_day,
         ),
         limit_row(
             "🗓️ Month Limit",
             Color::Magenta,
             visible_indices,
-            &filtered_stats,
+            filtered_stats,
             |limits| limits.monthly,
         ),
         // Which account the limits above belong to, for a config directory whose login changes.
@@ -1159,7 +1174,7 @@ pub fn create_activity_sparkline_with_prev(
             for b in prev.buckets.iter_mut().rev().take(slots_to_advance) {
                 *b = 0;
             }
-            prev.last_slot_start = prev.last_slot_start + slot_len * (slots_to_advance as i32);
+            prev.last_slot_start += slot_len * (slots_to_advance as i32);
         }
         prev
     } else {
@@ -1363,17 +1378,7 @@ pub fn simplify_analyzer_name(name: &str) -> &str {
 pub fn get_last_message_preview(
     stats: &AgenticCodingToolStats,
     _max_len: usize,
-) -> (
-    String,
-    Vec<(
-        chrono::DateTime<chrono::Utc>,
-        crate::types::MessageRole,
-        String,
-        String,
-        String,
-        crate::types::Application,
-    )>,
-) {
+) -> (String, Vec<PreviewLine>) {
     let username = get_username();
     let simplified_name = simplify_analyzer_name(&stats.analyzer_name);
 
@@ -1413,14 +1418,7 @@ pub fn get_last_message_preview(
     messages_with_content.reverse();
 
     // Convert to the expected format
-    let message_lines: Vec<_> = messages_with_content
-        .into_iter()
-        .map(
-            |(date, role, role_name, content, project_hash, application)| {
-                (date, role, role_name, content, project_hash, application)
-            },
-        )
-        .collect();
+    let message_lines: Vec<_> = messages_with_content.into_iter().collect();
 
     // Get the role of the last message for status display
     if let Some(last_msg) = stats.messages.iter().max_by_key(|msg| msg.date) {
@@ -1435,24 +1433,13 @@ pub fn get_last_message_preview(
 }
 
 // Draw visual CLI panels section (compact 2-line design)
+// Draw functions take what they draw; a parameter struct would only move this list.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_visual_cli_panels(
     frame: &mut Frame,
     area: Rect,
     filtered_stats: &[&AgenticCodingToolStats],
-    cli_data: &[(
-        String,
-        u64,
-        u64,
-        u64,
-        u64,
-        f64,
-        String,
-        String,
-        u64,
-        u64,
-        String,
-        f64, // New field: tokens per second
-    )],
+    cli_data: &[CliRow],
     cli_order: &[usize],
     _format_options: &NumberFormatOptions,
     tui_state: &mut crate::tui::TuiState,
@@ -1637,8 +1624,6 @@ pub fn draw_visual_cli_panels(
             // Add tokens per second (fixed width: 10 chars "42.3 tk/s ")
             let tks_display = if *tks_per_sec >= 100.0 {
                 format!("{:>3.0} tk/s ", tks_per_sec)
-            } else if *tks_per_sec >= 10.0 {
-                format!("{:>4.1} tk/s ", tks_per_sec)
             } else if *tks_per_sec > 0.0 {
                 format!("{:>4.1} tk/s ", tks_per_sec)
             } else {
@@ -1659,8 +1644,6 @@ pub fn draw_visual_cli_panels(
             // Add tokens per second (fixed width: 10 chars "42.3 tk/s ")
             let tks_display = if *tks_per_sec >= 100.0 {
                 format!("{:>3.0} tk/s ", tks_per_sec)
-            } else if *tks_per_sec >= 10.0 {
-                format!("{:>4.1} tk/s ", tks_per_sec)
             } else if *tks_per_sec > 0.0 {
                 format!("{:>4.1} tk/s ", tks_per_sec)
             } else {
@@ -1727,7 +1710,7 @@ pub fn draw_visual_cli_panels(
 
                 let is_changed = last_project_hash_displayed
                     .as_ref()
-                    .map_or(false, |last| last != project_hash);
+                    .is_some_and(|last| last != project_hash);
                 last_project_hash_displayed = Some(project_hash.clone());
 
                 let project_style = if is_changed {
@@ -1923,10 +1906,8 @@ pub fn draw_visual_cli_panels(
     // Fixed-width format: 10 chars total to match CLI lines "42.3 tk/s "
     let tks_display = if tks_per_sec >= 100.0 {
         format!("{:>3.0} tk/s ", tks_per_sec) // "123 tk/s " (9 chars)
-    } else if tks_per_sec >= 1.0 {
-        format!("{:>4.1} tk/s ", tks_per_sec) // "42.3 tk/s " (10 chars)
     } else if tks_per_sec > 0.0 {
-        format!("{:>4.1} tk/s ", tks_per_sec) // " 0.7 tk/s " (10 chars)
+        format!("{:>4.1} tk/s ", tks_per_sec) // "42.3 tk/s " or " 0.7 tk/s " (10 chars)
     } else {
         "   — tk/s ".to_string() // "   — tk/s " (10 chars)
     };

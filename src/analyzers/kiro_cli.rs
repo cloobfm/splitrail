@@ -167,6 +167,12 @@ pub struct KiroCliAnalyzer {
     cache: crate::stamp_cache::StampCache,
 }
 
+impl Default for KiroCliAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KiroCliAnalyzer {
     pub fn new() -> Self {
         Self {
@@ -249,7 +255,7 @@ impl KiroCliAnalyzer {
                         .request_metadata
                         .as_ref()
                         .and_then(|m| m.request_start_timestamp_ms)
-                        .and_then(|ms| DateTime::from_timestamp_millis(ms))
+                        .and_then(DateTime::from_timestamp_millis)
                 })
                 .unwrap_or_else(Utc::now);
 
@@ -317,16 +323,16 @@ impl KiroCliAnalyzer {
             }
 
             // Calculate cost if we have a model and tokens
-            if let Some(model_name) = &model {
-                if stats.input_tokens > 0 || stats.output_tokens > 0 {
-                    stats.cost = calculate_total_cost(
-                        model_name,
-                        stats.input_tokens,
-                        stats.output_tokens,
-                        0, // Kiro CLI doesn't have cache creation tokens in client data
-                        0, // Kiro CLI doesn't have cache read tokens in client data
-                    );
-                }
+            if let Some(model_name) = &model
+                && (stats.input_tokens > 0 || stats.output_tokens > 0)
+            {
+                stats.cost = calculate_total_cost(
+                    model_name,
+                    stats.input_tokens,
+                    stats.output_tokens,
+                    0, // Kiro CLI doesn't have cache creation tokens in client data
+                    0, // Kiro CLI doesn't have cache read tokens in client data
+                );
             }
 
             let assistant_content = Self::format_kiro_assistant_message(&history_entry.assistant);
@@ -353,18 +359,17 @@ impl KiroCliAnalyzer {
             KiroUserContent::Prompt { prompt } => {
                 let mut content = prompt.clone();
 
-                if let Some(env_ctx) = &user.env_context {
-                    if let Some(env_state) = &env_ctx.env_state {
-                        if let Some(cwd) = &env_state.current_working_directory {
-                            content.push_str(&format!("\n\n[Working Directory: {}]", cwd));
-                        }
-                    }
+                if let Some(env_ctx) = &user.env_context
+                    && let Some(env_state) = &env_ctx.env_state
+                    && let Some(cwd) = &env_state.current_working_directory
+                {
+                    content.push_str(&format!("\n\n[Working Directory: {}]", cwd));
                 }
 
-                if let Some(additional) = &user.additional_context {
-                    if !additional.is_empty() {
-                        content.push_str(&format!("\n\n[Additional Context: {}]", additional));
-                    }
+                if let Some(additional) = &user.additional_context
+                    && !additional.is_empty()
+                {
+                    content.push_str(&format!("\n\n[Additional Context: {}]", additional));
                 }
 
                 content
@@ -453,13 +458,7 @@ impl KiroCliAnalyzer {
             possible_paths.push(PathBuf::from(appdata).join("kiro-cli").join("data.sqlite3"));
         }
 
-        for path in possible_paths {
-            if path.exists() {
-                return Some(path);
-            }
-        }
-
-        None
+        possible_paths.into_iter().find(|path| path.exists())
     }
 }
 

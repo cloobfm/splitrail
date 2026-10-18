@@ -68,11 +68,11 @@ impl PerfOverlayState {
     }
 
     pub fn record_render(&mut self, start: Option<std::time::Instant>) {
-        if self.enabled {
-            if let Some(start) = start {
-                self.render_total += start.elapsed();
-                self.render_count += 1;
-            }
+        if self.enabled
+            && let Some(start) = start
+        {
+            self.render_total += start.elapsed();
+            self.render_count += 1;
         }
     }
 
@@ -469,13 +469,14 @@ pub fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut tui_state = TuiState::default();
-    // Enable mouse mode by default for consistent scrolling
-    tui_state.mouse_mode_enabled = true;
+    let mut tui_state = TuiState {
+        // Enable mouse mode by default for consistent scrolling
+        mouse_mode_enabled: true,
+        // Start with perf overlay disabled; user can toggle via verbose mode
+        perf_overlay: PerfOverlayState::new(false),
+        ..Default::default()
+    };
     set_mouse(true)?;
-
-    // Start with perf overlay disabled; user can toggle via verbose mode
-    tui_state.perf_overlay = PerfOverlayState::new(false);
 
     let shutdown = Arc::new(AtomicBool::new(false));
     spawn_signal_listener(shutdown.clone());
@@ -733,7 +734,7 @@ async fn run_app(
             let refresh_due = tui_state
                 .debug_overlay
                 .last_refresh
-                .map_or(true, |t| t.elapsed() >= Duration::from_secs(1));
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(1));
             if refresh_due {
                 refresh_debug_overlay(tui_state);
                 needs_redraw = true;
@@ -821,12 +822,11 @@ async fn run_app(
         // OPTIMIZATION: Auto-clear status messages after 3 seconds
         // This also triggers unnecessary full UI redraws
         if let (Some(_), Some(timer)) = (&tui_state.status_message, &tui_state.status_message_timer)
+            && timer.elapsed() >= Duration::from_secs(3)
         {
-            if timer.elapsed() >= Duration::from_secs(3) {
-                tui_state.status_message = None;
-                tui_state.status_message_timer = None;
-                // REMOVED: needs_redraw = true;  // Don't redraw entire UI for status clear
-            }
+            tui_state.status_message = None;
+            tui_state.status_message_timer = None;
+            // REMOVED: needs_redraw = true;  // Don't redraw entire UI for status clear
         }
 
         // OPTIMIZATION: More aggressive adaptive polling
@@ -1241,11 +1241,10 @@ async fn run_app(
                                     }
                                 } else if mouse_y >= today_by_cli_rect.y
                                     && mouse_y < today_by_cli_rect.y + today_by_cli_rect.height
+                                    && tui_state.cli_table_scroll_offset > 0
                                 {
-                                    if tui_state.cli_table_scroll_offset > 0 {
-                                        tui_state.cli_table_scroll_offset -= 1;
-                                        needs_redraw = true;
-                                    }
+                                    tui_state.cli_table_scroll_offset -= 1;
+                                    needs_redraw = true;
                                 }
                             }
                             crossterm::event::MouseEventKind::ScrollDown => {
@@ -1765,6 +1764,8 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
     frame.render_widget(picks_table, picks_area);
 }
 
+// Draw functions take what they draw; a parameter struct would only move this list.
+#[allow(clippy::too_many_arguments)]
 fn draw_ui(
     frame: &mut Frame,
     filtered_stats: &[&AgenticCodingToolStats],
@@ -2105,7 +2106,7 @@ fn render_debug_overlay(frame: &mut Frame, tui_state: &TuiState) {
         return;
     }
 
-    let height = area.height.min(12).max(5);
+    let height = area.height.clamp(5, 12);
     let overlay_rect = Rect {
         x: area.x,
         y: area.y + area.height.saturating_sub(height),
@@ -2166,13 +2167,7 @@ fn draw_daily_stats_table(
     // Calculate start and end indices to get most recent days first
     // When view_start_offset is 0, we want the last view_limit days (most recent)
     // When view_start_offset is 1, we want the previous view_limit days, etc.
-    let start_idx = if (view_start_offset + 1) * view_limit <= total_days {
-        // Normal case: we can take a full view_limit window from the end
-        total_days - (view_start_offset + 1) * view_limit
-    } else {
-        // Edge case: not enough days, take from the beginning
-        0
-    };
+    let start_idx = total_days.saturating_sub((view_start_offset + 1) * view_limit);
     let end_idx = std::cmp::min(total_days, total_days - view_start_offset * view_limit);
 
     // Ensure bounds are valid
@@ -2991,12 +2986,14 @@ mod period_tests {
             messages: Vec::new(),
             analyzer_name: "t".into(),
         };
-        let mut day = crate::types::DailyStats::default();
-        day.slices = vec![
-            slice(9, "opus", "splitrail", 100, 1.0),
-            slice(9, "sonnet", "splitrail", 10, 0.1),
-            slice(14, "opus", "mediasrc", 1000, 5.0),
-        ];
+        let day = crate::types::DailyStats {
+            slices: vec![
+                slice(9, "opus", "splitrail", 100, 1.0),
+                slice(9, "sonnet", "splitrail", 10, 0.1),
+                slice(14, "opus", "mediasrc", 1000, 5.0),
+            ],
+            ..Default::default()
+        };
         stats.daily_stats.insert("2026-10-17".into(), day);
 
         let hours = group_slices(&stats, Period::Hour, &SliceFilter::default());

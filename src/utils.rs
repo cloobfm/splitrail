@@ -50,13 +50,12 @@ pub fn warn_once(message: impl Into<String>) {
 
     if let Ok(mut warned) = cache.lock()
         && warned.insert(message.clone())
+        && let Ok(mut warns) = warnings.lock()
     {
-        if let Ok(mut warns) = warnings.lock() {
-            warns.push(WarningEntry {
-                message,
-                timestamp: Utc::now(),
-            });
-        }
+        warns.push(WarningEntry {
+            message,
+            timestamp: Utc::now(),
+        });
     }
 }
 
@@ -80,14 +79,14 @@ pub fn get_warnings() -> Vec<String> {
 }
 
 pub fn clear_old_warnings() {
-    if let Some(warnings) = WARNINGS.get() {
-        if let Ok(mut warns) = warnings.lock() {
-            let now = Utc::now();
-            warns.retain(|entry| {
-                let duration = now.signed_duration_since(entry.timestamp);
-                duration.num_seconds() < 60
-            });
-        }
+    if let Some(warnings) = WARNINGS.get()
+        && let Ok(mut warns) = warnings.lock()
+    {
+        let now = Utc::now();
+        warns.retain(|entry| {
+            let duration = now.signed_duration_since(entry.timestamp);
+            duration.num_seconds() < 60
+        });
     }
 }
 
@@ -159,6 +158,9 @@ pub fn read_log_tail(max_lines: usize) -> Option<Vec<String>> {
     let file = std::fs::File::open(path).ok()?;
     let reader = BufReader::new(file);
     let mut buffer: Vec<String> = Vec::new();
+    // `flatten` skips a line that fails to decode and reads on; `map_while` (clippy's
+    // suggestion) would stop at it and drop the rest of the log.
+    #[allow(clippy::lines_filter_map_ok)]
     for line in reader.lines().flatten() {
         buffer.push(line);
         if buffer.len() > max_lines {
@@ -178,11 +180,7 @@ fn rotate_log_if_needed(path: &std::path::Path) {
     }
 
     if let Ok(mut file) = std::fs::OpenOptions::new().read(true).open(path) {
-        let keep_from = meta
-            .len()
-            .saturating_sub(RETAIN_LOG_BYTES)
-            .try_into()
-            .unwrap_or(0);
+        let keep_from = meta.len().saturating_sub(RETAIN_LOG_BYTES);
         if file.seek(SeekFrom::Start(keep_from)).is_ok() {
             let mut buffer = Vec::new();
             let _ = file.read_to_end(&mut buffer);
@@ -815,7 +813,7 @@ pub fn calculate_overall_health(messages: &[ConversationMessage], current_date: 
 
         // Weekly usage (last 7 days) - only output tokens
         let days_diff = (current_date_parsed - message_date).num_days();
-        if days_diff >= 0 && days_diff < 7 {
+        if (0..7).contains(&days_diff) {
             weekly_output_tokens += output_tokens;
         }
     }

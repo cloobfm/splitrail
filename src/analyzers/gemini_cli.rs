@@ -24,6 +24,12 @@ use std::path::Path;
 
 pub struct GeminiCliAnalyzer;
 
+impl Default for GeminiCliAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GeminiCliAnalyzer {
     pub fn new() -> Self {
         Self
@@ -453,9 +459,7 @@ impl Analyzer for GeminiCliAnalyzer {
                 Ok(messages) => Some(messages),
                 Err(e) => {
                     let path = source.path.display();
-                    log_error(&format!(
-                        "Failed to parse Gemini session file {path}: {e:#}"
-                    ));
+                    log_error(format!("Failed to parse Gemini session file {path}: {e:#}"));
                     warn_once(
                         "Gemini CLI sessions failed to parse; see ~/.splitrail.log for details",
                     );

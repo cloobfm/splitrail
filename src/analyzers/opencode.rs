@@ -165,6 +165,12 @@ struct DbCache {
     messages: std::collections::HashMap<String, ConversationMessage>,
 }
 
+impl Default for OpenCodeAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpenCodeAnalyzer {
     pub fn new() -> Self {
         Self::for_flavor(OPENCODE)
@@ -364,10 +370,10 @@ impl Analyzer for OpenCodeAnalyzer {
         // Load session metadata (read once, used for project context)
         let mut sessions = std::collections::HashMap::new();
         for session_file in session_files {
-            if let Ok(content) = std::fs::read_to_string(&session_file.path) {
-                if let Ok(session) = serde_json::from_str::<OpenCodeSession>(&content) {
-                    sessions.insert(session.id.clone(), session);
-                }
+            if let Ok(content) = std::fs::read_to_string(&session_file.path)
+                && let Ok(session) = serde_json::from_str::<OpenCodeSession>(&content)
+            {
+                sessions.insert(session.id.clone(), session);
             }
         }
 
@@ -401,30 +407,28 @@ impl Analyzer for OpenCodeAnalyzer {
                     // Try parsing as JSONL (multiple JSON objects separated by newlines)
                     for line in content.lines() {
                         let line = line.trim();
-                        if !line.is_empty() {
-                            if let Ok(opencode_msg) =
+                        if !line.is_empty()
+                            && let Ok(opencode_msg) =
                                 serde_json::from_str::<OpenCodeMessageData>(line)
-                            {
-                                // Get session info for directory path
-                                let session_dir = sessions
-                                    .get(&opencode_msg.session_id)
-                                    .map(|s| s.directory.clone())
-                                    .unwrap_or_else(|| "unknown".to_string());
+                        {
+                            // Get session info for directory path
+                            let session_dir = sessions
+                                .get(&opencode_msg.session_id)
+                                .map(|s| s.directory.clone())
+                                .unwrap_or_else(|| "unknown".to_string());
 
-                                // Read actual message content from part files for both user and assistant
-                                let message_content =
-                                    self.read_message_text_content(&opencode_msg.id);
+                            // Read actual message content from part files for both user and assistant
+                            let message_content = self.read_message_text_content(&opencode_msg.id);
 
-                                // Convert to our internal format
-                                if let Some(msg) = self.convert_opencode_message_data(
-                                    opencode_msg,
-                                    &session_dir,
-                                    message_content,
-                                ) {
-                                    // Deduplicate by global hash
-                                    if seen_hashes.insert(msg.global_hash.clone()) {
-                                        messages.push(msg);
-                                    }
+                            // Convert to our internal format
+                            if let Some(msg) = self.convert_opencode_message_data(
+                                opencode_msg,
+                                &session_dir,
+                                message_content,
+                            ) {
+                                // Deduplicate by global hash
+                                if seen_hashes.insert(msg.global_hash.clone()) {
+                                    messages.push(msg);
                                 }
                             }
                         }
@@ -463,30 +467,28 @@ impl Analyzer for OpenCodeAnalyzer {
                     // Try parsing as JSONL (multiple JSON objects separated by newlines)
                     for line in content.lines() {
                         let line = line.trim();
-                        if !line.is_empty() {
-                            if let Ok(opencode_msg) =
+                        if !line.is_empty()
+                            && let Ok(opencode_msg) =
                                 serde_json::from_str::<OpenCodeMessageData>(line)
-                            {
-                                // Get session info for directory path
-                                let session_dir = sessions
-                                    .get(&opencode_msg.session_id)
-                                    .map(|s| s.directory.clone())
-                                    .unwrap_or_else(|| "unknown".to_string());
+                        {
+                            // Get session info for directory path
+                            let session_dir = sessions
+                                .get(&opencode_msg.session_id)
+                                .map(|s| s.directory.clone())
+                                .unwrap_or_else(|| "unknown".to_string());
 
-                                // Read actual message content from part files for both user and assistant
-                                let message_content =
-                                    self.read_message_text_content(&opencode_msg.id);
+                            // Read actual message content from part files for both user and assistant
+                            let message_content = self.read_message_text_content(&opencode_msg.id);
 
-                                // Convert to our internal format
-                                if let Some(msg) = self.convert_opencode_message_data(
-                                    opencode_msg,
-                                    &session_dir,
-                                    message_content,
-                                ) {
-                                    // Deduplicate by global hash
-                                    if seen_hashes.insert(msg.global_hash.clone()) {
-                                        messages.push(msg);
-                                    }
+                            // Convert to our internal format
+                            if let Some(msg) = self.convert_opencode_message_data(
+                                opencode_msg,
+                                &session_dir,
+                                message_content,
+                            ) {
+                                // Deduplicate by global hash
+                                if seen_hashes.insert(msg.global_hash.clone()) {
+                                    messages.push(msg);
                                 }
                             }
                         }
@@ -602,16 +604,15 @@ impl OpenCodeAnalyzer {
 
             if let Ok(entries) = std::fs::read_dir(&part_dir) {
                 for entry in entries.flatten() {
-                    if let Ok(content) = std::fs::read_to_string(&entry.path()) {
-                        if let Ok(part) = serde_json::from_str::<OpenCodePart>(&content) {
-                            // Only collect "text" type parts
-                            if part.part_type == "text" {
-                                if let Some(text) = part.text {
-                                    if !text.trim().is_empty() {
-                                        text_parts.push(text);
-                                    }
-                                }
-                            }
+                    if let Ok(content) = std::fs::read_to_string(entry.path())
+                        && let Ok(part) = serde_json::from_str::<OpenCodePart>(&content)
+                    {
+                        // Only collect "text" type parts
+                        if part.part_type == "text"
+                            && let Some(text) = part.text
+                            && !text.trim().is_empty()
+                        {
+                            text_parts.push(text);
                         }
                     }
                 }
@@ -686,10 +687,10 @@ impl OpenCodeAnalyzer {
         }
 
         // Count tool calls based on finish type
-        if let Some(finish) = &msg.finish {
-            if finish == "tool-calls" {
-                stats.tool_calls = 1;
-            }
+        if let Some(finish) = &msg.finish
+            && finish == "tool-calls"
+        {
+            stats.tool_calls = 1;
         }
 
         // Calculate cost using our pricing model (OpenCode stores cost=0 for free tier)
@@ -732,6 +733,9 @@ fn has_table(conn: &rusqlite::Connection, table: &str) -> bool {
     .is_ok()
 }
 
+/// Rows read from a database (by message id), and the v2 and v1 watermarks reached.
+type DatabaseRead = (Vec<(String, ConversationMessage)>, i64, i64);
+
 /// Messages from `opencode.db`, read-only. OpenCode 1.x stores them in `message` (data holds
 /// the old JSON file's fields minus id/sessionID); 2.x in `session_message` (type
 /// user/assistant/...; assistant data has `model.id`, `tokens`, `cost` and a `content` list of
@@ -744,7 +748,7 @@ fn parse_database(
     path: &Path,
     since_v2: i64,
     since_v1: i64,
-) -> Result<(Vec<(String, ConversationMessage)>, i64, i64)> {
+) -> Result<DatabaseRead> {
     use anyhow::Context;
     use rusqlite::OpenFlags;
     let conn = rusqlite::Connection::open_with_flags(
@@ -837,12 +841,11 @@ fn parse_database(
             };
             fields.insert("id".into(), id.clone().into());
             fields.insert("sessionID".into(), session.clone().into());
-            if let Ok(parsed) = serde_json::from_value::<OpenCodeMessageData>(fields.into()) {
-                if let Some(msg) =
+            if let Ok(parsed) = serde_json::from_value::<OpenCodeMessageData>(fields.into())
+                && let Some(msg) =
                     analyzer.convert_opencode_message_data(parsed, &directory(&session), None)
-                {
-                    messages.push((id, msg));
-                }
+            {
+                messages.push((id, msg));
             }
         }
     }

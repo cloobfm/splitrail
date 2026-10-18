@@ -97,6 +97,12 @@ pub struct CodexCliAnalyzer {
     cache: Mutex<HashMap<PathBuf, CachedFile>>,
 }
 
+impl Default for CodexCliAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CodexCliAnalyzer {
     pub fn new() -> Self {
         Self {
@@ -429,10 +435,10 @@ pub(crate) fn parse_codex_cli_jsonl_file(file_path: &Path) -> Result<Vec<Convers
                 if let Ok(session_meta) =
                     simd_json::from_slice::<CodexCliSessionMeta>(&mut payload_bytes)
                 {
-                    if let Some(cwd) = session_meta.cwd {
-                        if let Some(label) = Path::new(&cwd).file_name().and_then(|n| n.to_str()) {
-                            project_label = Some(label.to_string());
-                        }
+                    if let Some(cwd) = session_meta.cwd
+                        && let Some(label) = Path::new(&cwd).file_name().and_then(|n| n.to_str())
+                    {
+                        project_label = Some(label.to_string());
                     }
                     session_model =
                         extract_model_from_value(&wrapper.payload).map(SessionModel::explicit);
@@ -928,7 +934,7 @@ mod codex_home_tests {
 }
 
 fn rollout_exists_for_session(session_id: &str) -> bool {
-    codex_home().map_or(false, |home| {
+    codex_home().is_some_and(|home| {
         let home_str = home.to_string_lossy();
         let pattern = format!("{home_str}/sessions/*/*/*/*{session_id}.jsonl");
         glob::glob(&pattern)

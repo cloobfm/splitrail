@@ -73,10 +73,10 @@ pub fn snapshot_from_response(body: &str, now: f64) -> Option<Value> {
 }
 
 fn api_key() -> Option<String> {
-    if let Ok(key) = std::env::var("FACTORY_API_KEY") {
-        if !key.trim().is_empty() {
-            return Some(key.trim().to_string());
-        }
+    if let Ok(key) = std::env::var("FACTORY_API_KEY")
+        && !key.trim().is_empty()
+    {
+        return Some(key.trim().to_string());
     }
     let path = config_dir()?.join("factory_api_key");
     let key = std::fs::read_to_string(path).ok()?;

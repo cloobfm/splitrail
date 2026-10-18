@@ -15,6 +15,12 @@ use std::path::Path;
 
 pub struct RooCodeAnalyzer;
 
+impl Default for RooCodeAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RooCodeAnalyzer {
     pub fn new() -> Self {
         Self

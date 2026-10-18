@@ -196,10 +196,10 @@ fn handle_fs_event(
                     if !path.starts_with(&entry.watch_dir) {
                         continue;
                     }
-                    if path.starts_with(&entry.match_dir) || entry.pattern.matches_path(path) {
-                        if notified_analyzers.insert(entry.analyzer_name.clone()) {
-                            let _ = tx.send(WatcherEvent::DataChanged(entry.analyzer_name.clone()));
-                        }
+                    if (path.starts_with(&entry.match_dir) || entry.pattern.matches_path(path))
+                        && notified_analyzers.insert(entry.analyzer_name.clone())
+                    {
+                        let _ = tx.send(WatcherEvent::DataChanged(entry.analyzer_name.clone()));
                     }
                 }
             }
@@ -531,14 +531,14 @@ impl RealtimeStatsManager {
         }
 
         // Set upload status
-        if let Some(upload_status) = &self.upload_status {
-            if let Ok(mut status) = upload_status.lock() {
-                *status = UploadStatus::Uploading {
-                    current: 0,
-                    total: messages_to_upload.len(),
-                    dots: 0,
-                };
-            }
+        if let Some(upload_status) = &self.upload_status
+            && let Ok(mut status) = upload_status.lock()
+        {
+            *status = UploadStatus::Uploading {
+                current: 0,
+                total: messages_to_upload.len(),
+                dots: 0,
+            };
         }
 
         // Mark upload as in progress
@@ -556,27 +556,26 @@ impl RealtimeStatsManager {
                 &messages_to_upload,
                 &mut config,
                 |_current, _total| {
-                    if let Some(status) = &upload_status {
-                        if let Ok(mut status_guard) = status.lock() {
-                            if let UploadStatus::Uploading { dots, .. } = &mut *status_guard {
-                                *dots = (*dots + 1) % 4;
-                            }
-                        }
+                    if let Some(status) = &upload_status
+                        && let Ok(mut status_guard) = status.lock()
+                        && let UploadStatus::Uploading { dots, .. } = &mut *status_guard
+                    {
+                        *dots = (*dots + 1) % 4;
                     }
                 },
             )
             .await;
 
             // Update status based on result
-            if let Some(status) = &upload_status {
-                if let Ok(mut status_guard) = status.lock() {
-                    match result {
-                        Ok(_) => {
-                            *status_guard = UploadStatus::Uploaded;
-                        }
-                        Err(e) => {
-                            *status_guard = UploadStatus::Failed(e.to_string());
-                        }
+            if let Some(status) = &upload_status
+                && let Ok(mut status_guard) = status.lock()
+            {
+                match result {
+                    Ok(_) => {
+                        *status_guard = UploadStatus::Uploaded;
+                    }
+                    Err(e) => {
+                        *status_guard = UploadStatus::Failed(e.to_string());
                     }
                 }
             }

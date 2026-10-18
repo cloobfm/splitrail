@@ -15,6 +15,12 @@ use std::path::{Path, PathBuf};
 
 pub struct AmazonQAnalyzer;
 
+impl Default for AmazonQAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AmazonQAnalyzer {
     pub fn new() -> Self {
         Self
@@ -53,13 +59,7 @@ impl AmazonQAnalyzer {
             possible_paths.push(PathBuf::from(appdata).join("amazon-q").join("data.sqlite3"));
         }
 
-        for path in possible_paths {
-            if path.exists() {
-                return Some(path);
-            }
-        }
-
-        None
+        possible_paths.into_iter().find(|path| path.exists())
     }
 }
 
@@ -225,7 +225,7 @@ pub fn parse_amazon_q_conversation(
                     .request_metadata
                     .as_ref()
                     .and_then(|m| m.request_start_timestamp_ms)
-                    .and_then(|ms| DateTime::from_timestamp_millis(ms))
+                    .and_then(DateTime::from_timestamp_millis)
             })
             .unwrap_or_else(Utc::now);
 
@@ -280,16 +280,16 @@ pub fn parse_amazon_q_conversation(
         }
 
         // Calculate cost if we have a model and tokens
-        if let Some(model_name) = &model {
-            if stats.input_tokens > 0 || stats.output_tokens > 0 {
-                stats.cost = calculate_total_cost(
-                    model_name,
-                    stats.input_tokens,
-                    stats.output_tokens,
-                    0, // Amazon Q doesn't have cache creation tokens in client data
-                    0, // Amazon Q doesn't have cache read tokens in client data
-                );
-            }
+        if let Some(model_name) = &model
+            && (stats.input_tokens > 0 || stats.output_tokens > 0)
+        {
+            stats.cost = calculate_total_cost(
+                model_name,
+                stats.input_tokens,
+                stats.output_tokens,
+                0, // Amazon Q doesn't have cache creation tokens in client data
+                0, // Amazon Q doesn't have cache read tokens in client data
+            );
         }
 
         // Count tool uses
@@ -335,10 +335,10 @@ pub fn parse_amazon_q_conversation(
 fn format_q_user_message(message: &QUserMessage) -> Option<String> {
     let mut parts = Vec::new();
 
-    if let Some(content) = format_q_user_content(&message.content) {
-        if !content.is_empty() {
-            parts.push(content);
-        }
+    if let Some(content) = format_q_user_content(&message.content)
+        && !content.is_empty()
+    {
+        parts.push(content);
     }
 
     if let Some(context) = message
@@ -406,10 +406,10 @@ fn format_tool_use_summary(tool_uses: &[QToolUse]) -> String {
     lines.push("Tool calls:".to_string());
     for tool in tool_uses {
         let mut entry = format!("- {}", tool.name);
-        if let Some(orig) = &tool.orig_name {
-            if orig != &tool.name {
-                entry.push_str(&format!(" (source: {orig})"));
-            }
+        if let Some(orig) = &tool.orig_name
+            && orig != &tool.name
+        {
+            entry.push_str(&format!(" (source: {orig})"));
         }
         if !tool.args.is_null() {
             entry.push_str(&format!(" args: {}", tool.args));
@@ -515,13 +515,8 @@ impl Analyzer for AmazonQAnalyzer {
         let all_entries: Vec<ConversationMessage> = conversations
             .into_par_iter()
             .flat_map(|(project_path, conversation_json)| {
-                match parse_amazon_q_conversation(&project_path, &conversation_json) {
-                    Ok(messages) => messages,
-                    Err(_e) => {
-                        // Silently skip - parsing issues being debugged
-                        Vec::new()
-                    }
-                }
+                // Silently skip failures - parsing issues being debugged
+                parse_amazon_q_conversation(&project_path, &conversation_json).unwrap_or_default()
             })
             .collect();
 

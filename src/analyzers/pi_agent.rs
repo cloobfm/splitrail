@@ -26,6 +26,12 @@ pub struct PiAgentAnalyzer {
     cache: crate::stamp_cache::StampCache,
 }
 
+impl Default for PiAgentAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PiAgentAnalyzer {
     pub fn new() -> Self {
         Self {

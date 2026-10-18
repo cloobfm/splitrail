@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use splitrail_dashboard::analyzer::{Analyzer, AnalyzerRegistry};
 use splitrail_dashboard::analyzers::*;
@@ -289,6 +289,8 @@ fn create_test_daily_stats() -> DailyStats {
         user_messages: 100,
         ai_messages: 100,
         conversations: 50,
+        active_seconds: 0,
+        slices: Vec::new(),
         models: BTreeMap::from([
             ("claude-3-sonnet".to_string(), 75),
             ("claude-3-haiku".to_string(), 25),
@@ -381,6 +383,9 @@ fn deduplicate_messages_by_local_hash_current(
     result
 }
 
+// `filter_map(ok)` skips a line that fails to decode and reads on; clippy's `map_while`
+// would stop at it.
+#[allow(clippy::lines_filter_map_ok)]
 fn parse_jsonl_file_bench(file_path: &std::path::Path) -> Vec<serde_json::Value> {
     use std::io::{BufRead, BufReader};
     let file = File::open(file_path).unwrap();

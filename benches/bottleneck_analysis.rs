@@ -16,7 +16,7 @@ fn bench_real_bottlenecks(c: &mut Criterion) {
     let test_files = create_test_jsonl_files(&temp_dir, &[100, 1000, 5000]);
 
     for (file, line_count) in test_files.iter() {
-        group.throughput(Throughput::Bytes(file.metadata().unwrap().len() as u64));
+        group.throughput(Throughput::Bytes(file.metadata().unwrap().len()));
         group.bench_with_input(
             BenchmarkId::new("json_parsing", line_count),
             line_count,
@@ -188,8 +188,7 @@ fn create_message_sets(counts: &[usize]) -> Vec<(usize, Vec<ConversationMessage>
     counts
         .iter()
         .map(|&count| {
-            let messages: Vec<ConversationMessage> =
-                (0..count).map(|i| create_test_message(i)).collect();
+            let messages: Vec<ConversationMessage> = (0..count).map(create_test_message).collect();
             (count, messages)
         })
         .collect()
@@ -224,7 +223,7 @@ fn create_test_message(i: usize) -> ConversationMessage {
             tool_calls: (i % 10) as u32,
             ..Default::default()
         },
-        role: if i % 2 == 0 {
+        role: if i.is_multiple_of(2) {
             MessageRole::User
         } else {
             MessageRole::Assistant
@@ -233,6 +232,9 @@ fn create_test_message(i: usize) -> ConversationMessage {
     }
 }
 
+// `filter_map(ok)` skips a line that fails to decode and reads on; clippy's `map_while`
+// would stop at it.
+#[allow(clippy::lines_filter_map_ok)]
 fn parse_jsonl_file_realistic(file_path: &std::path::Path) -> Vec<serde_json::Value> {
     use std::io::{BufRead, BufReader};
     let file = File::open(file_path).unwrap();

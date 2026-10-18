@@ -434,12 +434,12 @@ pub fn mark_notification_sent() {
 /// How many seconds ago the last notification was sent (if within the supplied window)
 pub fn last_notification_age_seconds(max_age_secs: i64) -> Option<i64> {
     let guard = LAST_SENT.get_or_init(|| std::sync::Mutex::new(None));
-    if let Ok(last) = guard.lock() {
-        if let Some(ts) = *last {
-            let age = Utc::now().signed_duration_since(ts).num_seconds().max(0);
-            if age <= max_age_secs {
-                return Some(age);
-            }
+    if let Ok(last) = guard.lock()
+        && let Some(ts) = *last
+    {
+        let age = Utc::now().signed_duration_since(ts).num_seconds().max(0);
+        if age <= max_age_secs {
+            return Some(age);
         }
     }
     None

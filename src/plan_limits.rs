@@ -156,7 +156,10 @@ pub fn observe(
     }
 }
 
-static OBSERVED_LOGINS: OnceLock<Mutex<HashMap<String, (DateTime<Utc>, String)>>> = OnceLock::new();
+/// Analyzer name -> when its logs last named an account, and the account.
+type ObservedLogins = HashMap<String, (DateTime<Utc>, String)>;
+
+static OBSERVED_LOGINS: OnceLock<Mutex<ObservedLogins>> = OnceLock::new();
 
 /// Record the account an analyzer's own logs name (e.g. Codex's plan type), keeping the newest.
 pub fn observe_login(analyzer_name: &str, at: DateTime<Utc>, login: String) {

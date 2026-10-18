@@ -27,6 +27,8 @@ async fn test_analyzer_registry_creation() {
 }
 
 #[tokio::test]
+// The guard is held across awaits on purpose: it serialises the tests that set HOME.
+#[allow(clippy::await_holding_lock)]
 async fn test_analyzer_stats_loading() {
     let _home = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let registry = create_test_registry();
@@ -313,6 +315,9 @@ async fn parse_files_sequential_test(files: &[std::path::PathBuf]) -> Vec<serde_
     all_values
 }
 
+// `filter_map(ok)` skips a line that fails to decode and reads on; clippy's `map_while`
+// would stop at it.
+#[allow(clippy::lines_filter_map_ok)]
 async fn parse_files_parallel_test(files: &[std::path::PathBuf]) -> Vec<serde_json::Value> {
     use rayon::prelude::*;
     use std::io::BufRead;

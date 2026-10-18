@@ -551,13 +551,16 @@ fn stamp(db: &Path) -> Stamp {
     [of(db), of(&wal_path(db))]
 }
 
+/// The database stamp, the runs directory listing and the messages read under them.
+type CachedRead = (Stamp, String, Arc<Vec<ConversationMessage>>);
+
 pub struct WarpDevAnalyzer {
     database: Option<PathBuf>,
     runs: Option<PathBuf>,
     /// The last read, kept until the database or its WAL changes. Warp writes terminal history
     /// to the same database constantly, so most changes leave the AI tables as they were; the
     /// read is two small queries.
-    cache: Mutex<Option<(Stamp, String, Arc<Vec<ConversationMessage>>)>>,
+    cache: Mutex<Option<CachedRead>>,
 }
 
 impl WarpDevAnalyzer {

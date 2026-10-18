@@ -36,6 +36,9 @@ fn bench_json_parsing(c: &mut Criterion) {
             let file = std::fs::File::open(&file_path).unwrap();
             let reader = BufReader::new(file);
 
+            // `filter_map(ok)` skips a line that fails to decode and reads on; clippy's `map_while`
+            // would stop at it.
+            #[allow(clippy::lines_filter_map_ok)]
             let count: usize = reader
                 .lines()
                 .filter_map(|line| line.ok())
@@ -68,7 +71,7 @@ fn bench_string_operations(c: &mut Criterion) {
     c.bench_function("string_cloning", |b| {
         b.iter(|| {
             for _ in 0..1000 {
-                let _ = black_box(test_string.clone());
+                let _ = black_box(test_string);
             }
         });
     });

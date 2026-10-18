@@ -16,6 +16,12 @@ pub struct KiloCodeAnalyzer {
     cache: crate::stamp_cache::StampCache,
 }
 
+impl Default for KiloCodeAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KiloCodeAnalyzer {
     pub fn new() -> Self {
         Self {
@@ -396,7 +402,7 @@ fn parse_kilo_code_task_directory(task_dir: &Path) -> Result<Vec<ConversationMes
                         continue;
                     }
 
-                    let next_is_api = ui_messages.get(idx + 1).map_or(false, |next| match next {
+                    let next_is_api = ui_messages.get(idx + 1).is_some_and(|next| match next {
                         KiloCodeUiMessage::Say { say, .. } => say == "api_req_started",
                         KiloCodeUiMessage::Ask { ask, .. } => ask == "api_req_failed",
                     });
@@ -565,7 +571,7 @@ impl Analyzer for KiloCodeAnalyzer {
         // Only task files whose size or mtime moved are re-parsed (BZL-74).
         let (all_entries, _report) = self
             .cache
-            .parse_all(&sources, |path| parse_kilo_code_task_directory(path));
+            .parse_all(&sources, parse_kilo_code_task_directory);
 
         // Deduplicate by global hash
         let mut seen_hashes = HashSet::new();

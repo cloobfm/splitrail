@@ -277,10 +277,13 @@ pub fn compute(stats: &[&AgenticCodingToolStats], goal_tks: f64, now: DateTime<U
 
 /// `computed` merged into `saved`, keeping the higher of each, with the records newly beaten
 /// (as `(kind, new, old)`). A record never seen before is not "beaten".
+/// A record beaten: its kind, the old record and the new one.
+pub type Beaten = (Kind, Record, Record);
+
 pub fn ratchet(
     saved: &BTreeMap<Kind, Record>,
     computed: &BTreeMap<Kind, Record>,
-) -> (BTreeMap<Kind, Record>, Vec<(Kind, Record, Record)>) {
+) -> (BTreeMap<Kind, Record>, Vec<Beaten>) {
     let mut merged = saved.clone();
     let mut beaten = Vec::new();
     for (&kind, record) in computed {
@@ -516,10 +519,10 @@ pub fn board(stats: &[&AgenticCodingToolStats], goal_tks: f64) -> Board {
     let mut board = compute(stats, goal_tks, Utc::now());
     let saved = load();
     let (merged, beaten) = ratchet(saved.as_ref().unwrap_or(&BTreeMap::new()), &board.best);
-    if saved.as_ref() != Some(&merged) {
-        if let Err(e) = save(&merged) {
-            crate::utils::log_error(format!("Records: {e}"));
-        }
+    if saved.as_ref() != Some(&merged)
+        && let Err(e) = save(&merged)
+    {
+        crate::utils::log_error(format!("Records: {e}"));
     }
     // Only a record that stood before this run started counts as beaten; the first pass after
     // a start (or with no file yet) just fills the board in.

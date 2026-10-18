@@ -124,20 +124,18 @@ fn extract_watch_and_match_dirs(pattern: &str) -> Option<(PathBuf, PathBuf)> {
         None
     }
 
-    if let Some(pos) = pattern.find("**") {
-        if let Some(match_dir) = trimmed_path(&pattern[..pos]) {
-            if let Some(watch_dir) = existing_dir_or_ancestor(match_dir.clone()) {
-                return Some((match_dir, watch_dir));
-            }
-        }
+    if let Some(pos) = pattern.find("**")
+        && let Some(match_dir) = trimmed_path(&pattern[..pos])
+        && let Some(watch_dir) = existing_dir_or_ancestor(match_dir.clone())
+    {
+        return Some((match_dir, watch_dir));
     }
 
-    if let Some(pos) = pattern.find('*') {
-        if let Some(match_dir) = trimmed_path(&pattern[..pos]) {
-            if let Some(watch_dir) = existing_dir_or_ancestor(match_dir.clone()) {
-                return Some((match_dir, watch_dir));
-            }
-        }
+    if let Some(pos) = pattern.find('*')
+        && let Some(match_dir) = trimmed_path(&pattern[..pos])
+        && let Some(watch_dir) = existing_dir_or_ancestor(match_dir.clone())
+    {
+        return Some((match_dir, watch_dir));
     }
 
     let pattern_path = PathBuf::from(pattern);

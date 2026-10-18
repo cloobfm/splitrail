@@ -79,27 +79,24 @@ fn get_warp_token() -> Result<String> {
         // First try to get from config.toml (new method)
         let config_path = config_dir.join("splitrail").join("config.toml");
 
-        if config_path.exists() {
-            if let Ok(content) = fs::read_to_string(&config_path) {
-                if let Ok(config) = toml::from_str::<toml::Value>(&content) {
-                    if let Some(token) = config
-                        .get("warp")
-                        .and_then(|w| w.get("auth_token"))
-                        .and_then(|t| t.as_str())
-                    {
-                        return Ok(token.to_string());
-                    }
-                }
-            }
+        if config_path.exists()
+            && let Ok(content) = fs::read_to_string(&config_path)
+            && let Ok(config) = toml::from_str::<toml::Value>(&content)
+            && let Some(token) = config
+                .get("warp")
+                .and_then(|w| w.get("auth_token"))
+                .and_then(|t| t.as_str())
+        {
+            return Ok(token.to_string());
         }
 
         // Fallback to separate token file (current method)
         let token_path = config_dir.join("splitrail").join("warp_token");
 
-        if token_path.exists() {
-            if let Ok(token) = fs::read_to_string(&token_path) {
-                return Ok(token);
-            }
+        if token_path.exists()
+            && let Ok(token) = fs::read_to_string(&token_path)
+        {
+            return Ok(token);
         }
     }
 
@@ -127,16 +124,16 @@ async fn test_token(token: &str) -> Result<bool> {
 /// Check WARP token health with caching
 pub async fn check_warp_token_health() -> WarpTokenStatus {
     // Check cache first
-    if let Some(cache) = WarpHealthCache::load() {
-        if !cache.should_check() {
-            // Return cached status if checked recently
-            return match cache.status.as_str() {
-                "valid" => WarpTokenStatus::Valid,
-                "expired" => WarpTokenStatus::Expired,
-                "not_configured" => WarpTokenStatus::NotConfigured,
-                _ => WarpTokenStatus::Error("Unknown cached status".to_string()),
-            };
-        }
+    if let Some(cache) = WarpHealthCache::load()
+        && !cache.should_check()
+    {
+        // Return cached status if checked recently
+        return match cache.status.as_str() {
+            "valid" => WarpTokenStatus::Valid,
+            "expired" => WarpTokenStatus::Expired,
+            "not_configured" => WarpTokenStatus::NotConfigured,
+            _ => WarpTokenStatus::Error("Unknown cached status".to_string()),
+        };
     }
 
     // Get token from config
@@ -156,7 +153,8 @@ pub async fn check_warp_token_health() -> WarpTokenStatus {
     };
 
     // Test the token
-    let status = match test_token(&token).await {
+
+    match test_token(&token).await {
         Ok(true) => {
             // Token is valid
             let cache = WarpHealthCache {
@@ -183,7 +181,5 @@ pub async fn check_warp_token_health() -> WarpTokenStatus {
             // Network error or other issue - don't cache
             WarpTokenStatus::Error(e.to_string())
         }
-    };
-
-    status
+    }
 }

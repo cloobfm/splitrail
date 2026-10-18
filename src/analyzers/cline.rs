@@ -15,6 +15,12 @@ pub struct ClineAnalyzer {
     cache: crate::stamp_cache::StampCache,
 }
 
+impl Default for ClineAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClineAnalyzer {
     pub fn new() -> Self {
         Self {
@@ -332,9 +338,7 @@ impl Analyzer for ClineAnalyzer {
         sources: Vec<DataSource>,
     ) -> Result<Vec<ConversationMessage>> {
         // Only task files whose size or mtime moved are re-parsed (BZL-74).
-        let (all_entries, _report) = self
-            .cache
-            .parse_all(&sources, |path| parse_cline_task_directory(path));
+        let (all_entries, _report) = self.cache.parse_all(&sources, parse_cline_task_directory);
 
         // Deduplicate by global hash
         let mut seen_hashes = HashSet::new();
