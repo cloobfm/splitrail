@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.98] - 2026-10-18
+
+### Fixed
+- Other machines' columns showed one line in the verbose activity view, against five for local
+  tools: publishers shared only their newest message's text. They now send the last 5 messages
+  with text (`texts` in the recent payload, redacted and cut like before). Messages older than
+  two minutes are merged into time buckets on the wire, so their texts arrive as entries of their
+  own with no tokens; counts and tk/s are unchanged. Shows once the publishers run 0.98.
+
 ## [2.0.0-dash-0.97] - 2026-10-18
 
 ### Fixed
