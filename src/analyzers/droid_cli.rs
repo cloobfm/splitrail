@@ -8,6 +8,7 @@ use std::path::Path;
 use crate::analyzer::{Analyzer, DataSource};
 use crate::models::calculate_total_cost;
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
+use crate::utils::hash_text;
 use std::collections::BTreeMap;
 
 /// Droid CLI session data structure
@@ -270,7 +271,12 @@ impl DroidCliAnalyzer {
                 project_hash,
                 conversation_hash: session.id.clone(),
                 local_hash: Some("session-total".to_string()),
-                global_hash: format!("droid-cli:{}:session-total:{}", session.id, timestamp.timestamp()),
+                // One logical row per session, so the identity is the session and nothing else.
+                // It used to include `timestamp` (the session's newest message), which moved as
+                // the session grew: the server deduplicates on `global_hash`, so each upload
+                // inserted another session-total row carrying the whole token usage and
+                // overstated Droid cost (BZL-190). Hashed like every other analyzer's.
+                global_hash: hash_text(&format!("droid-cli:{}:session-total", session.id)),
                 model: Some(model_name),
                 stats: Stats {
                     input_tokens: totals.input_tokens as u64,
@@ -593,6 +599,57 @@ mod tests {
     use tempfile::TempDir;
     use std::fs::File;
     use std::io::Write;
+
+    /// The session-total row is one logical "total for this session" message, so its identity
+    /// must not move as the session grows. It embedded `last_timestamp` — the session's newest
+    /// message — so every appended message gave it a new `global_hash`. The server deduplicates
+    /// on that hash, so each upload inserted *another* session-total row carrying the session's
+    /// whole token usage, overstating uploaded Droid cost (BZL-190).
+    #[test]
+    fn session_total_identity_is_stable_as_the_session_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("s");
+        fs::create_dir_all(&session_dir).unwrap();
+        let session_file = session_dir.join("session.jsonl");
+
+        fs::write(
+            session_dir.join("session.settings.json"),
+            r#"{"assistantActiveTimeMs":60000,"model":"claude-opus-4-5-20251101",
+                "reasoningEffort":"off","autonomyMode":"normal",
+                "tokenUsage":{"inputTokens":1000,"outputTokens":500,"cacheCreationTokens":2000,
+                "cacheReadTokens":1000,"thinkingTokens":0}}"#,
+        )
+        .unwrap();
+
+        let mut f = File::create(&session_file).unwrap();
+        writeln!(f, r#"{{"type":"session_start","id":"sess-1","title":"T","owner":"user","version":2,"cwd":"/tmp/p"}}"#).unwrap();
+        writeln!(f, r#"{{"type":"message","id":"msg-1","timestamp":"2025-11-29T09:46:17.825Z","message":{{"role":"user","content":[{{"type":"text","text":"a"}}]}}}}"#).unwrap();
+        drop(f);
+
+        let session_total_hash = |path: &Path| -> String {
+            DroidCliAnalyzer::new()
+                .parse_session_file(path)
+                .unwrap()
+                .into_iter()
+                .find(|m| m.local_hash.as_deref() == Some("session-total"))
+                .expect("a session-total message")
+                .global_hash
+        };
+
+        let before = session_total_hash(&session_file);
+
+        // The session continues, with a later timestamp than the first message.
+        let mut f = fs::OpenOptions::new().append(true).open(&session_file).unwrap();
+        writeln!(f, r#"{{"type":"message","id":"msg-2","timestamp":"2025-11-29T10:12:40.000Z","message":{{"role":"assistant","content":[{{"type":"text","text":"b"}}]}}}}"#).unwrap();
+        drop(f);
+
+        let after = session_total_hash(&session_file);
+
+        assert_eq!(
+            before, after,
+            "the same session's total must keep one identity, or the server stores it twice"
+        );
+    }
 
     #[tokio::test]
     async fn test_parse_droid_session() {

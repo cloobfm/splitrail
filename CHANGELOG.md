@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.92] - 2026-10-18
+
+### Fixed
+- **Droid CLI session totals were uploaded repeatedly (BZL-190).** The session-total message's
+  `global_hash` embedded `last_timestamp` — the session's *newest* message — so it changed every
+  time the session gained a message. The server deduplicates on `global_hash`, so each changed
+  value read as a new message and was inserted again, and that row carries the session's whole
+  token usage from `settings.json`. A session active across N uploads contributed its full totals
+  N times, overstating uploaded Droid cost and tokens.
+
+  The identity is now the session alone, run through `hash_text` like every other analyzer's:
+  `hash_text(&format!("droid-cli:{session_id}:session-total"))`. Repeated uploads are idempotent.
+
+  Local figures were never affected — within a single run the timestamp is fixed, so dedup worked.
+  This only ever bit on upload, and only with `auto_upload` enabled, which is why it never showed
+  as a visible wrong number.
+
+  The per-message hash (`droid-cli:{session}:{message}:{ts}`) was already stable and is unchanged.
+
+### Note
+- Rows already uploaded keep their old identities, so this does not retract duplicates the server
+  has stored. If `auto_upload` was ever on with Droid sessions active, server-side Droid totals are
+  already inflated; cleaning that up is a separate decision for the user and deliberately not
+  attempted here.
+
 ## [2.0.0-dash-0.91] - 2026-10-17
 
 BZL-130 upstream sync. The triage found almost nothing left to port — see the ticket — so this is
