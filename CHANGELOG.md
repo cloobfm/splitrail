@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.93] - 2026-10-18
+
+### Fixed
+- Gemini CLI: 23 of 169 saved sessions failed to parse (BZL-10). Newer CLIs write `info` messages
+  ("Request cancelled.") and user prompts as a list of `{"text"}` parts; both now parse, recovering
+  their messages. The analyzer stays unregistered (retired 2026-09), so this only matters if it is
+  re-enabled.
+
 ## [2.0.0-dash-0.92] - 2026-10-18
 
 ### Fixed

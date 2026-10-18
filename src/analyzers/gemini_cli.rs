@@ -41,6 +41,26 @@ struct GeminiCliSession {
     messages: Vec<GeminiCliMessage>,
 }
 
+/// A message's text: a plain string, or (newer CLIs, for pasted prompts) a list of
+/// `{"text": …}` parts, joined.
+fn deserialize_content<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    struct Part {
+        #[serde(default)]
+        text: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Content {
+        Text(String),
+        Parts(Vec<Part>),
+    }
+    Ok(match Content::deserialize(deserializer)? {
+        Content::Text(text) => text,
+        Content::Parts(parts) => parts.into_iter().map(|p| p.text).collect::<Vec<_>>().join("\n"),
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum GeminiCliMessage {
@@ -48,12 +68,14 @@ enum GeminiCliMessage {
         id: String,
         #[serde(deserialize_with = "deserialize_utc_timestamp")]
         timestamp: DateTime<Utc>,
+        #[serde(deserialize_with = "deserialize_content")]
         content: String,
     },
     Gemini {
         id: String,
         #[serde(deserialize_with = "deserialize_utc_timestamp")]
         timestamp: DateTime<Utc>,
+        #[serde(deserialize_with = "deserialize_content")]
         content: String,
         model: String,
         #[serde(default)]
@@ -66,14 +88,19 @@ enum GeminiCliMessage {
         id: String,
         #[serde(deserialize_with = "deserialize_utc_timestamp")]
         timestamp: DateTime<Utc>,
+        #[serde(deserialize_with = "deserialize_content")]
         content: String,
     },
     Error {
         id: String,
         #[serde(deserialize_with = "deserialize_utc_timestamp")]
         timestamp: DateTime<Utc>,
+        #[serde(deserialize_with = "deserialize_content")]
         content: String,
     },
+    /// Types without tokens this parser has no use for (`info`: "Request cancelled.").
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +396,7 @@ fn parse_json_session_file(file_path: &Path) -> Result<Vec<ConversationMessage>>
                     content: Some(content),
                 });
             }
+            GeminiCliMessage::Other => {}
         }
     }
 
@@ -468,5 +496,29 @@ impl Analyzer for GeminiCliAnalyzer {
     fn is_available(&self) -> bool {
         self.discover_data_sources()
             .is_ok_and(|sources| !sources.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn info_messages_and_prompts_in_parts_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-x.json");
+        std::fs::write(
+            &path,
+            r#"{"sessionId":"s","projectHash":"p","startTime":"2026-03-20T09:13:00Z","lastUpdated":"2026-03-20T09:37:00Z","messages":[
+              {"id":"u","timestamp":"2026-03-20T09:13:10Z","type":"user","content":[{"text":"Fix the"},{"text":"flicker"}]},
+              {"id":"g","timestamp":"2026-03-20T09:13:20Z","type":"gemini","content":"Done","model":"gemini-2.5-pro","thoughts":[],
+               "tokens":{"input":100,"output":20,"cached":40,"thoughts":0,"tool":0,"total":120},"toolCalls":[]},
+              {"id":"i","timestamp":"2026-03-20T09:36:45Z","type":"info","content":"Request cancelled."}]}"#,
+        )
+        .unwrap();
+        let messages = parse_json_session_file(&path).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content.as_deref(), Some("Fix the\nflicker"));
+        assert_eq!((messages[1].stats.input_tokens, messages[1].stats.output_tokens), (60, 20));
     }
 }
