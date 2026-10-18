@@ -134,23 +134,45 @@ pub async fn run() {
     else {
         return;
     };
-    let mut reported = false;
+    let mut failures = 0u32;
     loop {
         match poll_once(&client, &key).await {
-            Ok(()) => reported = false,
-            Err(e) if !reported => {
-                crate::utils::report(format!("Droid limits: {e:#}"));
-                reported = true; // Once per failure streak, not every poll.
+            Ok(()) => failures = 0,
+            Err(e) => {
+                failures += 1;
+                // A lone timeout is routine (about 1 poll in 300); log it and retry soon. Only
+                // a streak, with the figures going stale, is worth a warning on screen.
+                if failures == WARN_AFTER_FAILURES {
+                    crate::utils::report(format!("Droid limits: {e:#} ({failures} tries in a row)"));
+                } else {
+                    crate::utils::log_error(format!("Droid limits: {e:#}"));
+                }
             }
-            Err(_) => {}
         }
-        tokio::time::sleep(POLL_INTERVAL).await;
+        tokio::time::sleep(next_poll(failures)).await;
     }
+}
+
+/// Consecutive failed polls before the dashboard shows a warning.
+const WARN_AFTER_FAILURES: u32 = 3;
+const RETRY_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The wait before the next poll: a minute after a failure (for a few tries), else the usual.
+fn next_poll(failures: u32) -> Duration {
+    if (1..WARN_AFTER_FAILURES).contains(&failures) { RETRY_INTERVAL } else { POLL_INTERVAL }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_poll_is_retried_within_a_minute_and_a_streak_backs_off() {
+        assert_eq!(next_poll(0), POLL_INTERVAL);
+        assert_eq!(next_poll(1), RETRY_INTERVAL);
+        assert_eq!(next_poll(2), RETRY_INTERVAL);
+        assert_eq!(next_poll(WARN_AFTER_FAILURES), POLL_INTERVAL);
+    }
 
     const BODY: &str = r#"{"usesTokenRateLimitsBilling":true,"limits":{"standard":{"fiveHour":{"usedPercent":0,"windowEnd":null,"secondsRemaining":null},"weekly":{"usedPercent":1,"windowEnd":"2026-10-20T11:33:48.094Z","secondsRemaining":555494},"monthly":{"usedPercent":3,"windowEnd":"2026-10-31T19:03:25.215Z","secondsRemaining":1532871}},"core":{"fiveHour":{"usedPercent":0,"windowEnd":null,"secondsRemaining":null}}},"extraUsageBalanceCents":0}"#;
 

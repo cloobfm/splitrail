@@ -409,6 +409,16 @@ mod tests {
     }
 
     #[test]
+    fn an_embedding_request_counts_its_input_and_no_output() {
+        let log = r#"{"ts": 1790880000, "model": "qwen3-embedding:0.6b", "endpoint": "/api/embed", "prompt_tokens": 37, "cached_tokens": 0, "completion_tokens": 0, "duration_ms": 41, "wall_ms": 45, "client": "127.0.0.1", "prompt_preview": "a beach (+1 more)", "reply_preview": ""}"#;
+        let messages = parse_usage_log(log, Path::new("/test.jsonl"), &OllamaConfig::default());
+        // The prompt preview becomes the user's side; the reply carries the counts.
+        let reply = messages.iter().find(|m| m.role == MessageRole::Assistant).unwrap();
+        assert_eq!(reply.model.as_deref(), Some("qwen3-embedding:0.6b"));
+        assert_eq!((reply.stats.input_tokens, reply.stats.output_tokens), (37, 0));
+    }
+
+    #[test]
     fn energy_is_zero_until_power_is_configured() {
         let log = r#"{"ts": 1790880000, "model": "local-llama", "endpoint": "/api/generate", "prompt_tokens": 1, "cached_tokens": 0, "completion_tokens": 1, "duration_ms": 100, "client": "127.0.0.1"}"#;
         let messages = parse_usage_log(log, Path::new("/test.jsonl"), &OllamaConfig::default());

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.97] - 2026-10-18
+
+### Fixed
+- Other machines' columns (`Claude@dev-a`) showed no `#project` in the verbose activity view: the
+  roll-up feed carried no project. Publishers now send it (`p`), so it shows once they run 0.97;
+  older publishers still leave it blank.
+- Ollama embeddings were not counted: the usage proxy logged chat and generate calls only, so
+  mediasrc's `qwen3-embedding` job passed through unseen. `/api/embed`, `/v1/embeddings` and the
+  legacy `/api/embeddings` are now logged with their input tokens (no output, so they never add
+  to tk/s). The proxy has to be restarted to pick this up:
+  `launchctl kickstart -k gui/$(id -u)/com.splitrail.ollama-proxy`.
+- "Droid limits: Failed to reach Factory … operation timed out" flashed on screen after a single
+  timed-out poll (about 1 in 300). A failed poll is now retried after a minute and logged; the
+  warning only appears after 3 failures in a row.
+
 ## [2.0.0-dash-0.96] - 2026-10-18
 
 ### Added

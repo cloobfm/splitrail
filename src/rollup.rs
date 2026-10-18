@@ -69,6 +69,10 @@ pub struct RecentMessage {
     pub conv: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Project label, for the `#project` column in the verbose view. Publishers before 0.97
+    /// leave it out.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub p: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -112,6 +116,7 @@ fn recent_message(message: &ConversationMessage) -> RecentMessage {
         tc: message.stats.tool_calls,
         conv: message.conversation_hash.chars().take(16).collect(),
         model: message.model.clone(),
+        p: message.project_hash.clone(),
     }
 }
 
@@ -351,7 +356,7 @@ fn remote_tools(slug: &str, host: &str, daily: &DailyPayload, recent: &RecentPay
                     Some(ConversationMessage {
                         application: application.clone(),
                         date: DateTime::from_timestamp_millis(m.t)?,
-                        project_hash: String::new(),
+                        project_hash: m.p.clone(),
                         conversation_hash: m.conv.clone(),
                         local_hash: None,
                         global_hash: format!("remote:{host}:{tool}:{}:{}", m.t, m.o),
@@ -834,6 +839,8 @@ mod tests {
         assert_eq!(claude.messages[1].stats.output_tokens, 900);
         assert_eq!(claude.messages[1].content.as_deref(), Some("Done, key [redacted] rotated"));
         assert_eq!(claude.messages[0].content, None);
+        // The project travels too, for the verbose view's `#project` column.
+        assert_eq!(claude.messages[1].project_hash, "p");
         assert!(tools.iter().any(|t| t.analyzer_name == "OC@devbox-a"));
     }
 

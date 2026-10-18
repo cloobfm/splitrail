@@ -85,6 +85,14 @@ class FakeOllama(BaseHTTPRequestHandler):
             self._json({"answers": {"sky": {"type": "choice", "choice": "blue", "confidence": 0.9986,
                                             "probabilities": {"blue": 0.9999, "green": 0.0001}}},
                         "usage": {"input_tokens": 1002, "output_tokens": 3}, "prompt_eval_cached_count": 640})
+        elif path == "/api/embed":
+            # The shape Ollama returns: no `done`, the vectors, and the prompt count.
+            self._json({"model": "qwen3-embedding:0.6b", "embeddings": [[0.1, 0.2], [0.3, 0.4]],
+                        "total_duration": 41_000_000, "prompt_eval_count": 37})
+        elif path == "/v1/embeddings":
+            self._json({"object": "list", "model": "qwen3-embedding:0.6b",
+                        "data": [{"object": "embedding", "embedding": [0.1], "index": 0}],
+                        "usage": {"prompt_tokens": 12, "total_tokens": 12}})
         elif path == "/api/fail":
             self._json({"error": "boom"}, 500)
         else:
@@ -196,6 +204,23 @@ class ProxyTests(unittest.TestCase):
         )
         self.assertEqual(line["prompt_preview"], "The sky is blue on a clear day. · sky: What colour is the sky?")
         self.assertEqual(line["reply_preview"], "sky: blue (100%)")
+
+    def test_embeddings_are_logged_with_input_tokens_only(self):
+        body = {"model": "qwen3-embedding:0.6b", "input": ["a photo of a beach", "a dog"]}
+        conn, resp = self.request("POST", "/api/embed", body)
+        self.assertEqual(len(json.loads(resp.read())["embeddings"]), 2)
+        conn.close()
+        conn, resp = self.request("POST", "/v1/embeddings", {"model": "qwen3-embedding:0.6b", "input": "x"})
+        resp.read()
+        conn.close()
+        native, openai = self.logged()
+        self.assertEqual(
+            (native["endpoint"], native["model"], native["prompt_tokens"], native["completion_tokens"], native["duration_ms"]),
+            ("/api/embed", "qwen3-embedding:0.6b", 37, 0, 41),
+        )
+        self.assertEqual(native["prompt_preview"], "a photo of a beach (+1 more)")
+        self.assertEqual(native["reply_preview"], "")
+        self.assertEqual((openai["endpoint"], openai["prompt_tokens"], openai["completion_tokens"]), ("/v1/embeddings", 12, 0))
 
     def test_other_paths_and_errors_pass_through_unlogged(self):
         conn, resp = self.request("GET", "/api/tags")

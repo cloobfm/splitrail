@@ -14,7 +14,10 @@ inference to `~/.config/splitrail/ollama/usage.jsonl`:
 
 Logged: `/api/generate`, `/api/chat` (counts from the final `"done": true` object) and
 `/v1/chat/completions`, `/v1/completions` (`usage`; for streams the proxy asks for
-`stream_options.include_usage`, so the client also receives the standard usage chunk).
+`stream_options.include_usage`, so the client also receives the standard usage chunk), and
+embeddings: `/api/embed` (`prompt_eval_count`), `/v1/embeddings` (`usage.prompt_tokens`) and the
+legacy `/api/embeddings` (no counts; logged as a request with 0 tokens). Embeddings have no
+output, so they add input tokens and requests, never tk/s.
 Everything else is passed through untouched. Logging never fails a request.
 
 Configuration (environment):
@@ -48,6 +51,7 @@ OPENAI = {"/v1/chat/completions", "/v1/completions"}
 # Decision models (Ollama 0.35+): `usage` is {"input_tokens", "output_tokens"}, with the cached
 # prompt count beside it as `prompt_eval_cached_count`.
 DECISION = {"/v1/systemone"}
+EMBED = {"/api/embed", "/api/embeddings", "/v1/embeddings"}
 # Largest non-streamed body kept in memory to read its usage; bigger ones pass through unlogged.
 MAX_BODY_SCAN = 16 * 1024 * 1024
 # Transcript previews for the dashboard's Activity section: the caller's last message and the
@@ -106,6 +110,13 @@ def prompt_preview(path, body):
         return ""
     if not isinstance(payload, dict):
         return ""
+    if path in EMBED:
+        # `input` (or legacy `prompt`): one text or a batch of them.
+        texts = payload.get("input", payload.get("prompt"))
+        texts = [texts] if isinstance(texts, str) else texts if isinstance(texts, list) else []
+        first = texts[0] if texts and isinstance(texts[0], str) else ""
+        more = f" (+{len(texts) - 1} more)" if len(texts) > 1 else ""
+        return (first.strip()[:PREVIEW_CHARS] + more) if first else ""
     if path in DECISION:
         # `state` (text or JSON) and each question's instructions.
         state = payload.get("state")
@@ -187,6 +198,17 @@ def usage_from_object(path, obj):
             "prompt_tokens": int(obj.get("prompt_eval_count") or 0),
             "cached_tokens": int(obj.get("prompt_eval_cached_count") or 0),
             "completion_tokens": int(obj.get("eval_count") or 0),
+            "duration_ms": int(duration // 1_000_000) if isinstance(duration, int) else 0,
+        }
+    if path in ("/api/embed", "/api/embeddings"):
+        if "embeddings" not in obj and "embedding" not in obj:
+            return None
+        duration = obj.get("total_duration")
+        return {
+            "model": obj.get("model") or "",
+            "prompt_tokens": int(obj.get("prompt_eval_count") or 0),
+            "cached_tokens": 0,
+            "completion_tokens": 0,
             "duration_ms": int(duration // 1_000_000) if isinstance(duration, int) else 0,
         }
     usage = obj.get("usage")
@@ -396,7 +418,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.started = time.monotonic()
         path = urlparse(self.path).path
         body = self._read_request_body()
-        logged = self.command == "POST" and (path in NATIVE or path in OPENAI or path in DECISION)
+        logged = self.command == "POST" and (path in NATIVE or path in OPENAI or path in DECISION or path in EMBED)
         self.prompt = ""
         self.request_model = request_model(body) if logged else ""
         self.power_key = self.power.start() if logged and self.power else None
