@@ -370,12 +370,26 @@ fn notify_text(title: &str, body: &str) {
     let Some((program, args)) = platform_notifier().command(title, body) else {
         return;
     };
+    let mut command = std::process::Command::new(program);
+    command.args(args).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     // Best effort: a missing or unhappy notifier must never disturb the dashboard.
-    let _ = std::process::Command::new(program)
-        .args(args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    let _ = spawn_reaped(command);
+}
+
+/// Start `command` and wait for it on a thread of its own, so it is reaped when it exits. A child
+/// dropped without a wait stays a zombie until the dashboard exits (BZL-208: 3,349 of them).
+fn spawn_reaped(mut command: std::process::Command) -> std::io::Result<std::thread::JoinHandle<()>> {
+    let mut child = command.spawn()?;
+    Ok(std::thread::spawn(move || {
+        let _ = child.wait();
+    }))
+}
+
+/// Whether beating `old` with `new` is news. A record still being set (today's total, this
+/// week's, this month's) is beaten by every check while it grows; only a new day, week, month or
+/// slot beating an older one is announced (BZL-208: three notices every 30 s).
+fn worth_announcing(new: &Record, old: &Record) -> bool {
+    new.when != old.when
 }
 
 #[cfg(test)]
@@ -471,7 +485,7 @@ pub fn board(stats: &[&AgenticCodingToolStats], goal_tks: f64) -> Board {
     // Only a record that stood before this run started counts as beaten; the first pass after
     // a start (or with no file yet) just fills the board in.
     if cache.is_some() {
-        for (kind, new, old) in &beaten {
+        for (kind, new, old) in beaten.iter().filter(|(_, new, old)| worth_announcing(new, old)) {
             notify(*kind, new, old);
         }
     }
@@ -617,6 +631,31 @@ pub fn cached() -> Option<Board> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn a_notifier_child_is_reaped_once_it_exits() {
+        let mut command = std::process::Command::new("true");
+        command.stdout(std::process::Stdio::null());
+        let waiter = spawn_reaped(command).unwrap();
+        waiter.join().unwrap();
+        // A zombie would still be listed as this process's child; a reaped one is gone.
+        let zombies = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("ps -A -o ppid=,stat= | awk '$1 == {} && $2 ~ /Z/' | wc -l", std::process::id()))
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&zombies.stdout).trim(), "0");
+    }
+
+    #[test]
+    fn a_record_growing_in_its_own_day_is_not_announced_but_beating_an_older_one_is() {
+        let record = |value: f64, when: &str| Record { value, when: when.into() };
+        // Today was already the best day; another check finds it a little higher.
+        assert!(!worth_announcing(&record(9_200_000.0, "Sat Oct 17 2026"), &record(9_100_000.0, "Sat Oct 17 2026")));
+        // Tomorrow passes it: news.
+        assert!(worth_announcing(&record(9_300_000.0, "Sun Oct 18 2026"), &record(9_200_000.0, "Sat Oct 17 2026")));
+    }
 
     #[test]
     fn peaks_saved_before_the_claude_dedup_fix_are_dropped_and_the_rest_kept() {

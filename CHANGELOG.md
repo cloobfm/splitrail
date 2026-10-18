@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.99] - 2026-10-18
+
+### Fixed
+- The dashboard leaked a zombie process per desktop notification (BZL-208): the notifier
+  (`osascript`, `notify-send`) was started and never waited on. One running since Oct 17 had
+  3,349. It is now waited on in the background. Zombies already there clear only when the process
+  exits, so restart it rather than pressing `U` (which replaces the program in place).
+- "🏆 New record" fired every 30 s while today, this week and this month were all the best so
+  far: each check "beat" them by the tokens since the last one, three notices a time, about six
+  a minute. A record still growing in its own day, week, month or slot now updates silently; one
+  is announced when a new period beats an older one.
+
 ## [2.0.0-dash-0.98] - 2026-10-18
 
 ### Fixed
