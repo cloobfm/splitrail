@@ -184,6 +184,44 @@ mod tests {
         assert_eq!(got, ["3000", "5000", "9000"], "the message exactly at the watermark counts");
     }
 
+    /// Numeric cells sit in fixed-width columns (13 for the per-CLI and per-period ones), and
+    /// ratatui clips without a marker — so a token total one character too wide would render as a
+    /// smaller, wrong-looking number with nothing to say it was cut. Not currently triggered by
+    /// this machine's data, but a 30-day window of 10B+ tokens reaches it (upstream #124/#201).
+    #[test]
+    fn numbers_too_wide_for_their_column_fall_back_instead_of_clipping() {
+        use crate::utils::{NumberFormatOptions, format_number_fit};
+
+        let comma = NumberFormatOptions {
+            use_comma: true,
+            use_human: false,
+            locale: "en".to_string(),
+            decimal_places: 2,
+        };
+
+        // Fits: rendered as-is.
+        assert_eq!(format_number_fit(1_234_567, 13, &comma), "1,234,567");
+
+        // 14 characters in a 13-wide column: falls back to the abbreviated form rather than
+        // losing a digit off the end.
+        let wide = format_number_fit(13_378_482_616, 13, &comma);
+        assert!(
+            wide.chars().count() <= 13,
+            "must fit the column: {wide:?} is {} chars",
+            wide.chars().count()
+        );
+        assert_ne!(wide, "13,378,482,61", "a clipped number is the thing to avoid");
+        // Lowercase suffix is this codebase's convention ("13.38b"), not upstream's.
+        assert!(
+            wide.to_lowercase().contains('b'),
+            "expected an abbreviated form, got {wide:?}"
+        );
+
+        // Even the abbreviated form has a floor: an absurd width still never exceeds it.
+        let tiny = format_number_fit(13_378_482_616, 4, &comma);
+        assert!(tiny.chars().count() <= 4, "{tiny:?}");
+    }
+
     #[test]
     fn test_aggregate_by_date_empty() {
         let messages = vec![];

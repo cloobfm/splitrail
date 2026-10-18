@@ -1,8 +1,8 @@
 use crate::notifications::{last_notification_age_seconds, next_notification_eta_seconds};
 use crate::types::AgenticCodingToolStats;
 use crate::utils::{
-    NumberFormatOptions, calculate_overall_health, format_number, format_timestamp_for_live_view,
-    get_health_color, get_health_status, get_warnings,
+    NumberFormatOptions, calculate_overall_health, format_number, format_number_fit,
+    format_timestamp_for_live_view, get_health_color, get_health_status, get_warnings,
 };
 use chrono::Duration as ChronoDuration;
 use ratatui::Frame;
@@ -381,19 +381,19 @@ pub fn draw_summary_view(
         Row::new(vec![
             Cell::new(Line::from("📊 CLIs Active").style(Style::default().fg(Color::Magenta))),
             Cell::new(
-                Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
+                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
+                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
+                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
+                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
             ),
             Cell::new(
-                Line::from(format_number(*active_clis as u64, format_options)).right_aligned(),
+                Line::from(format_number_fit(*active_clis as u64, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
             ),
         ]),
         Row::new(vec![
@@ -664,7 +664,7 @@ pub fn draw_summary_view(
             for &idx in visible_indices {
                 let (_, _, input, _, _, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
-                    Line::from(format_number(*input, format_options)).right_aligned(),
+                    Line::from(format_number_fit(*input, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -677,7 +677,7 @@ pub fn draw_summary_view(
             for &idx in visible_indices {
                 let (_, _, _, output, _, _, _, _, _, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
-                    Line::from(format_number(*output, format_options)).right_aligned(),
+                    Line::from(format_number_fit(*output, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -690,7 +690,7 @@ pub fn draw_summary_view(
             for &idx in visible_indices {
                 let (_, _, _, _, _, _, _, _, sessions, _, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
-                    Line::from(format_number(*sessions, format_options)).right_aligned(),
+                    Line::from(format_number_fit(*sessions, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -703,7 +703,7 @@ pub fn draw_summary_view(
             for &idx in visible_indices {
                 let (_, _, _, _, _, _, _, _, _, messages, _, _) = &cli_data[idx];
                 cells.push(Cell::new(
-                    Line::from(format_number(*messages, format_options)).right_aligned(),
+                    Line::from(format_number_fit(*messages, NUMERIC_COLUMN_WIDTH, format_options)).right_aligned(),
                 ));
             }
             Row::new(cells)
@@ -2321,6 +2321,11 @@ fn draw_output_tokens_chart(
 /// `aggregate_by_date` pads every day from a tool's first message through today with empty
 /// `DailyStats` so charts have a continuous series. Counting rows by date alone therefore reports
 /// 30 for any tool ever used, however long ago — the day has to carry activity to count.
+/// Width of the per-CLI and per-period numeric columns (`Constraint::Length(13)`). Numbers are
+/// formatted to fit it, because ratatui clips silently and a cost tool must not show a number
+/// that lost its last digit (BZL-130, upstream #124/#201).
+const NUMERIC_COLUMN_WIDTH: usize = 13;
+
 pub fn days_with_activity_in_last_30(
     daily_stats: &std::collections::BTreeMap<String, crate::types::DailyStats>,
     today: chrono::NaiveDate,

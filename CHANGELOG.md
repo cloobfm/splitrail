@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.91] - 2026-10-17
+
+BZL-130 upstream sync. The triage found almost nothing left to port — see the ticket — so this is
+the one item worth taking.
+
+### Added
+- `utils::format_number_fit` formats a number to fit a column width, falling back from the
+  configured format to the abbreviated form (`13.38b`) and then to a decimal-less abbreviation,
+  rather than letting ratatui clip. The per-CLI and per-period numeric cells
+  (`Constraint::Length(13)`) use it via a single `NUMERIC_COLUMN_WIDTH` constant so the width and
+  the formatting cannot drift apart.
+
+  Ported in spirit from upstream #124 and #201, not as their diff: our `tui.rs` has diverged too
+  far for theirs to apply.
+
+### Note on severity
+This is **latent, not live**. No value in the current `status.json` has a comma form wider than 13
+characters, so nothing is being misrendered today. It is worth fixing because ratatui clips with no
+marker: a 14-character total would render as a smaller, entirely plausible number, which is the
+worst failure mode for a tool whose job is reporting cost. A 30-day window of 10B+ tokens reaches
+it. (The 13.4B figure that prompted the check was an all-time sum across 60 Codex session files,
+not a cell the TUI draws — worth stating so the next person does not re-derive it as a live bug.)
 ## [2.0.0-dash-0.90] - 2026-10-17
 
 ### Added

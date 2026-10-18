@@ -210,6 +210,50 @@ pub struct NumberFormatOptions {
     pub decimal_places: usize,
 }
 
+/// [`format_number`], but guaranteed to fit `width` characters.
+///
+/// Numeric cells live in fixed-width columns and ratatui clips without any marker, so a total one
+/// character too wide renders as a smaller, plausible, wrong number. Where the configured format
+/// does not fit, this falls back to the abbreviated form (`13.4B`) and then to a bare
+/// thousands-suffixed form, which is a visibly rounded number rather than a silently cut one
+/// (ported in spirit from upstream #124 / #201; our TUI has diverged too far for their diff).
+pub fn format_number_fit(n: u64, width: usize, options: &NumberFormatOptions) -> String {
+    let preferred = format_number(n, options);
+    if preferred.chars().count() <= width {
+        return preferred;
+    }
+
+    // The abbreviated form, whatever the configured options say.
+    let human = format_number(
+        n,
+        &NumberFormatOptions {
+            use_comma: false,
+            use_human: true,
+            locale: options.locale.clone(),
+            decimal_places: options.decimal_places,
+        },
+    );
+    if human.chars().count() <= width {
+        return human;
+    }
+
+    // Still too wide: drop the decimals from the abbreviation ("13.4B" -> "13B").
+    let terse = match human.split_once('.') {
+        Some((whole, rest)) => {
+            let suffix: String = rest.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+            format!("{whole}{suffix}")
+        }
+        None => human,
+    };
+    if terse.chars().count() <= width {
+        return terse;
+    }
+
+    // Nothing sensible fits. Truncating here is a last resort, but the caller asked for a width
+    // narrower than any representation of the number.
+    terse.chars().take(width).collect()
+}
+
 pub fn format_number(n: u64, options: &NumberFormatOptions) -> String {
     let locale = match options.locale.as_str() {
         "de" => Locale::de,
