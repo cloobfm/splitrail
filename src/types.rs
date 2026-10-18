@@ -78,6 +78,25 @@ pub struct DailyStats {
     pub active_seconds: u64,
     pub models: BTreeMap<String, u32>,
     pub stats: Stats,
+    /// The day's tokens and cost by hour, model and project, for the hourly view and the
+    /// model/project filters (BZL-138). Only combinations that occurred, a few dozen a day.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slices: Vec<Slice>,
+}
+
+/// One hour's use of one model in one project.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Slice {
+    /// Local hour, 0-23.
+    pub hour: u8,
+    pub model: String,
+    pub project: String,
+    pub replies: u32,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cost: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

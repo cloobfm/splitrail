@@ -41,6 +41,19 @@ struct FoldState {
     /// The day its contribution was added to, so corrections land on the same day.
     day: String,
     model: Option<String>,
+    /// Its slice of that day (BZL-138), so corrections land there too.
+    hour: u8,
+    project: String,
+}
+
+impl FoldState {
+    /// Move the day's slice for this message by a correction.
+    fn add_to_slice(&self, day: &mut DailyStats, delta: &Stats, cost: f64) {
+        if let Some(model) = &self.model {
+            let slice = crate::utils::slice_mut(day, self.hour, model, &self.project);
+            crate::utils::add_to_slice(slice, delta, cost, 0);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -104,6 +117,7 @@ impl Accumulator {
                 let delta = max_activity_delta(&state.stats, &message.stats);
                 apply_max_activity(&mut state.stats, &message.stats);
                 crate::utils::add_stats_delta_into_day(day, &delta, 0.0);
+                state.add_to_slice(day, &delta, 0.0);
             } else {
                 // Another snapshot of the same request: tokens rise to its larger counts, its own
                 // activity adds, and the cost is recomputed from the tokens.
@@ -123,6 +137,7 @@ impl Accumulator {
                     );
                 }
                 crate::utils::add_stats_delta_into_day(day, &delta, state.stats.cost - previous_cost);
+                state.add_to_slice(day, &delta, state.stats.cost - previous_cost);
             }
             return;
         }
@@ -148,6 +163,8 @@ impl Accumulator {
                     stats: message.stats.clone(),
                     day: date,
                     model: message.model.clone(),
+                    hour: crate::utils::local_hour(&message.date),
+                    project: message.project_hash.clone(),
                 },
             );
         }
@@ -1228,6 +1245,36 @@ mod tests {
         let day = day.values().next().unwrap();
         assert_eq!(day.stats.output_tokens, 300);
         assert!((replies[0].stats.cost - day.stats.cost).abs() < 1e-9);
+        // Its hour/model/project slice carries the same, once (BZL-138).
+        assert_eq!(day.slices.len(), 1);
+        assert_eq!((day.slices[0].replies, day.slices[0].output_tokens, day.slices[0].project.as_str()), (1, 300, "p"));
+        assert!((day.slices[0].cost - day.stats.cost).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_growing_reply_moves_its_slice_with_the_day() {
+        // Cumulative snapshots: output 10, then 400. The day and the slice both end at 400.
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects").join("p");
+        std::fs::create_dir_all(&project).unwrap();
+        let at = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+        let mut lines = String::new();
+        for (i, output) in [10, 400].iter().enumerate() {
+            lines.push_str(&format!(
+                r#"{{"type":"assistant","uuid":"u{i}","timestamp":"{at}","sessionId":"s","cwd":"/tmp/p","requestId":"req_1","message":{{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":100,"output_tokens":{output}}}}}}}"#
+            ));
+            lines.push('\n');
+        }
+        std::fs::write(project.join("s.jsonl"), lines).unwrap();
+        let analyzer = ClaudeCodeAnalyzer::for_account(None, dir.path().to_path_buf());
+        let sources = analyzer.discover_data_sources().unwrap();
+        analyzer.parse_conversations_with_report(&sources);
+        let days = analyzer.daily_stats();
+        let day = days.values().next().unwrap();
+        let slice_output: u64 = day.slices.iter().map(|s| s.output_tokens).sum();
+        let slice_cost: f64 = day.slices.iter().map(|s| s.cost).sum();
+        assert_eq!((day.stats.output_tokens, slice_output), (400, 400));
+        assert!((slice_cost - day.stats.cost).abs() < 1e-9);
     }
 
     #[test]

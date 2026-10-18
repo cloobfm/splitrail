@@ -498,6 +498,7 @@ impl Analyzer for OpenCodeAnalyzer {
                         active_seconds: 0,
                         models: std::collections::BTreeMap::new(),
                         stats: crate::types::Stats::default(),
+                        slices: Vec::new(),
                     });
 
             match message.role {
@@ -506,6 +507,8 @@ impl Analyzer for OpenCodeAnalyzer {
                     daily.ai_messages += 1;
                     if let Some(ref model) = message.model {
                         *daily.models.entry(model.clone()).or_insert(0) += 1;
+                        let slice = crate::utils::slice_mut(daily, crate::utils::local_hour(&message.date), model, &message.project_hash);
+                        crate::utils::add_to_slice(slice, &message.stats, message.stats.cost, 1);
                     }
                 }
             }

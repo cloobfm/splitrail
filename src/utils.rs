@@ -320,6 +320,11 @@ pub fn format_date_for_display(date: &str) -> String {
         } else {
             formatted
         }
+    } else if let Some((day, hour)) = date.split_once(' ')
+        && let Ok(parsed) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+    {
+        // An hour row, `2026-10-17 14`: `10/17 14:00`.
+        format!("{}/{} {hour}:00", parsed.month(), parsed.day())
     } else {
         date.to_string()
     }
@@ -493,6 +498,8 @@ pub fn fold_entry_into_day(day: &mut DailyStats, entry: &ConversationMessage) {
         Some(model) => {
             // AI message
             day.ai_messages += 1;
+            let slice = slice_mut(day, local_hour(&entry.date), model, &entry.project_hash);
+            add_to_slice(slice, &entry.stats, entry.stats.cost, 1);
             *day
                 .models
                 .entry(model.to_string())
@@ -549,6 +556,38 @@ pub fn fold_entry_into_day(day: &mut DailyStats, entry: &ConversationMessage) {
             day.stats.todo_reads += entry.stats.todo_reads;
         }
     }
+}
+
+/// The day's slice for (`hour`, `model`, `project`), added if new.
+pub fn slice_mut<'a>(day: &'a mut DailyStats, hour: u8, model: &str, project: &str) -> &'a mut crate::types::Slice {
+    let index = match day.slices.iter().position(|s| s.hour == hour && s.model == model && s.project == project) {
+        Some(index) => index,
+        None => {
+            day.slices.push(crate::types::Slice {
+                hour,
+                model: model.to_string(),
+                project: project.to_string(),
+                ..Default::default()
+            });
+            day.slices.len() - 1
+        }
+    };
+    &mut day.slices[index]
+}
+
+/// Add tokens and cost to a slice; `replies` new replies among them.
+pub fn add_to_slice(slice: &mut crate::types::Slice, delta: &Stats, cost: f64, replies: u32) {
+    slice.replies += replies;
+    slice.input_tokens += delta.input_tokens;
+    slice.output_tokens += delta.output_tokens;
+    slice.cache_creation_tokens += delta.cache_creation_tokens;
+    slice.cache_read_tokens += delta.cache_read_tokens;
+    slice.cost += cost;
+}
+
+/// The local hour of a message, for its slice.
+pub fn local_hour(date: &DateTime<Utc>) -> u8 {
+    chrono::Timelike::hour(&date.with_timezone(&Local)) as u8
 }
 
 /// Add a *correction* to a day: token and activity deltas from folding another row into a

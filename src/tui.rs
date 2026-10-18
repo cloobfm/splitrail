@@ -199,6 +199,7 @@ pub enum Period {
     Day,
     Week,
     Month,
+    Hour,
 }
 
 impl Period {
@@ -206,7 +207,8 @@ impl Period {
         match self {
             Period::Day => Period::Week,
             Period::Week => Period::Month,
-            Period::Month => Period::Day,
+            Period::Month => Period::Hour,
+            Period::Hour => Period::Day,
         }
     }
 
@@ -216,6 +218,7 @@ impl Period {
             Period::Day => "d",
             Period::Week => "w",
             Period::Month => "mo",
+            Period::Hour => "h",
         }
     }
 
@@ -224,6 +227,7 @@ impl Period {
             Period::Day => "day",
             Period::Week => "week",
             Period::Month => "month",
+            Period::Hour => "hour",
         }
     }
 
@@ -240,7 +244,90 @@ impl Period {
                 format!("{}-W{:02}", week.year(), week.week())
             }
             Period::Month => date.format("%Y-%m").to_string(),
+            // Hours come from the day's slices, not from here.
+            Period::Hour => day.to_string(),
         }
+    }
+}
+
+/// Which slices the tool tabs count: one model and/or one project (BZL-138).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SliceFilter {
+    pub model: Option<String>,
+    pub project: Option<String>,
+}
+
+impl SliceFilter {
+    fn is_empty(&self) -> bool {
+        self.model.is_none() && self.project.is_none()
+    }
+
+    fn admits(&self, slice: &crate::types::Slice) -> bool {
+        self.model.as_ref().is_none_or(|m| *m == slice.model) && self.project.as_ref().is_none_or(|p| *p == slice.project)
+    }
+
+    /// `· model claude-opus-5-5 · project splitrail`, or empty.
+    fn describe(&self) -> String {
+        let mut parts = String::new();
+        if let Some(model) = &self.model {
+            parts.push_str(&format!(" · model {model}"));
+        }
+        if let Some(project) = &self.project {
+            parts.push_str(&format!(" · project {project}"));
+        }
+        parts
+    }
+}
+
+/// The next value after `current` among `options` (busiest first), wrapping to none.
+fn cycle(current: &Option<String>, options: &[String]) -> Option<String> {
+    match current.as_ref().and_then(|c| options.iter().position(|o| o == c)) {
+        None => options.first().cloned(),
+        Some(i) => options.get(i + 1).cloned(),
+    }
+}
+
+/// A tool's models or projects, by output tokens across its history, busiest first.
+fn slice_options(stats: &AgenticCodingToolStats, by_model: bool) -> Vec<String> {
+    let mut output: std::collections::HashMap<&str, u64> = Default::default();
+    for slice in stats.daily_stats.values().flat_map(|d| &d.slices) {
+        let key = if by_model { slice.model.as_str() } else { slice.project.as_str() };
+        *output.entry(key).or_default() += slice.output_tokens.max(1);
+    }
+    let mut options: Vec<(&str, u64)> = output.into_iter().collect();
+    options.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    options.into_iter().map(|(k, _)| k.to_string()).collect()
+}
+
+/// Rows built from the days' slices: by hour, or by day/week/month under a filter. Slices carry
+/// tokens, cost and replies only, so the other columns stay empty.
+fn group_slices(stats: &AgenticCodingToolStats, period: Period, filter: &SliceFilter) -> AgenticCodingToolStats {
+    let mut grouped: std::collections::BTreeMap<String, crate::types::DailyStats> = Default::default();
+    for (day, day_stats) in &stats.daily_stats {
+        for slice in day_stats.slices.iter().filter(|s| filter.admits(s)) {
+            let key = match period {
+                Period::Hour => format!("{day} {:02}", slice.hour),
+                _ => period.key(day),
+            };
+            let row = grouped.entry(key.clone()).or_insert_with(|| crate::types::DailyStats {
+                date: key,
+                ..Default::default()
+            });
+            row.ai_messages += slice.replies;
+            *row.models.entry(slice.model.clone()).or_default() += slice.replies;
+            row.stats.input_tokens += slice.input_tokens;
+            row.stats.output_tokens += slice.output_tokens;
+            row.stats.cache_creation_tokens += slice.cache_creation_tokens;
+            row.stats.cache_read_tokens += slice.cache_read_tokens;
+            row.stats.cached_tokens += slice.cache_read_tokens;
+            row.stats.cost += slice.cost;
+        }
+    }
+    AgenticCodingToolStats {
+        daily_stats: grouped,
+        num_conversations: stats.num_conversations,
+        messages: Vec::new(),
+        analyzer_name: stats.analyzer_name.clone(),
     }
 }
 
@@ -286,8 +373,10 @@ pub struct TuiState {
     pub quotas_view: bool,
     /// `r` on the Summary tab: personal bests instead of the summary.
     pub records_view: bool,
-    /// Rows on the tool tabs: days, weeks or months.
+    /// Rows on the tool tabs: days, weeks, months or hours.
     pub period: Period,
+    /// `f` / `o` on the tool tabs: only one model / project; `x` clears.
+    pub filter: SliceFilter,
     pub daily_stats_view_start: usize, // For daily stats pagination (0 = most recent 30 days)
     pub status_message: Option<String>, // Temporary status messages (Slack toggle, etc.)
     pub status_message_timer: Option<std::time::Instant>, // Auto-clear timer for status messages
@@ -825,6 +914,29 @@ async fn run_app(
 
                     if key.code == KeyCode::Char('g') && tui_state.selected_tab > 0 {
                         tui_state.period = tui_state.period.next();
+                        tui_state.daily_stats_view_start = 0;
+                        for state in table_states.iter_mut() {
+                            state.select(Some(0));
+                        }
+                        needs_redraw = true;
+                        continue;
+                    }
+
+                    if matches!(key.code, KeyCode::Char('f') | KeyCode::Char('o') | KeyCode::Char('x'))
+                        && tui_state.selected_tab > 0
+                    {
+                        if let Some(stats) = filtered_stats.get(tui_state.selected_tab - 1) {
+                            match key.code {
+                                KeyCode::Char('f') => {
+                                    tui_state.filter.model = cycle(&tui_state.filter.model, &slice_options(stats, true))
+                                }
+                                KeyCode::Char('o') => {
+                                    tui_state.filter.project =
+                                        cycle(&tui_state.filter.project, &slice_options(stats, false))
+                                }
+                                _ => tui_state.filter = SliceFilter::default(),
+                            }
+                        }
                         tui_state.daily_stats_view_start = 0;
                         for state in table_states.iter_mut() {
                             state.select(Some(0));
@@ -1657,12 +1769,16 @@ fn draw_ui(
                 }
                 // Main table
                 let grouped;
-                let table_stats: &AgenticCodingToolStats = if tui_state.period == Period::Day {
-                    current_stats
-                } else {
-                    grouped = group_by_period(current_stats, tui_state.period);
-                    &grouped
-                };
+                let table_stats: &AgenticCodingToolStats =
+                    if tui_state.period == Period::Hour || !tui_state.filter.is_empty() {
+                        grouped = group_slices(current_stats, tui_state.period, &tui_state.filter);
+                        &grouped
+                    } else if tui_state.period == Period::Day {
+                        current_stats
+                    } else {
+                        grouped = group_by_period(current_stats, tui_state.period);
+                        &grouped
+                    };
                 draw_daily_stats_table(
                     frame,
                     chunks[2],
@@ -1716,9 +1832,14 @@ fn draw_ui(
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, g: by {} (now {}), +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, U: update, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, g: by {} (now {}), f: model, o: project, x: clear{}, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, U: update, q/Esc: quit",
                 tui_state.period.next().name(),
                 tui_state.period.name(),
+                if tui_state.filter.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (showing{}, tokens and cost only)", tui_state.filter.describe())
+                },
                 mouse_mode_indicator,
             ))
             .style(Style::default().add_modifier(Modifier::DIM))
@@ -2674,5 +2795,52 @@ mod period_tests {
         let months = group_by_period(&stats, Period::Month);
         assert_eq!(months.daily_stats.keys().collect::<Vec<_>>(), ["2025-12", "2026-01"]);
         assert_eq!(months.daily_stats["2025-12"].stats.output_tokens, 11);
+    }
+
+    fn slice(hour: u8, model: &str, project: &str, output: u64, cost: f64) -> crate::types::Slice {
+        crate::types::Slice {
+            hour,
+            model: model.into(),
+            project: project.into(),
+            replies: 1,
+            output_tokens: output,
+            cost,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn slices_give_hourly_rows_and_filter_by_model_and_project() {
+        let mut stats = AgenticCodingToolStats {
+            daily_stats: Default::default(),
+            num_conversations: 0,
+            messages: Vec::new(),
+            analyzer_name: "t".into(),
+        };
+        let mut day = crate::types::DailyStats::default();
+        day.slices = vec![
+            slice(9, "opus", "splitrail", 100, 1.0),
+            slice(9, "sonnet", "splitrail", 10, 0.1),
+            slice(14, "opus", "mediasrc", 1000, 5.0),
+        ];
+        stats.daily_stats.insert("2026-10-17".into(), day);
+
+        let hours = group_slices(&stats, Period::Hour, &SliceFilter::default());
+        assert_eq!(hours.daily_stats.keys().collect::<Vec<_>>(), ["2026-10-17 09", "2026-10-17 14"]);
+        assert_eq!(hours.daily_stats["2026-10-17 09"].stats.output_tokens, 110);
+        assert_eq!(crate::utils::format_date_for_display("2026-10-17 09"), "10/17 09:00");
+
+        let opus = SliceFilter { model: Some("opus".into()), project: None };
+        let days = group_slices(&stats, Period::Day, &opus);
+        assert_eq!((days.daily_stats["2026-10-17"].stats.output_tokens, days.daily_stats["2026-10-17"].stats.cost), (1100, 6.0));
+        let both = SliceFilter { model: Some("opus".into()), project: Some("splitrail".into()) };
+        assert_eq!(group_slices(&stats, Period::Month, &both).daily_stats["2026-10"].stats.output_tokens, 100);
+
+        // `f` steps through models busiest first, then back to all.
+        let models = slice_options(&stats, true);
+        assert_eq!(models, ["opus", "sonnet"]);
+        assert_eq!(cycle(&None, &models).as_deref(), Some("opus"));
+        assert_eq!(cycle(&Some("opus".into()), &models).as_deref(), Some("sonnet"));
+        assert_eq!(cycle(&Some("sonnet".into()), &models), None);
     }
 }

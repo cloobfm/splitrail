@@ -151,6 +151,7 @@ impl Analyzer for DroidCliAnalyzer {
                 active_seconds: 0,
                 models: BTreeMap::new(),
                 stats: Stats::default(),
+                slices: Vec::new(),
             });
 
             if conversation.role == MessageRole::Assistant {
@@ -161,6 +162,10 @@ impl Analyzer for DroidCliAnalyzer {
 
             if let Some(ref model) = conversation.model {
                 *daily.models.entry(model.clone()).or_insert(0) += 1;
+                // The hour in the same zone as the day key above (UTC).
+                let hour = chrono::Timelike::hour(&conversation.date) as u8;
+                let slice = crate::utils::slice_mut(daily, hour, model, &conversation.project_hash);
+                crate::utils::add_to_slice(slice, &conversation.stats, conversation.stats.cost, 1);
             }
 
             // Merge stats

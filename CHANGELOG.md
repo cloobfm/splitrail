@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.96] - 2026-10-18
+
+### Added
+- Hourly rows and model/project filters on the tool tabs (BZL-138, the rest of it after 0.84's
+  week/month rows). `g` now cycles day → week → month → hour. `f` steps through the tab's models
+  and `o` through its projects, busiest first, then back to all; `x` clears both. A filter
+  applies to every period, and the help line says what is showing.
+- Each day now keeps its tokens, cost and replies by hour, model and project (`DailyStats.slices`,
+  only the combinations that occurred: about 3,700 across all tools here), so both work over all
+  of history, not just the live window. Filtered and hourly rows carry tokens and cost only; the
+  activity columns stay empty. Claude's folded corrections move the slice with the day.
+- Checked on real data: every tool's slices add up to its daily output and cost on every day.
+
 ## [2.0.0-dash-0.95] - 2026-10-18
 
 ### Added
