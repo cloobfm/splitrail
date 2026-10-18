@@ -31,8 +31,7 @@ jobs:
       - cargo-audit
       - test
     steps:
-      # Lint is skipped on dashboard pushes (see the lint job), which is not a failure.
-      - run: jq --exit-status 'all(.result == "success" or .result == "skipped")' <<< '${{ toJson(needs) }}'
+      - run: jq --exit-status 'all(.result == "success")' <<< '${{ toJson(needs) }}'
 
   crate_metadata:
     name: Extract crate metadata
@@ -54,9 +53,6 @@ jobs:
 
   lint:
     name: Lint
-    # Not on dashboard pushes until the backlog is cleared (about 1,000 rustfmt diffs and 114
-    # clippy errors as of 0.98, BZL-206); main and pull requests still run it.
-    if: github.ref != 'refs/heads/dashboard'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source code
@@ -64,7 +60,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly
+          # Pinned: rustfmt.toml needs nightly, and a new nightly's lints or formatting must
+          # not turn CI red on their own (BZL-206). Move it forward deliberately.
+          toolchain: nightly-2025-11-16
           components: clippy, rustfmt
       - name: Run clippy
         run: cargo clippy --locked --all-targets -- -D warnings
