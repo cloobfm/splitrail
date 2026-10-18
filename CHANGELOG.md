@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.95] - 2026-10-18
+
+### Added
+- Claude Code's own session cost, recorded for checking splitrail's sums against (BZL-193). The
+  status line capture now keeps each session's running `cost.total_cost_usd`, which Claude Code
+  adds up itself from the API responses, in `~/.config/splitrail/claude_sessions/<account>.json`
+  (with the transcript path, 45 days kept). The status line's `context_window` token counts are
+  not running totals (they fall back after each turn), so tokens are not taken from it.
+- First checks, by hand: Claude (main) daily tokens and cost match `ccusage claude daily` exactly
+  for Oct 11-16. One session's transcripts sum to $172.90 against Claude Code's $182.30, about
+  5% under; calls that never reach the transcript (compaction, titles) are the suspects, to be
+  confirmed by the reconcile command.
+
 ## [2.0.0-dash-0.94] - 2026-10-18
 
 ### Fixed

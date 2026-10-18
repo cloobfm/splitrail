@@ -39,6 +39,10 @@ import time
 from datetime import datetime
 
 LIMITS_DIR = os.path.expanduser("~/.config/splitrail/limits")
+# Claude Code's own per-session totals, to check splitrail's sums against (BZL-193).
+SESSIONS_DIR = os.path.expanduser("~/.config/splitrail/claude_sessions")
+# Ledger entries not updated in this long are dropped.
+LEDGER_TTL_SECS = 45 * 86400
 
 # Windows the payload may carry, in display order, with their short labels.
 WINDOWS = [("five_hour", "5h"), ("seven_day", "7d")]
@@ -287,6 +291,58 @@ def save_snapshot(label, payload, login=None):
     return snapshot
 
 
+def update_ledger(previous, payload, now):
+    """The session ledger after one payload: Claude Code's running cost for the session, which
+    it adds up itself from the API responses, so independent of splitrail's log parsing. Only
+    `cost` is a running total; `context_window`'s token counts describe the current context and
+    fall back after a turn, so they are not kept. The cost only grows within a process; a lower
+    report (a restarted process resuming the session) starts a new segment."""
+    ledger = previous if isinstance(previous, dict) else {}
+    ledger = {
+        sid: entry
+        for sid, entry in ledger.items()
+        if isinstance(entry, dict) and now - entry.get("last_seen", 0) < LEDGER_TTL_SECS
+    }
+    session_id = payload.get("session_id")
+    cost = payload.get("cost") if isinstance(payload.get("cost"), dict) else {}
+    totals = {"cost_usd": cost.get("total_cost_usd"), "api_duration_ms": cost.get("total_api_duration_ms")}
+    if not session_id or totals["cost_usd"] is None:
+        return ledger
+    entry = ledger.get(session_id) or {
+        "first_seen": now,
+        "transcript_path": payload.get("transcript_path"),
+        "segments": [],
+    }
+    segments = entry.setdefault("segments", [])
+    current = segments[-1] if segments else None
+    restarted = current is not None and totals["cost_usd"] < (current.get("cost_usd") or 0)
+    if current is None or restarted:
+        segments.append({"since": now, **totals})
+    else:
+        current.update(totals)
+    entry["last_seen"] = now
+    entry["model"] = (payload.get("model") or {}).get("id")
+    ledger[session_id] = entry
+    return ledger
+
+
+def save_ledger(label, payload):
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    path = os.path.join(SESSIONS_DIR, f"{label}.json")
+    with open(os.path.join(SESSIONS_DIR, f".{label}.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(path) as f:
+                previous = json.load(f)
+        except (OSError, ValueError):
+            previous = None
+        ledger = update_ledger(previous, payload, time.time())
+        fd, tmp = tempfile.mkstemp(dir=SESSIONS_DIR, prefix=f".{label}.", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(ledger, f)
+        os.replace(tmp, path)
+
+
 def login_name_of(login):
     return login.split("@")[0] if login else None
 
@@ -342,6 +398,10 @@ def main():
     except OSError:
         snapshot = None
         limits = payload.get("rate_limits")  # A read-only or full disk must not break the line.
+    try:
+        save_ledger(label, payload)
+    except (OSError, ValueError, TypeError):
+        pass
     print(summary(label, payload, limits, snapshot))
 
 

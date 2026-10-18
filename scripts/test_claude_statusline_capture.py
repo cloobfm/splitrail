@@ -12,6 +12,7 @@ from claude_statusline_capture import (  # noqa: E402
     merge_limits,
     merge_window,
     summary,
+    update_ledger,
     update_snapshot,
 )
 
@@ -135,6 +136,35 @@ class LoginTests(unittest.TestCase):
         home = os.path.dirname(__file__)
         self.assertEqual(claude_json_path("v", {"CLAUDE_CONFIG_DIR": "/c"}, home), "/c/.claude.json")
         self.assertEqual(claude_json_path("main", {}, "/h"), "/h/.claude.json")
+
+
+
+class LedgerTests(unittest.TestCase):
+    def payload(self, output, cost, sid="s1"):
+        return {
+            "session_id": sid,
+            "transcript_path": "/x/s1.jsonl",
+            "model": {"id": "claude-opus-5-5"},
+            "cost": {"total_cost_usd": cost, "total_api_duration_ms": 1},
+            "context_window": {"total_input_tokens": 10, "total_output_tokens": output},
+        }
+
+    def test_running_totals_update_one_segment_and_a_restart_opens_another(self):
+        ledger = update_ledger(None, self.payload(100, 0.5), 1000)
+        # The context's token count falls back after a turn; only the cost is a running total.
+        ledger = update_ledger(ledger, self.payload(5, 1.25), 1060)
+        self.assertEqual(len(ledger["s1"]["segments"]), 1)
+        self.assertEqual(ledger["s1"]["segments"][0]["cost_usd"], 1.25)
+        self.assertNotIn("output_tokens", ledger["s1"]["segments"][0])
+        ledger = update_ledger(ledger, self.payload(20, 0.1), 2000)
+        self.assertEqual([s["cost_usd"] for s in ledger["s1"]["segments"]], [1.25, 0.1])
+        self.assertEqual(ledger["s1"]["transcript_path"], "/x/s1.jsonl")
+
+    def test_payloads_without_totals_and_old_sessions_are_left_out(self):
+        self.assertEqual(update_ledger(None, {"session_id": "s"}, 1000), {})
+        ledger = update_ledger(None, self.payload(1, 0.01, "old"), 0)
+        ledger = update_ledger(ledger, self.payload(1, 0.01, "new"), 46 * 86400)
+        self.assertEqual(sorted(ledger), ["new"])
 
 
 if __name__ == "__main__":
