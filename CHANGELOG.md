@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.94] - 2026-10-18
+
+### Fixed
+- Claude's live tk/s read about 2.3x too high (BZL-192): 855 tk/s where the real figure was 354.
+  Claude Code writes one JSONL line per content block (thinking, text, tool_use), each repeating
+  the reply's usage. Since 0.20's incremental fold (BZL-14, 2026-09-07) the daily totals folded
+  those lines together, but the live-window messages kept every line. Everything that sums
+  messages counted a reply once per block: "Now" tk/s (TUI, status.json, menu bar, MQTT),
+  today's cost and output in `tool_states`, the roll-up feed to other machines, and the Records
+  peak tk/s. The live window now holds one message per reply with the folded stats.
+- Daily, weekly and monthly totals, cost, Left/Need and the other Records were never affected
+  (they come from the folded daily totals); nothing was uploaded to Splitrail Cloud.
+- The inflated Records peaks are dropped and re-derived: the two peak kinds are saved under new
+  names, and records whose kind is unknown are skipped on load instead of discarding the file.
+
 ## [2.0.0-dash-0.93] - 2026-10-18
 
 ### Fixed

@@ -161,6 +161,24 @@ impl Accumulator {
         }
     }
 
+    /// The live window as one message per reply: the first row of each, carrying the stats
+    /// folded from all its rows. `recent` keeps every row, and summing those counted a reply
+    /// once per content block (BZL-192).
+    fn live_messages(&self) -> Vec<ConversationMessage> {
+        let mut seen = HashSet::new();
+        self.recent
+            .iter()
+            .filter(|m| m.local_hash.as_ref().is_none_or(|h| seen.insert(h.as_str())))
+            .map(|m| {
+                let mut m = m.clone();
+                if let Some(state) = m.local_hash.as_ref().and_then(|h| self.folded.get(h)) {
+                    m.stats = state.stats.clone();
+                }
+                m
+            })
+            .collect()
+    }
+
     fn daily_stats(&self) -> BTreeMap<String, DailyStats> {
         let mut timestamps = self.timestamps_by_day.clone();
         crate::utils::finalize_daily(self.days.clone(), &self.conversation_start, &mut timestamps)
@@ -323,7 +341,7 @@ impl ClaudeCodeAnalyzer {
             }
         }
         accum.trim_recent(crate::utils::current_live_window_cutoff());
-        (accum.recent.clone(), report)
+        (accum.live_messages(), report)
     }
 
     /// The accumulated per-day history.
@@ -1176,6 +1194,41 @@ pub(crate) fn dedup_messages<'a>(
 mod tests {
     use super::*;
     use crate::types::{MessageRole, Stats};
+
+    #[test]
+    fn a_reply_written_as_three_lines_counts_once_in_the_live_messages() {
+        // Claude Code writes one line per content block (thinking, text, tool_use), each
+        // repeating the request's usage. The live window must count the reply once, as the
+        // daily totals do (BZL-192: "Now" tk/s read about 2.3x).
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects").join("p");
+        std::fs::create_dir_all(&project).unwrap();
+        let now = chrono::Utc::now();
+        let mut lines = String::new();
+        for (i, block) in [r#"{"type":"thinking","thinking":"hm"}"#, r#"{"type":"text","text":"ok"}"#, r#"{"type":"tool_use","id":"t","name":"Bash","input":{}}"#]
+            .iter()
+            .enumerate()
+        {
+            let at = (now - chrono::Duration::seconds(60 - i as i64)).to_rfc3339();
+            lines.push_str(&format!(
+                r#"{{"type":"assistant","uuid":"u{i}","timestamp":"{at}","sessionId":"s","cwd":"/tmp/p","requestId":"req_1","message":{{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[{block}],"usage":{{"input_tokens":100,"output_tokens":300,"cache_read_input_tokens":5000}}}}}}"#
+            ));
+            lines.push('\n');
+        }
+        std::fs::write(project.join("s.jsonl"), lines).unwrap();
+
+        let analyzer = ClaudeCodeAnalyzer::for_account(None, dir.path().to_path_buf());
+        let sources = analyzer.discover_data_sources().unwrap();
+        let (messages, _) = analyzer.parse_conversations_with_report(&sources);
+        let replies: Vec<&ConversationMessage> = messages.iter().filter(|m| m.role == MessageRole::Assistant).collect();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0].stats.output_tokens, 300);
+        assert_eq!(replies[0].stats.tool_calls, 1);
+        let day = analyzer.daily_stats();
+        let day = day.values().next().unwrap();
+        assert_eq!(day.stats.output_tokens, 300);
+        assert!((replies[0].stats.cost - day.stats.cost).abs() < 1e-9);
+    }
 
     #[test]
     fn test_deduplicate_partial_split_messages() {

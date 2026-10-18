@@ -21,7 +21,11 @@ const MIN_INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
+    /// Renamed when the peaks were found counting a Claude reply once per JSONL line (BZL-192),
+    /// so the inflated ones saved under the old names are dropped on load and re-derived.
+    #[serde(rename = "peak_tks_15m")]
     PeakTks15m,
+    #[serde(rename = "peak_tks_1h")]
     PeakTks1h,
     DayOutput,
     DayCost,
@@ -252,7 +256,19 @@ pub fn path() -> Option<PathBuf> {
 }
 
 fn load() -> Option<BTreeMap<Kind, Record>> {
-    serde_json::from_str(&std::fs::read_to_string(path()?).ok()?).ok()
+    parse_saved(&std::fs::read_to_string(path()?).ok()?)
+}
+
+/// Saved records, skipping any whose kind is no longer known rather than losing the lot.
+fn parse_saved(text: &str) -> Option<BTreeMap<Kind, Record>> {
+    let raw: BTreeMap<String, serde_json::Value> = serde_json::from_str(text).ok()?;
+    Some(
+        raw.into_iter()
+            .filter_map(|(kind, record)| {
+                Some((serde_json::from_value(serde_json::Value::String(kind)).ok()?, serde_json::from_value(record).ok()?))
+            })
+            .collect(),
+    )
 }
 
 fn save(records: &BTreeMap<Kind, Record>) -> std::io::Result<()> {
@@ -601,6 +617,17 @@ pub fn cached() -> Option<Board> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peaks_saved_before_the_claude_dedup_fix_are_dropped_and_the_rest_kept() {
+        let saved = parse_saved(
+            r#"{"peak_tks15m": {"value": 2055.2, "when": "Sat Oct 17 2026 08:19"},
+                "day_output": {"value": 8935007.0, "when": "Sat Oct 17 2026"},
+                "peak_tks_1h": {"value": 640.0, "when": "Sat Oct 17 2026 08:57"}}"#,
+        )
+        .unwrap();
+        assert_eq!(saved.keys().copied().collect::<Vec<_>>(), [Kind::PeakTks1h, Kind::DayOutput]);
+    }
     use crate::types::{Application, ConversationMessage, DailyStats, Stats};
 
     fn reply(conversation: &str, at: i64, output: u64) -> ConversationMessage {
