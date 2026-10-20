@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.102] - 2026-10-20
+
+### Changed
+- Pi on MTPLX models is counted once, in the Pi Agent column, with its transcript (BZL-236).
+  0.100 left Pi's mtplx replies to the MTPLX column, so a running Pi showed no tk/s and neither
+  column had any text. Pi's `responseId` is mtplx's `request_id`, so each request has one home:
+  Pi Agent counts Pi's own (priced and metered as MTPLX would: street price of the model behind
+  the provider's port, electricity from mtplx's wall time), and MTPLX keeps the rest: OpenCode,
+  the web UI, scripts and benchmarks through the server. Checked on real data: all 48 of Pi's
+  mtplx replies match a request in mtplx's log; 13 other requests stay under MTPLX.
+- Pi Agent keeps message text (prompts and replies, not thinking; up to 2,000 characters), so
+  the verbose view shows its transcript.
+
 ## [2.0.0-dash-0.101] - 2026-10-19
 
 ### Added

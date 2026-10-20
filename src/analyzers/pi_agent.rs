@@ -41,8 +41,27 @@ fn timestamp(entry: &Value) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(text).ok().map(|t| t.with_timezone(&Utc))
 }
 
-/// Messages in one session file.
-pub(crate) fn parse_session(path: &Path) -> Result<Vec<ConversationMessage>> {
+/// The text of a message: a string, or its `text` parts (not thinking or tool calls), cut short.
+fn message_text(message: &Value) -> Option<String> {
+    let text = match message.get("content")? {
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|p| p.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.chars().take(TEXT_CHARS).collect())
+}
+
+/// Text kept per message, for the verbose view's transcript lines.
+const TEXT_CHARS: usize = 2000;
+
+/// Messages in one session file. Replies from local MTPLX models are costed by `local`.
+pub(crate) fn parse_session(path: &Path, local: &crate::analyzers::mtplx::LocalPricing) -> Result<Vec<ConversationMessage>> {
     let content = std::fs::read_to_string(path)?;
     let mut messages = Vec::new();
     let mut session_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
@@ -65,10 +84,6 @@ pub(crate) fn parse_session(path: &Path) -> Result<Vec<ConversationMessage>> {
                 let (role, model) = match message.get("role").and_then(Value::as_str) {
                     Some("user") => (MessageRole::User, None),
                     Some("assistant") => {
-                        // Local MTPLX models are counted from MTPLX's own request log.
-                        if message.get("provider").and_then(Value::as_str).is_some_and(|p| p.starts_with("mtplx")) {
-                            continue;
-                        }
                         let usage = message.get("usage");
                         let field = |key: &str| usage.and_then(|u| u.get(key)).and_then(Value::as_u64).unwrap_or(0);
                         stats.input_tokens = field("input");
@@ -89,17 +104,25 @@ pub(crate) fn parse_session(path: &Path) -> Result<Vec<ConversationMessage>> {
                             .and_then(|u| u.pointer("/cost/total"))
                             .and_then(Value::as_f64)
                             .filter(|c| *c > 0.0);
-                        stats.cost = reported.unwrap_or_else(|| {
-                            model.as_deref().map_or(0.0, |m| {
-                                crate::models::calculate_total_cost(
-                                    m,
-                                    stats.input_tokens,
-                                    stats.output_tokens,
-                                    stats.cache_creation_tokens,
-                                    stats.cache_read_tokens,
-                                )
-                            })
-                        });
+                        let provider = message.get("provider").and_then(Value::as_str).unwrap_or_default();
+                        if crate::analyzers::mtplx::LocalPricing::is_local(provider) {
+                            // A local model: Pi records $0; price it as the MTPLX column would.
+                            let response = message.get("responseId").and_then(Value::as_str);
+                            (stats.cost, stats.energy_wh, stats.energy_cost) =
+                                local.price(provider, model.as_deref().unwrap_or_default(), response, &stats);
+                        } else {
+                            stats.cost = reported.unwrap_or_else(|| {
+                                model.as_deref().map_or(0.0, |m| {
+                                    crate::models::calculate_total_cost(
+                                        m,
+                                        stats.input_tokens,
+                                        stats.output_tokens,
+                                        stats.cache_creation_tokens,
+                                        stats.cache_read_tokens,
+                                    )
+                                })
+                            });
+                        }
                         (MessageRole::Assistant, model)
                     }
                     _ => continue,
@@ -114,7 +137,7 @@ pub(crate) fn parse_session(path: &Path) -> Result<Vec<ConversationMessage>> {
                     model,
                     stats,
                     role,
-                    content: None,
+                    content: message_text(message),
                 });
             }
             _ => {}
@@ -146,7 +169,8 @@ impl Analyzer for PiAgentAnalyzer {
     }
 
     async fn parse_conversations(&self, sources: Vec<DataSource>) -> Result<Vec<ConversationMessage>> {
-        let (messages, _report) = self.cache.parse_all(&sources, parse_session);
+        let local = crate::analyzers::mtplx::LocalPricing::load();
+        let (messages, _report) = self.cache.parse_all(&sources, |path| parse_session(path, &local));
         Ok(messages)
     }
 
@@ -173,19 +197,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn replies_from_local_mtplx_models_are_left_to_the_mtplx_column() {
+    fn local_mtplx_replies_are_counted_here_with_their_transcript() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.jsonl");
         std::fs::write(
             &path,
-            r#"{"type":"message","id":"a1","timestamp":"2026-10-19T22:33:00Z","message":{"role":"assistant","provider":"mtplx-fast","model":"qwen-fast","usage":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0}}}
-{"type":"message","id":"a2","timestamp":"2026-10-19T22:34:00Z","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.5","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0}}}
+            r#"{"type":"session","id":"sess","timestamp":"2026-10-20T14:39:48Z","cwd":"/Users/me/shop"}
+{"type":"message","id":"u1","timestamp":"2026-10-20T14:39:57Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}
+{"type":"message","id":"a1","timestamp":"2026-10-20T14:40:00Z","message":{"role":"assistant","provider":"mtplx-fast","model":"qwen-fast","responseId":"chatcmpl-1","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"Hi there"}],"usage":{"input":1917,"output":41,"cacheRead":0,"cacheWrite":0,"cost":{"total":0}}}}
 "#,
         )
         .unwrap();
-        let messages = parse_session(&path).unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].model.as_deref(), Some("gpt-5.5"));
+        let messages = parse_session(&path, &crate::analyzers::mtplx::LocalPricing::empty()).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content.as_deref(), Some("hello"));
+        let reply = &messages[1];
+        assert_eq!((reply.model.as_deref(), reply.stats.output_tokens), (Some("qwen-fast"), 41));
+        // The text, not the thinking.
+        assert_eq!(reply.content.as_deref(), Some("Hi there"));
     }
 
     #[test]
@@ -201,7 +230,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let messages = parse_session(&path).unwrap();
+        let messages = parse_session(&path, &crate::analyzers::mtplx::LocalPricing::empty()).unwrap();
         assert_eq!(messages.len(), 2);
         let reply = &messages[1];
         assert_eq!((reply.role.clone(), reply.model.as_deref()), (MessageRole::Assistant, Some("gpt-5.5")));
