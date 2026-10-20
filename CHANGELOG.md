@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.103] - 2026-10-20
+
+### Fixed
+- Two (or more) tk/s items in the menu bar: SwiftBar restarts the streaming plugin now and then
+  (waking, refreshing) without stopping the copy it had, and that copy, printing nothing to
+  SwiftBar, never noticed, so it kept its own native item. Three copies were running here, one
+  3.5 days old and orphaned. The newest copy now records its pid in
+  `~/Library/Caches/splitrail/swiftbar-plugin.pid`; an older one that finds another pid, or that
+  has been orphaned, exits within a second and its item goes with it.
+
 ## [2.0.0-dash-0.102] - 2026-10-20
 
 ### Changed

@@ -47,6 +47,33 @@ HELPER_SOURCE = os.path.join(HERE, "menubar.swift")
 HELPER_BINARY = os.path.expanduser("~/Library/Caches/splitrail/menubar")
 _helper = None
 
+# SwiftBar starts the plugin afresh now and then (waking, refreshing) without stopping the copy
+# it had: that one prints nothing to SwiftBar, so it never hits a closed pipe, and it keeps its
+# own helper and item. The newest copy writes its pid here; an older one that finds another pid
+# exits, and its helper (stdin closed) takes its item with it.
+PID_FILE = os.path.expanduser("~/Library/Caches/splitrail/swiftbar-plugin.pid")
+
+
+def claim(path=PID_FILE):
+    """Make this process the current copy."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def superseded(path=PID_FILE, pid=None, parent=None):
+    """Whether this copy should stop: a newer one has claimed the file, or SwiftBar is gone (the
+    copy was orphaned to launchd)."""
+    pid = os.getpid() if pid is None else pid
+    parent = os.getppid() if parent is None else parent
+    if parent == 1:
+        return True
+    try:
+        with open(path) as f:
+            return f.read().strip() != str(pid)
+    except OSError:
+        return False  # Unreadable: keep running rather than leave no item at all.
+
 
 def helper():
     global _helper
@@ -164,7 +191,8 @@ def menu():
 
 def main():
     last, printed = None, True  # A "~~~" first clears what SwiftBar showed before.
-    while True:
+    claim()
+    while not superseded():
         (value, stale, dot), lines = menu()
         proc = helper()
         if proc:
