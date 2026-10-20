@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.101] - 2026-10-19
+
+### Added
+- MTPLX costs (BZL-236), priced like Ollama's: `cost` is the street price, the median across the
+  hosted providers of the same model (Qwen 3.6 35B-A3B: $0.199 in / $1.10 out per 1M over 8
+  providers; Qwen 3.8 27B: $0.425 / $3.00 over 4), and electricity goes in `energy_wh` /
+  `energy_cost` from each request's wall time at `[ollama] power_watts` and
+  `electricity_per_kwh`. The log names only the server's alias, so the model comes from Pi's
+  `models.json` for that port ("Qwen 3.6 35B-A3B (local, fast)" → `qwen3.6-35b-a3b`;
+  quantisation words dropped). `[pricing.overrides."qwen-fast"]` wins over both.
+
 ## [2.0.0-dash-0.100] - 2026-10-19
 
 ### Added
