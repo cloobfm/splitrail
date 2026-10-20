@@ -358,6 +358,8 @@ mod tests {
     #[test]
     fn versions_compare_by_their_numbers() {
         assert!(is_newer("2.0.0-dash-0.51", "2.0.0-dash-0.50"));
+        // Past 0.99 the number carries on: 0.100 is newer, not older.
+        assert!(is_newer("2.0.0-dash-0.100", "2.0.0-dash-0.99"));
         assert!(is_newer("2.0.0-dash-0.100", "2.0.0-dash-0.99"));
         assert!(!is_newer("2.0.0-dash-0.50", "2.0.0-dash-0.50"));
         assert!(!is_newer("2.0.0-dash-0.49", "2.0.0-dash-0.50"));

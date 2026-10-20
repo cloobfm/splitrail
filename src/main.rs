@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use analyzer::AnalyzerRegistry;
 use analyzers::{
     AntigravityAnalyzer, ClaudeCodeAnalyzer, CursorAgentAnalyzer, ClineAnalyzer, CodexCliAnalyzer, DroidCliAnalyzer,
-    CopilotCliAnalyzer, KiloCodeAnalyzer, KiroCliAnalyzer, PiAgentAnalyzer, OllamaAnalyzer, OpenCodeAnalyzer, QwenCodeAnalyzer,
+    CopilotCliAnalyzer, KiloCodeAnalyzer, KiroCliAnalyzer, PiAgentAnalyzer, MtplxAnalyzer, OllamaAnalyzer, OpenCodeAnalyzer, QwenCodeAnalyzer,
     WarpDevAnalyzer,
 };
 
@@ -391,6 +391,7 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     registry.register(OllamaAnalyzer::new()); // Fed by scripts/ollama_usage_proxy.py
     registry.register(CopilotCliAnalyzer::new());
     registry.register(PiAgentAnalyzer::new());
+    registry.register(MtplxAnalyzer::new());
     // registry.register(CopilotAnalyzer::new()); // Temporarily disabled
 
     registry

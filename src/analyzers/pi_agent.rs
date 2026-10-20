@@ -65,6 +65,10 @@ pub(crate) fn parse_session(path: &Path) -> Result<Vec<ConversationMessage>> {
                 let (role, model) = match message.get("role").and_then(Value::as_str) {
                     Some("user") => (MessageRole::User, None),
                     Some("assistant") => {
+                        // Local MTPLX models are counted from MTPLX's own request log.
+                        if message.get("provider").and_then(Value::as_str).is_some_and(|p| p.starts_with("mtplx")) {
+                            continue;
+                        }
                         let usage = message.get("usage");
                         let field = |key: &str| usage.and_then(|u| u.get(key)).and_then(Value::as_u64).unwrap_or(0);
                         stats.input_tokens = field("input");
@@ -167,6 +171,22 @@ impl Analyzer for PiAgentAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replies_from_local_mtplx_models_are_left_to_the_mtplx_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"message","id":"a1","timestamp":"2026-10-19T22:33:00Z","message":{"role":"assistant","provider":"mtplx-fast","model":"qwen-fast","usage":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0}}}
+{"type":"message","id":"a2","timestamp":"2026-10-19T22:34:00Z","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.5","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0}}}
+"#,
+        )
+        .unwrap();
+        let messages = parse_session(&path).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].model.as_deref(), Some("gpt-5.5"));
+    }
 
     #[test]
     fn reads_usage_and_skips_replies_that_failed_before_any_tokens() {

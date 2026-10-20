@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.100] - 2026-10-19
+
+### Added
+- MTPLX column (BZL-236): local models served by mtplx (`mtplx start pi`, one port per model:
+  qwen-fast 35B-A3B on 8000, qwen-deep 27B on 8001, qwen-code on 8002), read from mtplx's own
+  `~/.mtplx/logs/request-log-<port>.jsonl` and its rotations. One reply per request: input
+  (prompt minus cached), cache read, output; $0 cost; conversations by `session_id`. Written by
+  the server, so Pi, OpenCode, the web UI and the terminal are all covered (Pi saves no sessions
+  in this setup). Warm-up requests, which name no model, count under the port's model. A
+  benchmark run inside mtplx rather than through its server is not logged and cannot be seen.
+- Pi Agent skips replies from `mtplx-*` providers, so MTPLX use is never counted twice.
+- Not uploaded to Splitrail Cloud, which does not know it.
+
 ## [2.0.0-dash-0.99] - 2026-10-18
 
 ### Fixed

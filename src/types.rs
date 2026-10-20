@@ -28,6 +28,7 @@ pub enum Application {
     /// GitHub Copilot CLI (`copilot`), as opposed to Copilot Chat in VS Code (`Copilot`).
     CopilotCli,
     PiAgent,
+    Mtplx,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

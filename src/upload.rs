@@ -32,6 +32,7 @@ where
                     | Application::KiloCli
                     | Application::CopilotCli
                     | Application::PiAgent
+                    | Application::Mtplx
             )
         })
         .collect();

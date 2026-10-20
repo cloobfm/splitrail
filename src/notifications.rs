@@ -351,6 +351,7 @@ fn format_application(app: &Application) -> &'static str {
         Application::CursorAgent => "Cursor Agent",
         Application::CopilotCli => "Copilot CLI",
         Application::PiAgent => "Pi Agent",
+        Application::Mtplx => "MTPLX",
     }
 }
 
