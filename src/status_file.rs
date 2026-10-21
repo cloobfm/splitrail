@@ -159,13 +159,19 @@ mod tests {
 
     fn tool(name: &str, output: u64, cost: f64, age_secs: i64) -> AgenticCodingToolStats {
         let now = Utc::now();
+        // A recent message stays today even when the test runs just after midnight.
+        let midnight = local_midnight(now.with_timezone(&Local).date_naive()).map(|m| m.with_timezone(&Utc));
+        let date = match midnight {
+            Some(midnight) if age_secs < 900 => (now - chrono::Duration::seconds(age_secs)).max(midnight),
+            _ => now - chrono::Duration::seconds(age_secs),
+        };
         AgenticCodingToolStats {
             daily_stats: Default::default(),
             num_conversations: 1,
             analyzer_name: name.into(),
             messages: vec![ConversationMessage {
                 application: Application::ClaudeCode,
-                date: now - chrono::Duration::seconds(age_secs),
+                date,
                 project_hash: String::new(),
                 conversation_hash: "c".into(),
                 local_hash: None,

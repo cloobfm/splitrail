@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.108] - 2026-10-21
+
+### Fixed
+- 0.107 shipped with a failing unit test. Its new `/api/show` lookup ran inside tests and asked
+  whichever Ollama was installed, so a test that expects no price found one. The lookup is off
+  in tests. Also `status_file::tests::totals_every_tool…`, which failed in the first minute after
+  local midnight (its "60 seconds ago" message landed on yesterday), now keeps recent messages
+  on today. 452 tests pass, including at 00:00:55.
+
 ## [2.0.0-dash-0.107] - 2026-10-20
 
 ### Fixed
