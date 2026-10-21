@@ -254,7 +254,9 @@ impl Period {
 /// quotas, then verbose; on a tool tab: a filter, then week/month/hour rows, then back to the
 /// Summary tab. False at the top, where there is nothing to go back from.
 fn go_back(state: &mut TuiState) -> bool {
-    if state.selected_tab == 0 {
+    if state.help_open {
+        state.help_open = false;
+    } else if state.selected_tab == 0 {
         if state.records_view || state.quotas_view {
             state.records_view = false;
             state.quotas_view = false;
@@ -397,6 +399,8 @@ pub struct TuiState {
     pub quotas_view: bool,
     /// `r` on the Summary tab: personal bests instead of the summary.
     pub records_view: bool,
+    /// `?`: every keyboard shortcut, over whatever is showing.
+    pub help_open: bool,
     /// Rows on the tool tabs: days, weeks, months or hours.
     pub period: Period,
     /// `f` / `o` on the tool tabs: only one model / project; `x` clears.
@@ -883,6 +887,13 @@ async fn run_app(
                         && key.modifiers.contains(KeyModifiers::CONTROL);
                     if ctrl_c || key.code == KeyCode::Char('q') {
                         break;
+                    }
+
+                    // ?: every shortcut, in a panel; ? again (or Esc) closes it.
+                    if key.code == KeyCode::Char('?') {
+                        tui_state.help_open = !tui_state.help_open;
+                        needs_redraw = true;
+                        continue;
                     }
 
                     // Esc goes back one level; it never quits.
@@ -1870,7 +1881,7 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, p: {}, r: {}, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, U: update, Esc: back, q: quit",
+                "?: all keys, ←/→ or h/l: tabs, ↑/↓ or j/k: days, p: {}, r: {}, v: verbose, d: debug log, s: Slack, m: {} mode, ^L: redraw, U: update, Esc: back, q: quit",
                 if tui_state.quotas_view { "summary" } else { "quotas" },
                 if tui_state.records_view { "summary" } else { "records" },
                 mouse_mode_indicator,
@@ -1878,7 +1889,7 @@ fn draw_ui(
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, g: by {} (now {}), f: model, o: project, x: clear{}, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, U: update, Esc: back, q: quit",
+                "?: all keys, ←/→ or h/l: tabs, ↑/↓ or j/k: navigate, g: by {} (now {}), f: model, o: project, x: clear{}, +/-: load more data, d: debug log, s: Slack, m: toggle {} mode, ^L: redraw, U: update, Esc: back, q: quit",
                 tui_state.period.next().name(),
                 tui_state.period.name(),
                 if tui_state.filter.is_empty() {
@@ -1991,6 +2002,77 @@ fn draw_ui(
     if tui_state.debug_overlay.enabled {
         render_debug_overlay(frame, tui_state);
     }
+    if tui_state.help_open {
+        render_help_overlay(frame);
+    }
+}
+
+/// Every keyboard shortcut, grouped by where it works. Kept beside the key handling so the two
+/// change together.
+const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Everywhere",
+        &[
+            ("←/→  h/l", "switch tabs"),
+            ("↑/↓  j/k", "move through days or rows"),
+            ("Home/End  PgUp/PgDn", "jump"),
+            ("Esc", "back one level (never quits)"),
+            ("?", "this panel"),
+            ("q  Ctrl-C", "quit"),
+            ("U", "update; press again for other machines"),
+            ("s", "Slack notifications on/off"),
+            ("m", "mouse: scroll ↔ select text"),
+            ("d", "debug log"),
+            ("Ctrl-L", "redraw the screen"),
+            ("Shift-Enter", "upload to Splitrail Cloud now"),
+        ],
+    ),
+    (
+        "Summary tab",
+        &[("p", "plan quotas"), ("r", "records and plan closes"), ("v", "verbose: models, transcripts, servers")],
+    ),
+    (
+        "Tool tabs",
+        &[
+            ("g", "rows by day → week → month → hour"),
+            ("f", "filter by model (cycles)"),
+            ("o", "filter by project (cycles)"),
+            ("x", "clear filters"),
+            ("+/-", "load more or fewer days"),
+        ],
+    ),
+];
+
+fn render_help_overlay(frame: &mut Frame) {
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, (group, keys)) in SHORTCUTS.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(Span::styled(*group, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+        for (key, what) in keys.iter() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {key:<22}"), Style::default().fg(Color::Cyan)),
+                Span::raw(*what),
+            ]));
+        }
+    }
+    let area = frame.area();
+    let width = 72.min(area.width.saturating_sub(2));
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            ratatui::widgets::Block::bordered().title(" Keyboard shortcuts · ? or Esc to close "),
+        ),
+        popup,
+    );
 }
 
 fn render_debug_overlay(frame: &mut Frame, tui_state: &TuiState) {
@@ -2879,6 +2961,18 @@ mod period_tests {
             .unwrap();
         let screen: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
         assert!(screen.contains("Press q to quit"));
+    }
+
+    #[test]
+    fn the_help_panel_lists_every_key_the_dashboard_handles() {
+        let listed: String = SHORTCUTS.iter().flat_map(|(_, keys)| keys.iter().map(|(k, _)| format!(" {k} "))).collect();
+        for key in ["p", "r", "v", "g", "f", "o", "x", "s", "m", "d", "U", "?", "Esc", "Ctrl-L", "Shift-Enter", "+/-"] {
+            assert!(listed.contains(&format!(" {key} ")) || listed.contains(&format!(" {key}  ")) || listed.contains(key), "{key} missing from the ? panel");
+        }
+        // Esc closes the panel before anything else.
+        let mut state = TuiState { help_open: true, records_view: true, ..Default::default() };
+        assert!(go_back(&mut state));
+        assert!(!state.help_open && state.records_view);
     }
 
     #[test]
