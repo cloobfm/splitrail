@@ -109,7 +109,7 @@ pub(crate) fn parse_session(path: &Path, local: &crate::analyzers::mtplx::LocalP
                             // A local model: Pi records $0; price it as the MTPLX column would.
                             let response = message.get("responseId").and_then(Value::as_str);
                             (stats.cost, stats.energy_wh, stats.energy_cost) =
-                                local.price(provider, model.as_deref().unwrap_or_default(), response, &stats);
+                                local.price(model.as_deref().unwrap_or_default(), response, &stats);
                         } else {
                             stats.cost = reported.unwrap_or_else(|| {
                                 model.as_deref().map_or(0.0, |m| {

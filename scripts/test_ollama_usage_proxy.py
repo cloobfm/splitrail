@@ -78,7 +78,7 @@ class FakeOllama(BaseHTTPRequestHandler):
                 sse = [b"data: " + json.dumps(e).encode() + b"\n\n" for e in events]
                 self._chunks("text/event-stream", sse + [b"data: [DONE]\n\n"])
             else:
-                self._json({"model": "qwen3:8b", "choices": [], "usage": usage})
+                self._json({"id": "chatcmpl-test", "model": "qwen3:8b", "choices": [], "usage": usage})
         elif path == "/v1/systemone":
             # Decision models answer without naming the model.
             # The shape a real call returned (Ollama 0.40.4), without the model.
@@ -222,6 +222,12 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(native["reply_preview"], "")
         self.assertEqual((openai["endpoint"], openai["prompt_tokens"], openai["completion_tokens"]), ("/v1/embeddings", 12, 0))
 
+    def test_a_line_names_the_reply_id(self):
+        conn, resp = self.request("POST", "/v1/chat/completions", {"model": "qwen3:8b", "messages": []})
+        resp.read()
+        conn.close()
+        self.assertEqual(self.logged()[0]["response_id"], "chatcmpl-test")
+
     def test_other_paths_and_errors_pass_through_unlogged(self):
         conn, resp = self.request("GET", "/api/tags")
         self.assertEqual(json.loads(resp.read())["models"][0]["name"], "qwen3:8b")
@@ -316,6 +322,38 @@ class ParsingTests(unittest.TestCase):
         for i in range(0, len(data), 7):
             scanner.feed(data[i:i + 7])
         self.assertEqual(scanner.finish()["completion_tokens"], 30)
+
+
+
+class CallerTests(unittest.TestCase):
+    def test_the_caller_and_its_folder_are_found_from_the_connection(self):
+        import socket
+        import subprocess
+        import tempfile
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        with tempfile.TemporaryDirectory() as folder:
+            folder = os.path.realpath(folder)
+            client = subprocess.Popen(
+                [sys.executable, "-c",
+                 f"import socket,time; s=socket.create_connection(('127.0.0.1',{port})); time.sleep(5)"],
+                cwd=folder,
+            )
+            try:
+                conn, (_, client_port) = listener.accept()
+                info = proxy.caller_info(client_port)
+                self.assertEqual(info.get("cwd"), folder)
+                self.assertTrue(info.get("caller"))
+                conn.close()
+            finally:
+                client.kill()
+                client.wait()
+                listener.close()
+
+    def test_an_unknown_port_names_nobody(self):
+        self.assertEqual(proxy.caller_info(1), {})
 
 
 if __name__ == "__main__":

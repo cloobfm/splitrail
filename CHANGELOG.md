@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.104] - 2026-10-20
+
+### Added (BZL-238, parts 1 and 2 of 3)
+- Which project a local model request came from. The usage proxy finds the calling process
+  from each connection (`lsof`, once per connection, off the request path) and logs its name
+  and working directory (`caller`, `cwd`). Every local caller is 127.0.0.1, so before this
+  every Ollama row had the same `#project`; now mediasrc's jobs read `#mediasrc`. Lines from
+  before the change keep the old tag. The proxy also logs the reply's own `id` (`response_id`).
+- The same proxy can front mtplx: `scripts/mtplx_proxy.sh install 8000` puts it on :8000 (a
+  launchd agent) and expects mtplx on :18000 (`mtplx start pi --port 18000`); clients keep
+  using :8000. Its log (`~/.config/splitrail/mtplx/usage-<port>.jsonl`) is merged into the
+  MTPLX column by request id: the prompt and reply text, the calling project and measured power
+  for requests that do not come from Pi. Checked end to end against the running mtplx: the
+  proxy's reply id is mtplx's `request_id`, and the caller came back as `python3` in
+  `~/Projects/mediasrc`.
+- MTPLX models are found by alias in Pi's `models.json` (`qwen-fast` → "Qwen 3.6 35B-A3B"),
+  not by port, so pricing still works with mtplx moved behind a proxy.
+- The Ollama proxy needs a restart to start logging callers:
+  `launchctl kickstart -k gui/$(id -u)/com.splitrail.ollama-proxy`.
+
 ## [2.0.0-dash-0.103] - 2026-10-20
 
 ### Fixed

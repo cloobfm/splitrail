@@ -558,6 +558,17 @@ pub fn fold_entry_into_day(day: &mut DailyStats, entry: &ConversationMessage) {
     }
 }
 
+/// The project a local server request came from, from the calling process the usage proxy
+/// found (BZL-238): its folder's name, or the process when it ran from the home folder or `/`.
+pub fn caller_project(cwd: Option<&str>, caller: Option<&str>) -> Option<String> {
+    let home = std::env::home_dir();
+    let folder = cwd
+        .filter(|cwd| home.as_deref().is_none_or(|h| std::path::Path::new(cwd) != h) && *cwd != "/")
+        .and_then(|cwd| std::path::Path::new(cwd).file_name())
+        .and_then(|n| n.to_str());
+    folder.or(caller).map(str::to_string)
+}
+
 /// The day's slice for (`hour`, `model`, `project`), added if new.
 pub fn slice_mut<'a>(day: &'a mut DailyStats, hour: u8, model: &str, project: &str) -> &'a mut crate::types::Slice {
     let index = match day.slices.iter().position(|s| s.hour == hour && s.model == model && s.project == project) {

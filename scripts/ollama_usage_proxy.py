@@ -20,10 +20,20 @@ legacy `/api/embeddings` (no counts; logged as a request with 0 tokens). Embeddi
 output, so they add input tokens and requests, never tk/s.
 Everything else is passed through untouched. Logging never fails a request.
 
+Each line also names the caller: the process at the other end of the connection (`caller`)
+and its working directory (`cwd`), found once per connection with `lsof`, so the dashboard can
+say which project a request came from. Every local caller is 127.0.0.1, so the address alone
+cannot. And the reply's own `id` (`response_id`, e.g. `chatcmpl-…`), which an OpenAI-style
+server such as mtplx also logs as its `request_id`.
+
+The same proxy fronts any OpenAI-compatible server, e.g. mtplx (BZL-238): point
+OLLAMA_UPSTREAM at it and OLLAMA_PROXY_USAGE_FILE at a log of its own.
+
 Configuration (environment):
-    OLLAMA_PROXY_HOST   listen address   (default 127.0.0.1)
-    OLLAMA_PROXY_PORT   listen port      (default 11434, Ollama's own)
-    OLLAMA_UPSTREAM     real Ollama      (default http://127.0.0.1:11435)
+    OLLAMA_PROXY_HOST        listen address   (default 127.0.0.1)
+    OLLAMA_PROXY_PORT        listen port      (default 11434, Ollama's own)
+    OLLAMA_UPSTREAM          real server      (default http://127.0.0.1:11435)
+    OLLAMA_PROXY_USAGE_FILE  usage log        (default ~/.config/splitrail/ollama/usage.jsonl)
 
 Install with `scripts/com.splitrail.ollama-proxy.plist`; steps are in the CHANGELOG.
 """
@@ -40,7 +50,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-USAGE_FILE = os.path.expanduser("~/.config/splitrail/ollama/usage.jsonl")
+USAGE_FILE = os.path.expanduser(
+    os.environ.get("OLLAMA_PROXY_USAGE_FILE", "~/.config/splitrail/ollama/usage.jsonl")
+)
 
 HOP_BY_HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
@@ -291,6 +303,43 @@ class PowerMeter:
             return joules if self.watts is not None else None
 
 
+def caller_info(client_port, own_pid=None):
+    """The process on the far end of a local connection from `client_port`, and its working
+    directory: `{"caller": "python3", "cwd": "/Users/me/Projects/mediasrc"}`, or {} when it
+    cannot be told (not local, gone already, no lsof)."""
+    own_pid = own_pid or os.getpid()
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", f"-iTCP@127.0.0.1:{client_port}", "-sTCP:ESTABLISHED", "-Fpn"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    pid = None
+    for line in out.splitlines():
+        if line.startswith("p"):
+            current = int(line[1:])
+        elif line.startswith("n") and line[1:].startswith(f"127.0.0.1:{client_port}->") and current != own_pid:
+            pid = current
+            break
+    if pid is None:
+        return {}
+    info = {}
+    try:
+        cwd = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                             capture_output=True, text=True, timeout=3).stdout
+        for line in cwd.splitlines():
+            if line.startswith("n/"):
+                info["cwd"] = line[1:]
+        name = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)],
+                              capture_output=True, text=True, timeout=3).stdout.strip()
+        if name:
+            info["caller"] = os.path.basename(name)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return info
+
+
 class ModelSizes:
     """Parameter counts (`20.9B`) and base family (`qwen3_5`) per model, from the upstream
     `/api/tags`.
@@ -352,6 +401,7 @@ class UsageScanner:
         self.body = bytearray()
         self.usage = None
         self.reply = ""
+        self.response_id = None
 
     def feed(self, data):
         if not self.streamed:
@@ -385,6 +435,8 @@ class UsageScanner:
             return
         if len(self.reply) < PREVIEW_CHARS:
             self.reply = (self.reply + reply_text(obj))[:PREVIEW_CHARS]
+        if self.response_id is None and isinstance(obj, dict) and isinstance(obj.get("id"), str):
+            self.response_id = obj["id"]
         found = usage_from_object(self.path, obj)
         if found:
             self.usage = found
@@ -414,8 +466,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(length) if length else b""
 
+    def _caller(self):
+        """Who is on the other end, looked up once per connection on a thread of its own, so the
+        first request does not wait for lsof."""
+        if getattr(self, "caller_thread", None) is None:
+            self.caller = {}
+
+            def look_up():
+                self.caller = caller_info(self.client_address[1])
+
+            self.caller_thread = threading.Thread(target=look_up, daemon=True)
+            self.caller_thread.start()
+
     def _proxy(self):
         self.started = time.monotonic()
+        self._caller()
         path = urlparse(self.path).path
         body = self._read_request_body()
         logged = self.command == "POST" and (path in NATIVE or path in OPENAI or path in DECISION or path in EMBED)
@@ -520,9 +585,17 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "client": self.client_address[0],
                     "prompt_preview": self.prompt,
                     "reply_preview": scanner.reply.strip(),
+                    **({"response_id": scanner.response_id} if scanner.response_id else {}),
+                    **self._caller_fields(),
                 },
                 self.usage_file,
             )
+
+    def _caller_fields(self):
+        thread = getattr(self, "caller_thread", None)
+        if thread is not None:
+            thread.join(timeout=1)  # Rarely still running: lsof takes about 0.1 s.
+        return dict(getattr(self, "caller", {}) or {})
 
     def _send_error(self, code, message):
         data = message.encode()

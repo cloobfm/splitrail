@@ -84,6 +84,22 @@ struct UsageEvent {
     /// Ollama's base family (`qwen3_5`), for custom or fine-tuned models priced by family.
     #[serde(default)]
     family: Option<String>,
+    /// The calling process's working directory, and its name, found by the proxy from the
+    /// connection (BZL-238); absent from older lines.
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    caller: Option<String>,
+    /// The reply's own `id` (OpenAI-style `chatcmpl-…`), when it has one.
+    #[serde(default)]
+    response_id: Option<String>,
+}
+
+/// The project a request came from: the caller's folder (or process), else, on lines from
+/// before the proxy found callers, its address.
+fn project_of(event: &UsageEvent) -> String {
+    crate::utils::caller_project(event.cwd.as_deref(), event.caller.as_deref())
+        .unwrap_or_else(|| hash_text(&format!("ollama:{}", event.client)))
 }
 
 /// Normalise model name from the proxy event to the price feed slug.
@@ -236,7 +252,7 @@ pub fn parse_usage_log(
                         + price.cache_cost(0, event.cached_tokens)
                 });
             let conversation_hash = hash_text(&format!("{}:{}:{}", source_str, line_no, event.ts));
-            let project_hash = hash_text(&format!("ollama:{}", event.client));
+            let project_hash = project_of(&event);
             let mut messages = Vec::with_capacity(2);
             if !event.prompt_preview.is_empty() {
                 // Sent when the request started, which is wall time before it was logged.
@@ -259,7 +275,8 @@ pub fn parse_usage_log(
                 date,
                 project_hash,
                 conversation_hash,
-                local_hash: None,
+                // The reply's id, for matching it to an agent's record of the same request.
+                local_hash: event.response_id.clone(),
                 global_hash: hash_text(&format!("ollama_{}_{}", source_str, event.ts)),
                 model: Some(model.clone()),
                 stats: Stats {
@@ -416,6 +433,18 @@ mod tests {
         let reply = messages.iter().find(|m| m.role == MessageRole::Assistant).unwrap();
         assert_eq!(reply.model.as_deref(), Some("qwen3-embedding:0.6b"));
         assert_eq!((reply.stats.input_tokens, reply.stats.output_tokens), (37, 0));
+    }
+
+    #[test]
+    fn a_request_is_filed_under_its_callers_folder() {
+        let log = concat!(
+            r#"{"ts": 1790880000, "model": "m", "endpoint": "/api/chat", "prompt_tokens": 1, "cached_tokens": 0, "completion_tokens": 1, "duration_ms": 1, "client": "127.0.0.1", "cwd": "/Users/me/Projects/mediasrc", "caller": "python3"}"#, "\n",
+            r#"{"ts": 1790880001, "model": "m", "endpoint": "/v1/chat/completions", "prompt_tokens": 1, "cached_tokens": 0, "completion_tokens": 1, "duration_ms": 1, "client": "127.0.0.1", "cwd": "/", "caller": "opencode", "response_id": "chatcmpl-9"}"#, "\n",
+        );
+        let messages = parse_usage_log(log, Path::new("/test.jsonl"), &OllamaConfig::default());
+        assert_eq!(messages[0].project_hash, "mediasrc");
+        assert_eq!(messages[1].project_hash, "opencode");
+        assert_eq!(messages[1].local_hash.as_deref(), Some("chatcmpl-9"));
     }
 
     #[test]

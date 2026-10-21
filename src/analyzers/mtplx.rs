@@ -8,33 +8,36 @@
 //!  "completion_tokens": 82, "request_elapsed_s": 4.77, "decode_tok_s": 21.3, …}
 //! ```
 //!
-//! The server writes it, so every client is covered (Pi, OpenCode, the web UI, the terminal);
-//! Pi itself saves no sessions in this setup. Warm-up requests carry no model and are credited
-//! to the port's. A benchmark run inside mtplx rather than through the server leaves no line
-//! here.
+//! The server writes it, so every client is covered (Pi, OpenCode, the web UI, scripts).
+//! Warm-up requests carry no model and are credited to the file's. A benchmark run inside mtplx
+//! rather than through the server leaves no line here.
+//!
+//! The log has no text and no caller. When splitrail's usage proxy (`scripts/mtplx_proxy.sh`)
+//! sits in front of a port, its lines in `~/.config/splitrail/mtplx/usage-<port>.jsonl` carry the
+//! prompt and reply previews, the calling project and measured energy, and the reply's `id`,
+//! which is mtplx's `request_id`; they are merged in by that id (BZL-238).
 //!
 //! Costed like Ollama: `cost` is the street price, what the same tokens cost from a hosted
-//! provider of the same model, and the electricity goes in `energy_wh` / `energy_cost` (the
-//! request's wall time at `[ollama] power_watts`, priced at `electricity_per_kwh`). The log
-//! names only the server's alias (`qwen-fast`), so the model is found through Pi's
-//! `~/.pi/agent/models.json`, whose provider for the port names it ("Qwen 3.6 35B-A3B (local,
-//! fast)" → `qwen3.6-35b-a3b`). A `[pricing.overrides."qwen-fast"]` entry wins over both.
+//! provider of the same model, and the electricity goes in `energy_wh` / `energy_cost` (measured
+//! by the proxy, else the request's wall time at `[ollama] power_watts`). The log names only the
+//! server's alias (`qwen-fast`), so the model is found through Pi's `~/.pi/agent/models.json`,
+//! which names each alias ("Qwen 3.6 35B-A3B (local, fast)" → `qwen3.6-35b-a3b`). A
+//! `[pricing.overrides."qwen-fast"]` entry wins over both.
 //!
 //! Each request is counted in one place. Pi's own sessions name the request (`responseId` is
 //! mtplx's `request_id`), and Pi has the transcript and the project, so Pi's requests belong to
-//! the Pi Agent column (priced here, through [`LocalPricing`]); this column keeps the rest:
-//! OpenCode, the web UI, scripts and benchmarks that go through the server.
+//! the Pi Agent column (priced here, through [`LocalPricing`]); this column keeps the rest.
 
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::DateTime;
 use serde_json::Value;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::analyzer::{Analyzer, DataSource};
 use crate::config::OllamaConfig;
 use crate::price_feed::ModelPrice;
-use std::collections::HashMap;
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, Stats};
 use crate::utils::hash_text;
 
@@ -43,7 +46,7 @@ pub struct MtplxAnalyzer {
     cache: crate::stamp_cache::StampCache,
     /// Wattage and electricity price for local inference, shared with Ollama.
     power: OllamaConfig,
-    /// Port -> the model Pi says it serves, for pricing.
+    /// Alias -> the model Pi says it is, for pricing.
     names: HashMap<String, String>,
 }
 
@@ -56,9 +59,14 @@ impl MtplxAnalyzer {
         }
     }
 
-    fn logs_dir() -> Option<std::path::PathBuf> {
+    fn logs_dir() -> Option<PathBuf> {
         std::env::home_dir().map(|home| home.join(".mtplx/logs"))
     }
+}
+
+/// Where the usage proxy in front of an mtplx port writes (`usage-<port>.jsonl`).
+fn proxy_dir() -> Option<PathBuf> {
+    std::env::home_dir().map(|home| home.join(".config/splitrail/mtplx"))
 }
 
 /// The port in `request-log-8000.jsonl` or `request-log-8000.jsonl.1`.
@@ -67,127 +75,23 @@ fn port_of(path: &Path) -> String {
     name.trim_start_matches("request-log-").split('.').next().unwrap_or_default().to_string()
 }
 
-/// Pi's local providers: provider -> (port, model name).
-fn pi_providers(text: &str) -> HashMap<String, (String, String)> {
-    let Ok(config) = serde_json::from_str::<Value>(text) else { return HashMap::new() };
-    let mut providers = HashMap::new();
-    for (key, provider) in config.get("providers").and_then(Value::as_object).into_iter().flatten() {
-        let port = provider
-            .get("baseUrl")
-            .and_then(Value::as_str)
-            .and_then(|url| url.rsplit_once(':'))
-            .map(|(_, rest)| rest.split('/').next().unwrap_or_default().to_string());
-        let name = provider.pointer("/models/0/name").and_then(Value::as_str);
-        if let (Some(port), Some(name)) = (port, name) {
-            providers.insert(key.clone(), (port, name.to_string()));
-        }
-    }
-    providers
+fn text(entry: &Value, key: &str) -> Option<String> {
+    entry.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 fn read_pi_models() -> Option<String> {
     std::fs::read_to_string(std::env::home_dir()?.join(".pi/agent/models.json")).ok()
 }
 
-/// Every request's wall time, by `request_id`, across the request logs: Pi's electricity.
-fn request_seconds() -> HashMap<String, f64> {
-    let Some(dir) = MtplxAnalyzer::logs_dir() else { return HashMap::new() };
-    let mut seconds = HashMap::new();
-    for path in glob::glob(&format!("{}/request-log-*.jsonl*", dir.display())).into_iter().flatten().flatten() {
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
-        for entry in content.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
-            if let (Some(id), Some(s)) = (text(&entry, "request_id"), entry.get("request_elapsed_s").and_then(Value::as_f64)) {
-                seconds.insert(id, s);
-            }
-        }
-    }
-    seconds
-}
-
-/// The requests Pi's sessions already count: `responseId`s of replies from `mtplx*` providers.
-fn pi_request_ids() -> std::collections::HashSet<String> {
-    let Some(home) = std::env::home_dir() else { return Default::default() };
-    let pattern = format!("{}/.pi/agent/sessions/*/*.jsonl", home.display());
-    let mut ids = std::collections::HashSet::new();
-    for path in glob::glob(&pattern).into_iter().flatten().flatten() {
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
-        for entry in content.lines().filter(|l| l.contains("\"responseId\"")).filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
-            let message = entry.get("message");
-            let local = message.and_then(|m| m.get("provider")).and_then(Value::as_str).is_some_and(|p| p.starts_with("mtplx"));
-            if let (true, Some(id)) = (local, message.and_then(|m| m.get("responseId")).and_then(Value::as_str)) {
-                ids.insert(id.to_string());
-            }
-        }
-    }
-    ids
-}
-
-/// How Pi costs a reply it got from an MTPLX model: the street price of the model behind the
-/// provider's port, and the electricity of the request's wall time.
-pub(crate) struct LocalPricing {
-    power: OllamaConfig,
-    providers: HashMap<String, (String, String)>,
-    seconds: HashMap<String, f64>,
-    prices: std::sync::Mutex<HashMap<String, Option<ModelPrice>>>,
-}
-
-impl LocalPricing {
-    pub(crate) fn load() -> Self {
-        Self {
-            power: crate::config::Config::load().ok().flatten().unwrap_or_default().ollama,
-            providers: read_pi_models().map(|text| pi_providers(&text)).unwrap_or_default(),
-            seconds: request_seconds(),
-            prices: Default::default(),
-        }
-    }
-
-    /// No prices, providers or timings: for tests.
-    #[cfg(test)]
-    pub(crate) fn empty() -> Self {
-        Self { power: OllamaConfig::default(), providers: HashMap::new(), seconds: HashMap::new(), prices: Default::default() }
-    }
-
-    pub(crate) fn is_local(provider: &str) -> bool {
-        provider.starts_with("mtplx")
-    }
-
-    /// (cost, energy Wh, energy cost) for a reply.
-    pub(crate) fn price(&self, provider: &str, model: &str, response_id: Option<&str>, stats: &Stats) -> (f64, f64, f64) {
-        let names: HashMap<String, String> = self.providers.values().cloned().collect();
-        let port = self.providers.get(provider).map(|(port, _)| port.clone()).unwrap_or_default();
-        let price = self
-            .prices
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .entry(model.to_string())
-            .or_insert_with(|| street_price(model, &port, &names))
-            .clone();
-        let cost = price.map_or(0.0, |p| {
-            p.input_cost(stats.input_tokens) + p.output_cost(stats.output_tokens) + p.cache_cost(0, stats.cache_read_tokens)
-        });
-        let joules = self.power.power_watts * response_id.and_then(|id| self.seconds.get(id)).copied().unwrap_or(0.0);
-        (cost, joules / 3600.0, self.power.joules_cost(joules))
-    }
-}
-
-/// Port -> model name, from Pi's `models.json` providers (`"baseUrl":
-/// "http://127.0.0.1:8000/v1"`, `"models": [{"name": "Qwen 3.6 35B-A3B (local, fast)"}]`).
-/// Only those two fields are read.
-fn pi_model_names(text: &str) -> HashMap<String, String> {
-    let Ok(config) = serde_json::from_str::<Value>(text) else { return HashMap::new() };
+/// Alias -> model name, from Pi's `models.json` (`"models": [{"id": "qwen-fast", "name":
+/// "Qwen 3.6 35B-A3B (local, fast)"}]`). Only those two fields are read.
+fn pi_model_names(models_json: &str) -> HashMap<String, String> {
+    let Ok(config) = serde_json::from_str::<Value>(models_json) else { return HashMap::new() };
     let mut names = HashMap::new();
-    for provider in config.get("providers").and_then(Value::as_object).into_iter().flat_map(|p| p.values()) {
-        let Some(port) = provider
-            .get("baseUrl")
-            .and_then(Value::as_str)
-            .and_then(|url| url.rsplit_once(':'))
-            .map(|(_, rest)| rest.split('/').next().unwrap_or_default().to_string())
-        else {
-            continue;
-        };
-        let name = provider.pointer("/models/0/name").and_then(Value::as_str);
-        if let Some(name) = name {
-            names.insert(port, name.to_string());
+    let providers = config.get("providers").and_then(Value::as_object).into_iter().flat_map(|p| p.values());
+    for model in providers.flat_map(|p| p.get("models").and_then(Value::as_array).into_iter().flatten()) {
+        if let (Some(id), Some(name)) = (text(model, "id"), text(model, "name")) {
+            names.insert(id, name);
         }
     }
     names
@@ -206,26 +110,182 @@ fn slug(name: &str) -> String {
     let words: Vec<&str> = name.split_whitespace().filter(|w| !quant(w)).collect();
     match words.as_slice() {
         // "qwen 3.6 …": the version joins the family.
-        [family, version, rest @ ..] if version.chars().next().is_some_and(|c| c.is_ascii_digit()) && version.contains('.') => {
-            std::iter::once(format!("{family}{version}")).chain(rest.iter().map(|w| w.to_string())).collect::<Vec<_>>().join("-")
+        [family, version, rest @ ..]
+            if version.chars().next().is_some_and(|c| c.is_ascii_digit()) && version.contains('.') =>
+        {
+            std::iter::once(format!("{family}{version}"))
+                .chain(rest.iter().map(|w| w.to_string()))
+                .collect::<Vec<_>>()
+                .join("-")
         }
         _ => words.join("-"),
     }
 }
 
 /// The street price for a served model: an override or feed entry under its alias, else the
-/// median hosted price of the model Pi names for its port. None when neither is sold anywhere.
-fn street_price(alias: &str, port: &str, names: &HashMap<String, String>) -> Option<ModelPrice> {
+/// median hosted price of the model Pi names for it. None when neither is sold anywhere.
+fn street_price(alias: &str, names: &HashMap<String, String>) -> Option<ModelPrice> {
     if let Some((price, _)) = crate::price_feed::lookup(alias) {
         return Some(price);
     }
     // The median across the providers that host it, as for Ollama's models.
-    let name = slug(names.get(port)?);
+    let name = slug(names.get(alias)?);
     crate::price_feed::median_price(&[name]).map(|(_, price)| price)
 }
 
-fn text(entry: &Value, key: &str) -> Option<String> {
-    entry.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+/// What the usage proxy saw of one request.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct ProxyRecord {
+    prompt: String,
+    reply: String,
+    project: Option<String>,
+    energy_j: Option<f64>,
+    wall_ms: u64,
+}
+
+/// The proxy's records, by the reply's id.
+fn proxy_records(dir: &Path) -> HashMap<String, ProxyRecord> {
+    let mut records = HashMap::new();
+    for path in glob::glob(&format!("{}/usage-*.jsonl", dir.display())).into_iter().flatten().flatten() {
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        for entry in content.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+            let Some(id) = text(&entry, "response_id") else { continue };
+            records.insert(
+                id,
+                ProxyRecord {
+                    prompt: text(&entry, "prompt_preview").unwrap_or_default(),
+                    reply: text(&entry, "reply_preview").unwrap_or_default(),
+                    project: crate::utils::caller_project(
+                        entry.get("cwd").and_then(Value::as_str),
+                        entry.get("caller").and_then(Value::as_str),
+                    ),
+                    energy_j: entry.get("energy_j").and_then(Value::as_f64),
+                    wall_ms: entry.get("wall_ms").and_then(Value::as_u64).unwrap_or(0),
+                },
+            );
+        }
+    }
+    records
+}
+
+/// Fill in what the proxy saw: the project, the reply's text, measured energy, and the prompt
+/// as the user's side, sent when the request started.
+fn merge_proxy(messages: Vec<ConversationMessage>, records: &HashMap<String, ProxyRecord>, power: &OllamaConfig) -> Vec<ConversationMessage> {
+    let mut out = Vec::with_capacity(messages.len());
+    for mut reply in messages {
+        let Some(record) = reply.local_hash.as_ref().and_then(|id| records.get(id)) else {
+            out.push(reply);
+            continue;
+        };
+        if let Some(project) = &record.project {
+            reply.project_hash = project.clone();
+        }
+        if !record.reply.is_empty() {
+            reply.content = Some(record.reply.clone());
+        }
+        if let Some(joules) = record.energy_j {
+            reply.stats.energy_wh = joules / 3600.0;
+            reply.stats.energy_cost = power.joules_cost(joules);
+        }
+        if !record.prompt.is_empty() {
+            out.push(ConversationMessage {
+                date: reply.date - chrono::Duration::milliseconds(record.wall_ms as i64),
+                local_hash: None,
+                global_hash: hash_text(&format!("{}-prompt", reply.global_hash)),
+                model: None,
+                stats: Stats::default(),
+                role: MessageRole::User,
+                content: Some(record.prompt.clone()),
+                ..reply.clone()
+            });
+        }
+        out.push(reply);
+    }
+    out
+}
+
+/// Every request's wall time, by `request_id`, across the request logs: Pi's electricity.
+fn request_seconds() -> HashMap<String, f64> {
+    let Some(dir) = MtplxAnalyzer::logs_dir() else { return HashMap::new() };
+    let mut seconds = HashMap::new();
+    for path in glob::glob(&format!("{}/request-log-*.jsonl*", dir.display())).into_iter().flatten().flatten() {
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        for entry in content.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+            if let (Some(id), Some(s)) = (text(&entry, "request_id"), entry.get("request_elapsed_s").and_then(Value::as_f64)) {
+                seconds.insert(id, s);
+            }
+        }
+    }
+    seconds
+}
+
+/// The requests Pi's sessions already count: `responseId`s of replies from `mtplx*` providers.
+fn pi_request_ids() -> HashSet<String> {
+    let Some(home) = std::env::home_dir() else { return Default::default() };
+    let pattern = format!("{}/.pi/agent/sessions/*/*.jsonl", home.display());
+    let mut ids = HashSet::new();
+    for path in glob::glob(&pattern).into_iter().flatten().flatten() {
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        for entry in content.lines().filter(|l| l.contains("\"responseId\"")).filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+            let message = entry.get("message");
+            let local = message
+                .and_then(|m| m.get("provider"))
+                .and_then(Value::as_str)
+                .is_some_and(LocalPricing::is_local);
+            if let (true, Some(id)) = (local, message.and_then(|m| m.get("responseId")).and_then(Value::as_str)) {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    ids
+}
+
+/// How Pi costs a reply it got from an MTPLX model: the street price of the model behind the
+/// alias, and the electricity of the request's wall time.
+pub(crate) struct LocalPricing {
+    power: OllamaConfig,
+    names: HashMap<String, String>,
+    seconds: HashMap<String, f64>,
+    prices: std::sync::Mutex<HashMap<String, Option<ModelPrice>>>,
+}
+
+impl LocalPricing {
+    pub(crate) fn load() -> Self {
+        Self {
+            power: crate::config::Config::load().ok().flatten().unwrap_or_default().ollama,
+            names: read_pi_models().map(|text| pi_model_names(&text)).unwrap_or_default(),
+            seconds: request_seconds(),
+            prices: Default::default(),
+        }
+    }
+
+    /// No prices, names or timings: for tests.
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self { power: OllamaConfig::default(), names: HashMap::new(), seconds: HashMap::new(), prices: Default::default() }
+    }
+
+    pub(crate) fn is_local(provider: &str) -> bool {
+        provider.starts_with("mtplx")
+    }
+
+    fn street_price(&self, model: &str) -> Option<ModelPrice> {
+        self.prices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(model.to_string())
+            .or_insert_with(|| street_price(model, &self.names))
+            .clone()
+    }
+
+    /// (cost, energy Wh, energy cost) for a reply.
+    pub(crate) fn price(&self, model: &str, response_id: Option<&str>, stats: &Stats) -> (f64, f64, f64) {
+        let cost = self.street_price(model).map_or(0.0, |p| {
+            p.input_cost(stats.input_tokens) + p.output_cost(stats.output_tokens) + p.cache_cost(0, stats.cache_read_tokens)
+        });
+        let joules = self.power.power_watts * response_id.and_then(|id| self.seconds.get(id)).copied().unwrap_or(0.0);
+        (cost, joules / 3600.0, self.power.joules_cost(joules))
+    }
 }
 
 /// One assistant message per request in one log file, costed at `price` (by model) and
@@ -233,7 +293,7 @@ fn text(entry: &Value, key: &str) -> Option<String> {
 pub(crate) fn parse_log(
     path: &Path,
     power: &OllamaConfig,
-    price: &dyn Fn(&str, &str) -> Option<ModelPrice>,
+    price: &dyn Fn(&str) -> Option<ModelPrice>,
 ) -> Result<Vec<ConversationMessage>> {
     let content = std::fs::read_to_string(path)?;
     let port = port_of(path);
@@ -242,8 +302,8 @@ pub(crate) fn parse_log(
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
-    // Warm-ups name no model: they ran on the port's, which later lines name.
-    let port_model = entries
+    // Warm-ups name no model: they ran on the file's, which later lines name.
+    let file_model = entries
         .iter()
         .find_map(|e| text(e, "served_model_id").or_else(|| text(e, "request_model")))
         .unwrap_or_else(|| format!("mtplx-{port}"));
@@ -256,12 +316,12 @@ pub(crate) fn parse_log(
         if prompt + completion == 0 {
             continue;
         }
-        let model = text(entry, "served_model_id").or_else(|| text(entry, "request_model")).unwrap_or_else(|| port_model.clone());
+        let model = text(entry, "served_model_id")
+            .or_else(|| text(entry, "request_model"))
+            .unwrap_or_else(|| file_model.clone());
         let input = prompt.saturating_sub(cached);
-        let cost = price(&model, &port).map_or(0.0, |p| {
-            p.input_cost(input) + p.output_cost(completion) + p.cache_cost(0, cached)
-        });
-        // No meter here: the request's wall time at the configured draw.
+        let cost = price(&model).map_or(0.0, |p| p.input_cost(input) + p.output_cost(completion) + p.cache_cost(0, cached));
+        // The request's wall time at the configured draw, unless the proxy measured it.
         let joules = power.power_watts * entry.get("request_elapsed_s").and_then(Value::as_f64).unwrap_or(0.0);
         let id = text(entry, "request_id").unwrap_or_else(|| format!("{port}-{line}-{at}"));
         let session = text(entry, "session_id").unwrap_or_else(|| id.clone());
@@ -315,22 +375,23 @@ impl Analyzer for MtplxAnalyzer {
     async fn parse_conversations(&self, sources: Vec<DataSource>) -> Result<Vec<ConversationMessage>> {
         // One lookup per model, shared by the files parsed in parallel.
         let prices: std::sync::Mutex<HashMap<String, Option<ModelPrice>>> = Default::default();
-        let price = |model: &str, port: &str| {
+        let price = |model: &str| {
             let mut prices = prices.lock().unwrap_or_else(|e| e.into_inner());
-            prices.entry(model.to_string()).or_insert_with(|| street_price(model, port, &self.names)).clone()
+            prices.entry(model.to_string()).or_insert_with(|| street_price(model, &self.names)).clone()
         };
         let (mut messages, _report) = self.cache.parse_all(&sources, |path| parse_log(path, &self.power, &price));
         // Pi's requests are counted, with their transcript, in the Pi Agent column.
         let pi = pi_request_ids();
         messages.retain(|m| m.local_hash.as_ref().is_none_or(|id| !pi.contains(id)));
-        Ok(messages)
+        let records = proxy_dir().map(|dir| proxy_records(&dir)).unwrap_or_default();
+        Ok(merge_proxy(messages, &records, &self.power))
     }
 
     async fn get_stats(&self) -> Result<AgenticCodingToolStats> {
         let messages = self.parse_conversations(self.discover_data_sources()?).await?;
         let daily_stats = crate::utils::aggregate_by_date(&messages);
         let num_conversations =
-            messages.iter().map(|m| &m.conversation_hash).collect::<std::collections::HashSet<_>>().len() as u64;
+            messages.iter().map(|m| &m.conversation_hash).collect::<HashSet<_>>().len() as u64;
         Ok(AgenticCodingToolStats {
             daily_stats,
             num_conversations,
@@ -348,8 +409,12 @@ impl Analyzer for MtplxAnalyzer {
 mod tests {
     use super::*;
 
+    fn none(_: &str) -> Option<ModelPrice> {
+        None
+    }
+
     #[test]
-    fn each_request_is_one_reply_and_warmups_take_the_ports_model() {
+    fn each_request_is_one_reply_and_warmups_take_the_files_model() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("request-log-8000.jsonl");
         std::fs::write(
@@ -362,7 +427,6 @@ mod tests {
             ),
         )
         .unwrap();
-        let none = |_: &str, _: &str| None;
         let messages = parse_log(&path, &OllamaConfig::default(), &none).unwrap();
         assert_eq!(messages.len(), 3);
         assert!(messages.iter().all(|m| m.model.as_deref() == Some("qwen-fast") && m.application == Application::Mtplx));
@@ -383,8 +447,8 @@ mod tests {
             r#"{"logged_at_s": 1792474420.57, "request_id": "r", "session_id": "s", "served_model_id": "qwen-fast", "prompt_tokens": 1000000, "cached_tokens": 0, "completion_tokens": 1000000, "request_elapsed_s": 3600}"#,
         )
         .unwrap();
-        let price = |model: &str, port: &str| {
-            assert_eq!((model, port), ("qwen-fast", "8000"));
+        let price = |model: &str| {
+            assert_eq!(model, "qwen-fast");
             Some(ModelPrice { input_per_1m: 0.25, output_per_1m: 1.5, cache_write_per_1m: None, cache_read_per_1m: None, tiers: Vec::new() })
         };
         let power = OllamaConfig { power_watts: 20.0, electricity_per_kwh: 0.30 };
@@ -396,13 +460,39 @@ mod tests {
     }
 
     #[test]
-    fn pi_names_the_model_behind_each_port_for_pricing() {
+    fn pi_names_the_model_behind_each_alias_for_pricing() {
         let names = pi_model_names(
             r#"{"providers": {"mtplx-fast": {"baseUrl": "http://127.0.0.1:8000/v1", "apiKey": "x", "models": [{"id": "qwen-fast", "name": "Qwen 3.6 35B-A3B (local, fast)"}]},
                               "mtplx-code": {"baseUrl": "http://127.0.0.1:8002/v1", "models": [{"id": "qwen-code", "name": "Qwen 3.8 27B 4-bit (local, everyday)"}]}}}"#,
         );
-        assert_eq!(slug(&names["8000"]), "qwen3.6-35b-a3b");
-        assert_eq!(slug(&names["8002"]), "qwen3.8-27b");
+        assert_eq!(slug(&names["qwen-fast"]), "qwen3.6-35b-a3b");
+        assert_eq!(slug(&names["qwen-code"]), "qwen3.8-27b");
         assert_eq!(slug("Qwen 3.8 27B Q8 (local, deep)"), "qwen3.8-27b");
+    }
+
+    #[test]
+    fn the_proxys_text_project_and_energy_are_merged_by_request_id() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("usage-8000.jsonl"),
+            r#"{"ts": 1792474420.5, "model": "qwen-fast", "endpoint": "/v1/chat/completions", "prompt_tokens": 2202, "cached_tokens": 2085, "completion_tokens": 54, "wall_ms": 3900, "energy_j": 360.0, "response_id": "chatcmpl-b", "cwd": "/Users/me/Projects/mediasrc", "caller": "python3", "prompt_preview": "caption this", "reply_preview": "A beach at dusk"}"#,
+        )
+        .unwrap();
+        let log = dir.path().join("request-log-8000.jsonl");
+        std::fs::write(
+            &log,
+            r#"{"logged_at_s": 1792474420.57, "request_id": "chatcmpl-b", "session_id": "s", "served_model_id": "qwen-fast", "prompt_tokens": 2202, "cached_tokens": 2085, "completion_tokens": 54}"#,
+        )
+        .unwrap();
+        let power = OllamaConfig { power_watts: 15.0, electricity_per_kwh: 0.30 };
+        let merged = merge_proxy(parse_log(&log, &power, &none).unwrap(), &proxy_records(dir.path()), &power);
+        assert_eq!(merged.len(), 2);
+        let (prompt, reply) = (&merged[0], &merged[1]);
+        assert_eq!((prompt.role.clone(), prompt.content.as_deref()), (MessageRole::User, Some("caption this")));
+        assert_eq!(reply.content.as_deref(), Some("A beach at dusk"));
+        assert_eq!((prompt.project_hash.as_str(), reply.project_hash.as_str()), ("mediasrc", "mediasrc"));
+        // Measured: 360 J is 0.1 Wh.
+        assert!((reply.stats.energy_wh - 0.1).abs() < 1e-9);
+        assert_eq!(reply.stats.output_tokens, 54);
     }
 }
