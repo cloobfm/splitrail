@@ -15,6 +15,13 @@ set -eu
 host=$1 broker=$2 user=$3 previews=${4:-}
 cd "$(dirname "$0")/.."
 
+# Linux only. A Windows publisher (vrig) is installed with scripts/windows/install_windows_publisher.ps1.
+os=$(ssh -o BatchMode=yes "$host" uname -s 2>/dev/null || true)
+if [ "$os" != "Linux" ]; then
+    echo "$host is not Linux (${os:-no uname}); update it with scripts/windows/install_windows_publisher.ps1" >&2
+    exit 1
+fi
+
 tc=$(dirname "$(rustup which rustc --toolchain nightly)")
 PATH="$tc:$HOME/.cargo/bin:$PATH" RUSTC="$tc/rustc" "$tc/cargo" zigbuild --release \
     --target x86_64-unknown-linux-musl --bin splitrail-dashboard --features rusqlite/bundled

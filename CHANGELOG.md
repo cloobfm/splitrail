@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.112] - 2026-10-21
+
+### Added
+- A Windows GPU box as a publisher (vrig: Windows 10, RTX 4000 Pro, Ollama).
+  `scripts/windows/install_windows_publisher.ps1 -Name vrig -Broker … -User …` installs the
+  cross-built `splitrail-dashboard.exe` as a windowless logon task publishing `mqtt` under its
+  `[mqtt] name`, writes the config through the program's own `config init` (a partial file does
+  not parse; written without a byte-order mark, which Windows PowerShell adds and TOML
+  rejects), and registers the usage proxy (`ollama_proxy_vrig.pyw`: :11434 on the LAN, Ollama
+  behind it on 127.0.0.1:11435) as a second logon task, left disabled until Ollama moves.
+  Installed on vrig: the publisher is online as `vrig 0.111`. The proxy was tested on a spare
+  port against its Ollama: tags, a generation, tokens, model size and family.
+- The proxy measures GPU board power with `nvidia-smi` where there is no `macmon` (summed over
+  cards; the CPU is not counted).
+- Requests from other machines (a shared GPU box) carry the caller's address as their
+  `#project`, where no process can be looked up.
+- `install_mqtt_publisher.sh` refuses a host that is not Linux, so `U` cannot push a Linux
+  binary at the Windows box.
+
 ## [2.0.0-dash-0.111] - 2026-10-21
 
 ### Fixed

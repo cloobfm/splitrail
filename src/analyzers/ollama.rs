@@ -98,8 +98,15 @@ struct UsageEvent {
 /// The project a request came from: the caller's folder (or process), else, on lines from
 /// before the proxy found callers, its address.
 fn project_of(event: &UsageEvent) -> String {
-    crate::utils::caller_project(event.cwd.as_deref(), event.caller.as_deref())
-        .unwrap_or_else(|| hash_text(&format!("ollama:{}", event.client)))
+    crate::utils::caller_project(event.cwd.as_deref(), event.caller.as_deref()).unwrap_or_else(|| {
+        // Another machine (a shared GPU box): its address says who, where a process cannot.
+        let client = event.client.rsplit_once(':').map_or(event.client.as_str(), |(ip, _)| ip);
+        if matches!(client, "127.0.0.1" | "::1" | "localhost") {
+            hash_text(&format!("ollama:{}", event.client))
+        } else {
+            client.to_string()
+        }
+    })
 }
 
 /// Normalise model name from the proxy event to the price feed slug.

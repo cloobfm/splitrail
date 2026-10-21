@@ -246,12 +246,14 @@ def usage_from_object(path, obj):
 
 
 class PowerMeter:
-    """Measures the energy each request uses, from `macmon` (Apple Silicon, no root needed).
+    """Measures the energy each request uses, from `macmon` (Apple Silicon, no root needed) or,
+    on an NVIDIA machine (Windows or Linux), `nvidia-smi`.
 
-    `macmon pipe` reports SoC power (CPU + GPU + memory + neural engine) every second. Each
-    sample's energy is split evenly across the requests running at that moment, so concurrent
-    requests share the draw rather than each claiming all of it. Without macmon, `energy_j` is
-    simply not recorded and Splitrail falls back to the configured wattage.
+    `macmon pipe` reports SoC power (CPU + GPU + memory + neural engine) every second;
+    `nvidia-smi` reports the GPUs' board power, summed across cards (the CPU is not counted).
+    Each sample's energy is split evenly across the requests running at that moment, so
+    concurrent requests share the draw rather than each claiming all of it. Without a meter,
+    `energy_j` is simply not recorded and Splitrail falls back to the configured wattage.
     """
 
     def __init__(self, interval_ms=1000, use_macmon=True):
@@ -263,22 +265,46 @@ class PowerMeter:
         binary = shutil.which("macmon") or next(
             (p for p in ("/opt/homebrew/bin/macmon", "/usr/local/bin/macmon") if os.path.exists(p)), None
         )
-        self.available = use_macmon and binary is not None
-        if self.available:
+        nvidia = shutil.which("nvidia-smi") if use_macmon and binary is None else None
+        self.available = use_macmon and (binary is not None or nvidia is not None)
+        self.kind = "macmon" if binary else "nvidia-smi" if nvidia else None
+        if binary and use_macmon:
+            command = [binary, "pipe", "-i", str(interval_ms)]
+        elif nvidia:
+            command = [nvidia, "--query-gpu=power.draw", "--format=csv,noheader,nounits",
+                       "-lms", str(interval_ms)]
+        else:
+            command = None
+        if self.available and command:
+            # No console window for the meter on Windows (the proxy itself runs windowless).
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             self.proc = subprocess.Popen(
-                [binary, "pipe", "-i", str(interval_ms)],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                creationflags=flags,
             )
             threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self):
+        gpus, pending, last_at = 0, 0.0, None
         for line in self.proc.stdout:
-            try:
-                watts = float(json.loads(line)["all_power"])
-            except (ValueError, KeyError, TypeError):
+            if self.kind == "macmon":
+                try:
+                    watts = float(json.loads(line)["all_power"])
+                except (ValueError, KeyError, TypeError):
+                    continue
+                self.sample(watts, time.monotonic())
                 continue
-            self.sample(watts, time.monotonic())
-        self.available = False  # macmon exited.
+            # nvidia-smi: one line per GPU per interval; lines arriving together are one sample.
+            try:
+                watts = float(line.strip())
+            except ValueError:
+                continue
+            now = time.monotonic()
+            if last_at is not None and now - last_at > 0.2:
+                self.sample(pending, last_at)
+                pending, gpus = 0.0, 0
+            pending, gpus, last_at = pending + watts, gpus + 1, now
+        self.available = False  # The meter exited.
 
     def sample(self, watts, now):
         with self.lock:
@@ -631,7 +657,7 @@ def main():
     ProxyHandler.sizes = ModelSizes(ProxyHandler.upstream)
     server = Server((host, port), ProxyHandler)
     upstream = ProxyHandler.upstream.geturl()
-    meter = "macmon" if ProxyHandler.power.available else "none (configured watts)"
+    meter = ProxyHandler.power.kind if ProxyHandler.power.available else "none (configured watts)"
     print(f"ollama usage proxy {host}:{port} -> {upstream}, logging to {USAGE_FILE}, power: {meter}", flush=True)
     try:
         server.serve_forever()
