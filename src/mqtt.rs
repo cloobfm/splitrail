@@ -309,7 +309,19 @@ pub fn host_slug() -> String {
 /// (`Amberts-MacBook-Pro`), which stays put; `hostname` follows the network (it became
 /// `Amberts-MBP` from a DHCP name), and a new name made this machine's own earlier data look
 /// like another machine's, counted twice. Elsewhere the short hostname.
+static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Use `[mqtt] name` as this machine's name, once, at startup.
+pub fn set_name(name: Option<&str>) {
+    if let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) {
+        let _ = NAME.set(name.to_string());
+    }
+}
+
 fn short_hostname() -> String {
+    if let Some(name) = NAME.get() {
+        return name.clone();
+    }
     let run = |program: &str, args: &[&str]| {
         std::process::Command::new(program)
             .args(args)

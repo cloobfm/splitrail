@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.110] - 2026-10-21
+
+### Added
+- `[mqtt] name = "mbp"` sets this machine's name on the broker and in other dashboards'
+  columns (`Claude@mbp`), so no network or rename can change it. Unset, it is the Local
+  Hostname on macOS (0.109), else the short hostname. After changing it, clear the old name
+  with `splitrail-dashboard mqtt --forget <old name>`.
+
 ## [2.0.0-dash-0.109] - 2026-10-21
 
 ### Fixed

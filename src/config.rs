@@ -73,6 +73,12 @@ pub struct MqttConfig {
     /// Show other machines on the broker as extra columns in the dashboard. On by default.
     #[serde(default)]
     pub roll_up: Option<bool>,
+    /// This machine's name on the broker and in other dashboards' columns (`Claude@mbp`).
+    /// Unset: the Local Hostname on macOS, else the short hostname. Set it so a network or
+    /// rename cannot change it: a new name makes this machine's earlier data look like another
+    /// machine's (clear the old one with `splitrail-dashboard mqtt --forget <old name>`).
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Local inference is costed as the electricity it uses, at the household rate. The proxy

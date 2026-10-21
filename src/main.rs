@@ -175,6 +175,9 @@ async fn main() {
             .unwrap_or(config.formatting.decimal_places),
     };
 
+    // Before anything publishes or reads the broker: this machine's name there.
+    mqtt::set_name(config.mqtt.name.as_deref());
+
     // Prices must be in place before any analyzer parses a message.
     price_feed::init(
         config.pricing.overrides.clone(),
