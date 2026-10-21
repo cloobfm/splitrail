@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.111] - 2026-10-21
+
+### Fixed
+- The Windows build compiles, for the first time: cross-compiled from the Mac with
+  `cargo zigbuild --target x86_64-pc-windows-gnu --features rusqlite/bundled` (24 MB `.exe`).
+  The one error was the TUI's quit-signal listener, which used Unix signals; on Windows it waits
+  for Ctrl-C. Not yet run on Windows.
+
 ## [2.0.0-dash-0.110] - 2026-10-21
 
 ### Added

@@ -545,29 +545,36 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// Wait for SIGTERM, SIGHUP or SIGINT; false if they cannot be listened for.
+#[cfg(unix)]
+async fn wait_for_quit_signal() -> bool {
+    use tokio::signal::unix::{SignalKind, signal};
+    let (Ok(mut term), Ok(mut hup), Ok(mut int)) =
+        (signal(SignalKind::terminate()), signal(SignalKind::hangup()), signal(SignalKind::interrupt()))
+    else {
+        return false;
+    };
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = hup.recv() => {}
+        _ = int.recv() => {}
+    }
+    true
+}
+
+/// Windows has no such signals: Ctrl-C (and Ctrl-Break, closing the console) is the one there is.
+#[cfg(windows)]
+async fn wait_for_quit_signal() -> bool {
+    tokio::signal::ctrl_c().await.is_ok()
+}
+
 /// Turn SIGTERM / SIGHUP / SIGINT into a clean quit. The event loop checks `shutdown` on every
 /// iteration; if it is stuck in a long blocking reload and has not exited within a few seconds,
 /// restore the terminal directly and exit so a `kill` never leaves the shell broken.
 fn spawn_signal_listener(shutdown: Arc<AtomicBool>) {
-    use tokio::signal::unix::{SignalKind, signal};
-
     tokio::spawn(async move {
-        let mut term = match signal(SignalKind::terminate()) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let mut hup = match signal(SignalKind::hangup()) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let mut int = match signal(SignalKind::interrupt()) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        tokio::select! {
-            _ = term.recv() => {}
-            _ = hup.recv() => {}
-            _ = int.recv() => {}
+        if !wait_for_quit_signal().await {
+            return;
         }
         shutdown.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_secs(3)).await;
