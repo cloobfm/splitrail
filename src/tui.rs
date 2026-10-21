@@ -250,6 +250,30 @@ impl Period {
     }
 }
 
+/// Esc: undo the innermost thing open, one level at a time. On the Summary tab: records or
+/// quotas, then verbose; on a tool tab: a filter, then week/month/hour rows, then back to the
+/// Summary tab. False at the top, where there is nothing to go back from.
+fn go_back(state: &mut TuiState) -> bool {
+    if state.selected_tab == 0 {
+        if state.records_view || state.quotas_view {
+            state.records_view = false;
+            state.quotas_view = false;
+        } else if state.summary_verbose_mode {
+            state.summary_verbose_mode = false;
+            state.perf_overlay.enabled = false;
+        } else {
+            return false;
+        }
+    } else if !state.filter.is_empty() {
+        state.filter = SliceFilter::default();
+    } else if state.period != Period::Day {
+        state.period = Period::Day;
+    } else {
+        state.selected_tab = 0;
+    }
+    true
+}
+
 /// Which slices the tool tabs count: one model and/or one project (BZL-138).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SliceFilter {
@@ -850,8 +874,23 @@ async fn run_app(
                     // and the terminal is left with mouse tracking enabled.
                     let ctrl_c = matches!(key.code, KeyCode::Char('c'))
                         && key.modifiers.contains(KeyModifiers::CONTROL);
-                    if ctrl_c || matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                    if ctrl_c || key.code == KeyCode::Char('q') {
                         break;
+                    }
+
+                    // Esc goes back one level; it never quits.
+                    if key.code == KeyCode::Esc {
+                        if go_back(tui_state) {
+                            tui_state.daily_stats_view_start = 0;
+                            for state in table_states.iter_mut() {
+                                state.select(Some(0));
+                            }
+                        } else {
+                            tui_state.status_message = Some("Press q to quit".to_string());
+                            tui_state.status_message_timer = Some(std::time::Instant::now());
+                        }
+                        needs_redraw = true;
+                        continue;
                     }
 
                     // U: build the newer version in the source tree, then restart into it.
@@ -1824,7 +1863,7 @@ fn draw_ui(
 
         let help = if tui_state.selected_tab == 0 {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: days, p: {}, r: {}, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, U: update, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: days, p: {}, r: {}, v: verbose, d: debug log, Next - Last - Slack, m: {} mode, ^L: redraw, U: update, Esc: back, q: quit",
                 if tui_state.quotas_view { "summary" } else { "quotas" },
                 if tui_state.records_view { "summary" } else { "records" },
                 mouse_mode_indicator,
@@ -1832,7 +1871,7 @@ fn draw_ui(
             .style(Style::default().add_modifier(Modifier::DIM))
         } else {
             Paragraph::new(format!(
-                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, g: by {} (now {}), f: model, o: project, x: clear{}, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, U: update, q/Esc: quit",
+                "←/→ or h/l: tabs, ↑/↓ or j/k: navigate, g: by {} (now {}), f: model, o: project, x: clear{}, +/-: load more data, d: debug log, Next - Last - Slack, m: toggle {} mode, ^L: redraw, U: update, Esc: back, q: quit",
                 tui_state.period.next().name(),
                 tui_state.period.name(),
                 if tui_state.filter.is_empty() {
@@ -2795,6 +2834,30 @@ mod period_tests {
         let months = group_by_period(&stats, Period::Month);
         assert_eq!(months.daily_stats.keys().collect::<Vec<_>>(), ["2025-12", "2026-01"]);
         assert_eq!(months.daily_stats["2025-12"].stats.output_tokens, 11);
+    }
+
+    #[test]
+    fn esc_goes_back_one_level_at_a_time_and_never_past_the_top() {
+        let mut state = TuiState {
+            selected_tab: 2,
+            period: Period::Hour,
+            filter: SliceFilter { model: Some("opus".into()), project: None },
+            ..Default::default()
+        };
+        assert!(go_back(&mut state));
+        assert!(state.filter.is_empty());
+        assert!(go_back(&mut state));
+        assert_eq!(state.period, Period::Day);
+        assert!(go_back(&mut state));
+        assert_eq!(state.selected_tab, 0);
+        state.summary_verbose_mode = true;
+        state.records_view = true;
+        assert!(go_back(&mut state));
+        assert!(!state.records_view && state.summary_verbose_mode);
+        assert!(go_back(&mut state));
+        assert!(!state.summary_verbose_mode);
+        // The top: nothing to go back from, and Esc does not quit.
+        assert!(!go_back(&mut state));
     }
 
     fn slice(hour: u8, model: &str, project: &str, output: u64, cost: f64) -> crate::types::Slice {

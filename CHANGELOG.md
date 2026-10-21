@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.106] - 2026-10-20
+
+### Changed
+- Esc goes back one level instead of quitting. On the Summary tab it closes records or quotas,
+  then verbose; on a tool tab it clears a model/project filter, then returns to day rows, then
+  to the Summary tab. With nothing left to close it says "Press q to quit". `q` and Ctrl-C
+  quit as before; the help line reads "Esc: back, q: quit".
+- Publishers are copied compressed (`scp -C`): 11.5 MB becomes about 5 MB on the wire.
+  Measured to devbox-a over a slow link (about 20 KB/s): 8-10 minutes plain, 3-3.5 compressed,
+  for 0.6 s of compression on the Mac.
+
 ## [2.0.0-dash-0.105] - 2026-10-20
 
 ### Added (BZL-238, part 3 of 3)
