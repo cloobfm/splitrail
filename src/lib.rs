@@ -17,6 +17,7 @@ pub mod models;
 pub mod mqtt;
 pub mod records;
 pub mod rollup;
+pub mod servers;
 pub mod plan_limits;
 pub mod price_feed;
 pub mod types;

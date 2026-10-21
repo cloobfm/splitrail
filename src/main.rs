@@ -18,6 +18,7 @@ mod stamp_cache;
 mod models;
 mod mqtt;
 mod rollup;
+mod servers;
 mod notifications;
 mod plan_limits;
 mod records;

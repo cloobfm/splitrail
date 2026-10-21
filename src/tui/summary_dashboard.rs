@@ -1372,6 +1372,17 @@ pub fn get_last_message_preview(
     }
 }
 
+/// `38 tk/s` or, idle, `idle`, for the server row's "via" note.
+fn rate_label(tks: f64) -> String {
+    if tks >= 10.0 {
+        format!("{tks:.0} tk/s")
+    } else if tks > 0.0 {
+        format!("{tks:.1} tk/s")
+    } else {
+        "idle".to_string()
+    }
+}
+
 // Draw visual CLI panels section (compact 2-line design)
 pub fn draw_visual_cli_panels(
     frame: &mut Frame,
@@ -1481,7 +1492,21 @@ pub fn draw_visual_cli_panels(
                     .cloned();
                 create_activity_sparkline_with_prev(stats, render_time_utc, prev, prev_state).0
             });
-        let (_last_role, message_lines) = get_last_message_preview(stats, 50);
+        // A local model server also shows what agents ran on it (BZL-238): their rate beside
+        // its own and their lines in its transcript. Shown only; each request is counted in
+        // one column, the agent's.
+        let via = if crate::servers::is_server(stats) {
+            crate::servers::via(stats, filtered_stats)
+        } else {
+            Vec::new()
+        };
+        let via_tks = crate::servers::via_tks(&via, render_time_utc);
+        let tks_per_sec = &(*tks_per_sec + via_tks);
+        let (_last_role, message_lines) = if via.is_empty() {
+            get_last_message_preview(stats, 50)
+        } else {
+            get_last_message_preview(&crate::servers::with_via(stats, &via), 50)
+        };
 
         let name_color = match state.as_str() {
             s if s.contains("Active") => Color::Green,
@@ -1616,6 +1641,12 @@ pub fn draw_visual_cli_panels(
             Span::raw(" "),
             Span::styled(_idle.clone(), Style::default().fg(Color::DarkGray)),
         ]);
+        if !via.is_empty() {
+            line_spans.push(Span::styled(
+                format!("  🖥 {} via {}", rate_label(via_tks), crate::servers::agents(&via).join(", ")),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
         lines.push(Line::from(line_spans));
 
         // Add separator line below the sparkline graph (to end of content)

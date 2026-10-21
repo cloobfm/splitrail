@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.105] - 2026-10-20
+
+### Added (BZL-238, part 3 of 3)
+- Local model servers show what agents ran on them. In the verbose view, the Ollama and MTPLX
+  rows add the rate of agent requests on their models (`🖥 1.0 tk/s via Pi Agent`) and those
+  requests' lines in their transcript, tagged `via Pi Agent`, with the agent's project. So a
+  busy Pi on mtplx no longer leaves the MTPLX row empty.
+- Shown only: each request is still counted in one column (the agent's, which has the
+  transcript and project), so tk/s, cost, the monthly goal and records add up as before. An
+  agent request is recognised by its model being one the server has run (`qwen-fast`,
+  `qwen3.8:27b-mlx`); other machines' columns are left out (`src/servers.rs`).
+
 ## [2.0.0-dash-0.104] - 2026-10-20
 
 ### Added (BZL-238, parts 1 and 2 of 3)
