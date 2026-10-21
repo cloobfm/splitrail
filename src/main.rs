@@ -78,7 +78,12 @@ enum Commands {
     Pricing(PricingArgs),
     /// Publish live stats to the MQTT broker in `[mqtt]`, without the dashboard (for launchd)
     #[command(about = "Publish live stats to MQTT / Home Assistant without the dashboard")]
-    Mqtt,
+    Mqtt {
+        /// Instead: clear what this machine name left on the broker (a renamed or retired
+        /// machine), so its columns disappear
+        #[arg(long, value_name = "HOST")]
+        forget: Option<String>,
+    },
     /// MCP server on stdio: quotas, where to spend, usage (needs the dashboard running)
     #[command(about = "Model Context Protocol server: plan quotas, where to spend tokens, usage")]
     Mcp,
@@ -181,7 +186,14 @@ async fn main() {
             // No subcommand - run default behavior
             run_default(format_options, config).await;
         }
-        Some(Commands::Mqtt) => run_mqtt(config).await,
+        Some(Commands::Mqtt { forget: Some(host) }) => match mqtt::forget(&config.mqtt, &host).await {
+            Ok(n) => println!("Cleared {n} retained topics for {host}."),
+            Err(e) => {
+                eprintln!("Could not clear {host}: {e:#}");
+                std::process::exit(1);
+            }
+        },
+        Some(Commands::Mqtt { forget: None }) => run_mqtt(config).await,
         Some(Commands::Mcp) => mcp_server::run(),
         Some(Commands::Quotas { json }) => print_quotas(json),
         Some(Commands::Upload) => match run_upload().await.context("Failed to run upload") {

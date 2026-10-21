@@ -305,15 +305,61 @@ pub fn host_slug() -> String {
     Topics::new(&short_hostname()).host_slug
 }
 
+/// This machine's name on the broker. On macOS the Local Hostname you set in Sharing
+/// (`Amberts-MacBook-Pro`), which stays put; `hostname` follows the network (it became
+/// `Amberts-MBP` from a DHCP name), and a new name made this machine's own earlier data look
+/// like another machine's, counted twice. Elsewhere the short hostname.
 fn short_hostname() -> String {
-    std::process::Command::new("hostname")
-        .arg("-s")
-        .output()
-        .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let run = |program: &str, args: &[&str]| {
+        std::process::Command::new(program)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .and_then(|out| String::from_utf8(out.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    (if cfg!(target_os = "macos") { run("scutil", &["--get", "LocalHostName"]) } else { None })
+        .or_else(|| run("hostname", &["-s"]))
         .unwrap_or_else(|| "splitrail".to_string())
+}
+
+/// Clear what `host` left on the broker: its retained state, status and roll-up payloads, and
+/// its Home Assistant sensors. For a machine that is gone or was renamed; its columns disappear
+/// from every dashboard.
+pub async fn forget(config: &MqttConfig, host: &str) -> anyhow::Result<usize> {
+    let broker = config.host.clone().filter(|h| !h.trim().is_empty()).ok_or_else(|| anyhow::anyhow!("no [mqtt] host"))?;
+    let topics = Topics::new(host);
+    let mut options = MqttOptions::new(format!("splitrail-forget-{}", std::process::id()), broker, config.port.unwrap_or(DEFAULT_PORT));
+    options.set_keep_alive(Duration::from_secs(30));
+    options.set_max_packet_size(4 * 1024 * 1024, 4 * 1024 * 1024);
+    if let Some(username) = &config.username {
+        options.set_credentials(username, password(config).unwrap_or_default());
+    }
+    let (client, mut eventloop) = AsyncClient::new(options, 256);
+    // Its sensors are named `splitrail_<slug>_<key>`: find them among the retained configs.
+    let prefix = format!("{DISCOVERY_ROOT}/sensor/splitrail_{}_", topics.host_slug);
+    client.subscribe(format!("{DISCOVERY_ROOT}/sensor/+/config"), QoS::AtMostOnce).await?;
+    let mut doomed: Vec<String> =
+        ["daily", "recent", "limits", "state", "status"].iter().map(|kind| format!("{TOPIC_ROOT}/{}/{kind}", topics.host_slug)).collect();
+    let listen_until = tokio::time::Instant::now() + Duration::from_secs(3);
+    while let Ok(event) = tokio::time::timeout_at(listen_until, eventloop.poll()).await {
+        if let Ok(Event::Incoming(Packet::Publish(p))) = event
+            && p.topic.starts_with(&prefix)
+            && !p.payload.is_empty()
+        {
+            doomed.push(p.topic.clone());
+        }
+    }
+    for topic in &doomed {
+        client.publish(topic, QoS::AtLeastOnce, true, Vec::<u8>::new()).await?;
+    }
+    // Let the deletions go out before leaving.
+    let flush_until = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::timeout_at(flush_until, eventloop.poll()).await.is_ok() {}
+    client.disconnect().await.ok();
+    Ok(doomed.len())
 }
 
 pub fn password(config: &MqttConfig) -> Option<String> {

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.109] - 2026-10-21
+
+### Fixed
+- This Mac counted twice: its MQTT name came from `hostname -s`, which follows the network.
+  When it changed from `Amberts-MacBook-Pro` to `Amberts-MBP` (a DHCP name), the data published
+  under the old name stayed on the broker and showed as another, offline machine (`Amb-Pro`)
+  with its own `Claude@…` columns: this Mac's own history again. Totals, the monthly pace and
+  the records (biggest day, week, month, day cost, goal streak) counted it twice from about
+  23:49 on Oct 20. On macOS the name is now the Local Hostname from Sharing
+  (`scutil --get LocalHostName`), which does not move with the network.
+- `splitrail-dashboard mqtt --forget <host>` clears what a renamed or retired machine left on
+  the broker (state, status, roll-up payloads and its Home Assistant sensors).
+
 ## [2.0.0-dash-0.108] - 2026-10-21
 
 ### Fixed
