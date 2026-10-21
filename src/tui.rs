@@ -1960,7 +1960,10 @@ fn draw_ui(
                     .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
                     .alignment(ratatui::layout::Alignment::Center)
                     .wrap(ratatui::widgets::Wrap { trim: true });
-                frame.render_widget(status_widget, help_chunks[if tui_state.status_message.is_some() { 2 } else { 1 }]);
+                // Over the right-hand part of the help bar; there are only two parts (0.106 asked
+                // for a third, and the "Press q to quit" message panicked the dashboard).
+                frame.render_widget(Clear, help_chunks[1]);
+                frame.render_widget(status_widget, help_chunks[1]);
             }
         }
     } else {
@@ -2841,6 +2844,41 @@ mod period_tests {
         let months = group_by_period(&stats, Period::Month);
         assert_eq!(months.daily_stats.keys().collect::<Vec<_>>(), ["2025-12", "2026-01"]);
         assert_eq!(months.daily_stats["2025-12"].stats.output_tokens, 11);
+    }
+
+    #[test]
+    fn a_status_message_draws_without_panicking() {
+        // 0.106-0.113 drew it into a third part of the two-part help bar: the first Esc at the
+        // top ("Press q to quit") panicked the dashboard.
+        let stats = AgenticCodingToolStats {
+            daily_stats: Default::default(),
+            num_conversations: 0,
+            messages: Vec::new(),
+            analyzer_name: "t".into(),
+        };
+        let mut state = TuiState {
+            status_message: Some("Press q to quit".into()),
+            status_message_timer: Some(std::time::Instant::now()),
+            ..Default::default()
+        };
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 40)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_ui(
+                    frame,
+                    &[&stats],
+                    &crate::utils::NumberFormatOptions::default(),
+                    &mut [TableState::default()],
+                    &mut state,
+                    Arc::new(Mutex::new(UploadStatus::None)),
+                    &None,
+                    chrono::Utc::now(),
+                    SystemTime::now(),
+                )
+            })
+            .unwrap();
+        let screen: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(screen.contains("Press q to quit"));
     }
 
     #[test]

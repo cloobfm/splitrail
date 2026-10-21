@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.114] - 2026-10-21
+
+### Fixed
+- The dashboard panicked ("index out of bounds: the len is 2 but the index is 2", tui.rs) when a
+  status message was shown: it was drawn into a third part of a help bar that has two. Present
+  since the Slack toggle's message, but rarely hit until 0.106 made Esc at the top level show
+  "Press q to quit", so the first Esc there crashed it. It is drawn over the right-hand part
+  now. A screen test draws a status message and fails with the old line.
+
 ## [2.0.0-dash-0.113] - 2026-10-21
 
 ### Added
