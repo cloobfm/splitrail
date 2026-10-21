@@ -1032,6 +1032,8 @@ async fn run_app(
                                 if let Err(e) = config.save(false) {
                                     crate::utils::report(format!("Failed to save config: {e}"));
                                 } else {
+                                    // Takes effect now, not at the next start.
+                                    crate::notifications::set_slack_enabled(config.notifications.slack.enabled);
                                     // Set status message with auto-clear timer
                                     let status = if config.notifications.slack.enabled {
                                         "✅ Slack notifications enabled"

@@ -10,6 +10,20 @@ use tokio::sync::watch;
 use crate::config::SlackConfig;
 use crate::types::{AgenticCodingToolStats, Application, ConversationMessage, MessageRole, MultiAnalyzerStats};
 
+/// Whether Slack gets the alerts, as the config says now: set at start, by `s` in the dashboard
+/// and on each check from the file. The sender is built once at start, so this has to be read
+/// live; before, switching Slack off only changed the file and the running dashboard kept posting.
+static SLACK_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turn Slack delivery on or off for the running process.
+pub fn set_slack_enabled(on: bool) {
+    SLACK_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn slack_enabled() -> bool {
+    SLACK_ON.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub struct NotificationManager {
     settings: NotificationSettings,
     slack: Option<SlackNotifier>,
@@ -29,11 +43,9 @@ impl NotificationManager {
             return None;
         }
 
-        let slack = if config.notifications.slack.enabled {
-            SlackNotifier::from_config(&config.notifications.slack)
-        } else {
-            None
-        };
+        // Built whenever a webhook is configured, so switching Slack on later needs no restart.
+        let slack = SlackNotifier::from_config(&config.notifications.slack);
+        set_slack_enabled(config.notifications.slack.enabled);
 
         Some(Self {
             settings: NotificationSettings {
@@ -63,6 +75,10 @@ impl NotificationManager {
                     }
                 }
                 _ = ticker.tick() => {
+                    // Follow the file too, for a hand edit or another dashboard's `s`.
+                    if let Ok(Some(config)) = crate::config::Config::load() {
+                        set_slack_enabled(config.notifications.slack.enabled);
+                    }
                     self.check_and_notify(&latest_stats).await?;
                 }
             }
@@ -107,7 +123,7 @@ impl NotificationManager {
                     let text = build_notification_text(&alert);
 
                     // Only send one notification per analyzer per tick
-                    if let Some(slack) = &self.slack {
+                    if let Some(slack) = self.slack.as_ref().filter(|_| slack_enabled()) {
                         if let Err(e) = slack.send(&text).await {
                             crate::utils::report(format!(
                                 "⚠️ Failed to deliver Slack notification: {e:#}"
@@ -490,4 +506,17 @@ pub fn next_notification_eta_seconds(
     }
 
     best
+}
+
+#[cfg(test)]
+mod slack_switch_tests {
+    use super::*;
+
+    #[test]
+    fn switching_slack_off_takes_effect_in_the_running_process() {
+        set_slack_enabled(true);
+        assert!(slack_enabled());
+        set_slack_enabled(false);
+        assert!(!slack_enabled());
+    }
 }

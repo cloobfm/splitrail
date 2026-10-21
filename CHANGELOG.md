@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.116] - 2026-10-21
+
+### Fixed
+- Slack messages kept coming after Slack was switched off. The sender was built once at start,
+  and `s` (or editing `[notifications.slack] enabled`) only changed the config file, so a
+  dashboard started with Slack on posted until it was restarted: here from 02:37 to well after
+  it was switched off at 10:27. The switch now takes effect at once, and the notifier re-reads
+  the setting on every check (15 s), so a hand edit counts too.
+
 ## [2.0.0-dash-0.115] - 2026-10-21
 
 ### Added
