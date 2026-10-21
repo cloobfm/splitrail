@@ -1166,6 +1166,14 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
         caching: CachingSupport::None,
     },
+    // MiniMax M3.1 Flash (launched 2026-10-19): one rate across the whole window.
+    "minimax-m3.1-flash" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 0.15,
+            output_per_1m: 0.6,
+        },
+        caching: CachingSupport::OpenAI { cached_input_per_1m: 0.015 },
+    },
     "minimax-m2.5" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 0.3,
@@ -1802,6 +1810,8 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
 
     // MiniMax aliases
     "minimax-m3" => "minimax-m3",
+    "minimax-m3.1-flash" => "minimax-m3.1-flash",
+    "minimax/minimax-m3.1-flash" => "minimax-m3.1-flash",
     "minimax/minimax-m3" => "minimax-m3",
     "MiniMax-M3" => "minimax-m3",
     "minimax-m2.5" => "minimax-m2.5",

@@ -357,18 +357,24 @@ class ModelSizes:
         self.fetched = None  # monotonic() can start near 0, so no "long ago" sentinel.
         self.lock = threading.Lock()
 
+    @staticmethod
+    def _names(model):
+        """`/api/tags` names a model with its tag: a request for `qwen3.8-64k` means
+        `qwen3.8-64k:latest`."""
+        return [model] if ":" in model else [model, f"{model}:latest"]
+
     def get(self, model):
         with self.lock:
             stale = self.fetched is None or time.monotonic() - self.fetched > 60
-            if model not in self.sizes and stale:
+            if not any(n in self.sizes for n in self._names(model)) and stale:
                 self.fetched = time.monotonic()
                 self._refresh()
-            return self.sizes.get(model)
+            return next((self.sizes[n] for n in self._names(model) if n in self.sizes), None)
 
     def family(self, model):
         """The family, once `get` has looked the model up."""
         with self.lock:
-            return self.families.get(model)
+            return next((self.families[n] for n in self._names(model) if n in self.families), None)
 
     def _refresh(self):
         conn = http.client.HTTPConnection(self.upstream.hostname, self.upstream.port or 80, timeout=5)

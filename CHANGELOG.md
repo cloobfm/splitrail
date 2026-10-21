@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.107] - 2026-10-20
+
+### Fixed
+- `minimax-m3.1-flash` costed at $0: MiniMax M3.1 Flash (launched 2026-10-19; Claude Code was
+  pointed at it today) is not in the price feed yet. Added to the built-in table at its
+  published $0.15 in / $0.60 out per 1M, $0.015 cached input.
+- Ollama `qwen3.8-64k` costed at $0. Two causes: Ollama's `/api/tags` names it
+  `qwen3.8-64k:latest`, so the proxy's size lookup by the bare name missed (it now tries
+  `:latest` too), and a context-length variant (`-64k`) matched no hosted name (it is now priced
+  as its model, `qwen3.8-27b`). Lines logged without a size borrow one from another line of the
+  same model, or ask Ollama's `/api/show` once per run (`/api/tags` leaves size and family empty
+  for MLX models).
+- "Price feed changed azure/gpt-4o-mini-audio-preview… by more than 10x" no longer shows on
+  screen: the feed lists thousands of models, almost none in use, and the guard keeps the
+  previous price anyway. It goes to the log, and `pricing refresh` still reports it.
+
 ## [2.0.0-dash-0.106] - 2026-10-20
 
 ### Changed

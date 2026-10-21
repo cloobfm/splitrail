@@ -352,6 +352,10 @@ class CallerTests(unittest.TestCase):
                 client.wait()
                 listener.close()
 
+    def test_a_model_named_without_its_tag_is_found_under_latest(self):
+        self.assertEqual(proxy.ModelSizes._names("qwen3.8-64k"), ["qwen3.8-64k", "qwen3.8-64k:latest"])
+        self.assertEqual(proxy.ModelSizes._names("qwen3:8b"), ["qwen3:8b"])
+
     def test_an_unknown_port_names_nobody(self):
         self.assertEqual(proxy.caller_info(1), {})
 

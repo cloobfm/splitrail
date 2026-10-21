@@ -366,9 +366,11 @@ pub async fn refresh() -> Result<RefreshReport> {
     let (models, rejected) = guard_jumps(fetched, &previous, |name| {
         crate::models::builtin_flat_price(name)
     });
+    // Logged, not shown: the feed lists thousands of models, almost none of them in use, and a
+    // rejected jump keeps the previous price anyway. `pricing refresh` reports them too.
     for name in &rejected {
-        warn_once(format!(
-            "WARNING: Price feed changed {name} by more than {MAX_JUMP}x; keeping the previous price."
+        crate::utils::log_error(format!(
+            "Price feed changed {name} by more than {MAX_JUMP}x; keeping the previous price."
         ));
     }
 

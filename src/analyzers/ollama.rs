@@ -115,6 +115,11 @@ pub fn street_names(model: &str, param_size: Option<&str>) -> Vec<String> {
     let lower = model.trim().to_lowercase();
     let lower = lower.strip_prefix("library/").unwrap_or(&lower);
     let (base, tag) = lower.split_once(':').unwrap_or((lower, ""));
+    // A context-length variant (`qwen3.8-64k`, made with a Modelfile) is the same model.
+    let base = base
+        .rsplit_once('-')
+        .filter(|(_, suffix)| suffix.len() > 1 && suffix.ends_with('k') && suffix[..suffix.len() - 1].chars().all(|c| c.is_ascii_digit()))
+        .map_or(base, |(stem, _)| stem);
     let size_from_tag = tag.split(['-', '_']).next().filter(|t| {
         t.len() > 1
             && t.ends_with(['b', 'm'])
@@ -175,6 +180,44 @@ pub fn family_fallback(sizes: &[(f64, String)], own: Option<f64>) -> Option<Stri
     above.or(below).map(|(_, name)| name.clone())
 }
 
+/// Ollama's own details for a model (`/api/show` on the real server, behind the proxy):
+/// (parameter count, family), for lines the proxy logged without them. `/api/tags` leaves both
+/// empty for MLX models. Asked once per model per run; (None, None) when Ollama is not running.
+fn ollama_details(model: &str) -> (Option<String>, Option<String>) {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, (Option<String>, Option<String>)>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(found) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(model) {
+        return found.clone();
+    }
+    let found = ask_ollama_show(model).unwrap_or_default();
+    cache.lock().unwrap_or_else(|e| e.into_inner()).insert(model.to_string(), found.clone());
+    found
+}
+
+fn ask_ollama_show(model: &str) -> Option<(Option<String>, Option<String>)> {
+    use std::io::{Read, Write};
+    let upstream = std::env::var("OLLAMA_UPSTREAM").unwrap_or_else(|_| "http://127.0.0.1:11435".into());
+    let address = upstream.trim_start_matches("http://").trim_end_matches('/').to_string();
+    let addr = address.parse::<std::net::SocketAddr>().ok()?;
+    let timeout = std::time::Duration::from_secs(1);
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, timeout).ok()?;
+    stream.set_read_timeout(Some(timeout)).ok()?;
+    let body = serde_json::json!({ "model": model }).to_string();
+    let request = format!(
+        "POST /api/show HTTP/1.0\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    let details: serde_json::Value = serde_json::from_str(response.split_once("\r\n\r\n")?.1).ok()?;
+    let field = |key: &str| {
+        details.pointer(&format!("/details/{key}")).and_then(|v| v.as_str()).filter(|v| !v.is_empty()).map(str::to_string)
+    };
+    Some((field("parameter_size"), field("family")))
+}
+
 fn street_price(model: &str, param_size: Option<&str>, family: Option<&str>) -> Option<ModelPrice> {
     if let Some((price, _)) = price_feed::lookup(model) {
         return Some(price);
@@ -210,11 +253,17 @@ pub fn parse_usage_log(
 ) -> Vec<ConversationMessage> {
     let source_str = source.to_string_lossy();
     let mut prices: HashMap<String, Option<ModelPrice>> = HashMap::new();
-    // Lines written before the proxy recorded families borrow one from a later line.
+    // Lines written before the proxy recorded families or sizes (or whose model it missed, like
+    // `qwen3.8-64k`, listed by Ollama as `qwen3.8-64k:latest`) borrow them from another line.
     let families: HashMap<String, String> = content
         .lines()
         .filter_map(|line| serde_json::from_str::<UsageEvent>(line.trim()).ok())
         .filter_map(|event| Some((event.model, event.family?)))
+        .collect();
+    let sizes: HashMap<String, String> = content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<UsageEvent>(line.trim()).ok())
+        .filter_map(|event| Some((event.model, event.param_size?)))
         .collect();
     content
         .lines()
@@ -243,7 +292,12 @@ pub fn parse_usage_log(
                 .entry(event.model.clone())
                 .or_insert_with(|| {
                     let family = event.family.as_deref().or(families.get(&event.model).map(String::as_str));
-                    street_price(&event.model, event.param_size.as_deref(), family)
+                    let size = event.param_size.as_deref().or(sizes.get(&event.model).map(String::as_str));
+                    // Still unknown: ask Ollama itself (once per model per run).
+                    let asked = (size.is_none() || family.is_none()).then(|| ollama_details(&event.model));
+                    let size = size.or(asked.as_ref().and_then(|(s, _)| s.as_deref()));
+                    let family = family.or(asked.as_ref().and_then(|(_, f)| f.as_deref()));
+                    street_price(&event.model, size, family)
                 })
                 .as_ref()
                 .map_or(0.0, |price| {
@@ -433,6 +487,29 @@ mod tests {
         let reply = messages.iter().find(|m| m.role == MessageRole::Assistant).unwrap();
         assert_eq!(reply.model.as_deref(), Some("qwen3-embedding:0.6b"));
         assert_eq!((reply.stats.input_tokens, reply.stats.output_tokens), (37, 0));
+    }
+
+    #[test]
+    fn a_context_length_variant_is_priced_as_its_model() {
+        assert_eq!(street_names("qwen3.8-64k", Some("27.8B")), ["qwen3.8-27b", "qwen3.8"]);
+        assert_eq!(street_names("qwen3.8:27b-mlx", None), ["qwen3.8-27b", "qwen3.8"]);
+        // A name that only looks alike keeps its suffix.
+        assert_eq!(street_names("deepseek-r1", None), ["deepseek-r1"]);
+    }
+
+    #[test]
+    fn a_line_without_a_size_borrows_one_from_the_same_model() {
+        crate::price_feed::init(Default::default(), true);
+        let log = concat!(
+            r#"{"ts": 1790880000, "model": "qwen3.8-64k", "endpoint": "/v1/chat/completions", "prompt_tokens": 1000000, "cached_tokens": 0, "completion_tokens": 1000000, "duration_ms": 1, "client": "127.0.0.1"}"#, "\n",
+            r#"{"ts": 1790880001, "model": "qwen3.8-64k", "endpoint": "/v1/chat/completions", "prompt_tokens": 1, "cached_tokens": 0, "completion_tokens": 1, "duration_ms": 1, "client": "127.0.0.1", "param_size": "27.8B", "family": "qwen3_5"}"#, "\n",
+        );
+        let messages = parse_usage_log(log, Path::new("/test.jsonl"), &OllamaConfig::default());
+        let first = messages.iter().find(|m| m.stats.output_tokens == 1_000_000).unwrap();
+        // Priced as a 27-28B Qwen when the feed has one; never left at $0 for want of a size
+        // the other line knew.
+        let priced_alone = parse_usage_log(log.lines().next().unwrap(), Path::new("/t.jsonl"), &OllamaConfig::default())[0].stats.cost;
+        assert!(first.stats.cost >= priced_alone);
     }
 
     #[test]
