@@ -295,6 +295,7 @@ fn start_publishers() {
         return;
     }
     let config = crate::config::Config::load().ok().flatten().unwrap_or_default().mqtt;
+    let ssh = config.ssh.clone();
     let (Some(broker), Some(user)) = (config.host, config.username) else {
         crate::utils::log_error("Update: no MQTT broker configured to install publishers against");
         return;
@@ -307,8 +308,10 @@ fn start_publishers() {
             std::fs::OpenOptions::new().create(true).append(true).open(p).ok()
         });
         for target in targets {
-            let mut command = std::process::Command::new(source_dir().join("scripts/install_mqtt_publisher.sh"));
-            command.args([&target.host, &broker, &user]).current_dir(source_dir());
+            // Linux or Windows, picked by the script from what the host answers.
+            let ssh_host = ssh.get(&target.host).cloned().unwrap_or_else(|| target.host.clone());
+            let mut command = std::process::Command::new(source_dir().join("scripts/update_publisher.sh"));
+            command.args([&ssh_host, &target.host, &broker, &user]).current_dir(source_dir());
             let ok = run_tracked(command, log.as_ref().and_then(|l| l.try_clone().ok()), &target.slug);
             if !ok {
                 crate::utils::log_error(format!("Update: installing on {} failed; see ~/.config/splitrail/update.log", target.host));

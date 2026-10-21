@@ -45,12 +45,17 @@ $publisher = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$here\s
 Register-ScheduledTask -TaskName "splitrail-publisher" -Action $publisher -Trigger $logon `
     -Settings $settings -Principal $principal -Force | Out-Null
 
-$proxy = New-ScheduledTaskAction -Execute $Python -Argument "`"$here\ollama_proxy_vrig.pyw`"" -WorkingDirectory $here
-Register-ScheduledTask -TaskName "splitrail-ollama-proxy" -Action $proxy -Trigger $logon `
-    -Settings $settings -Principal $principal -Force | Out-Null
-Disable-ScheduledTask -TaskName "splitrail-ollama-proxy" | Out-Null
+# Created once, disabled; a reinstall (an update with U) leaves it as it is, on or off, and does
+# not restart it: a running proxy carries other machines' requests, and picks up new code at
+# the next logon or an explicit restart.
+if (-not (Get-ScheduledTask -TaskName "splitrail-ollama-proxy" -ErrorAction SilentlyContinue)) {
+    $proxy = New-ScheduledTaskAction -Execute $Python -Argument "`"$here\ollama_proxy_vrig.pyw`"" -WorkingDirectory $here
+    Register-ScheduledTask -TaskName "splitrail-ollama-proxy" -Action $proxy -Trigger $logon `
+        -Settings $settings -Principal $principal -Force | Out-Null
+    Disable-ScheduledTask -TaskName "splitrail-ollama-proxy" | Out-Null
+}
 
 # Restart the publisher now (a reinstall replaces a running one).
 Get-Process splitrail-dashboard -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-ScheduledTask -TaskName "splitrail-publisher"
-"installed: publisher started as $Name; proxy task disabled until Ollama moves to :11435"
+"installed: publisher started as $Name; proxy task " + (Get-ScheduledTask -TaskName "splitrail-ollama-proxy").State

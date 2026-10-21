@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.113] - 2026-10-21
+
+### Added
+- `U` updates a Windows publisher (vrig) as well as Linux ones. `scripts/update_publisher.sh`
+  asks the host what it is over ssh and hands Linux to `install_mqtt_publisher.sh` and Windows
+  to `scripts/windows/update_windows_publisher.sh`, which cross-builds the `.exe`, stops the
+  running one (Windows locks it), copies the files compressed and reruns the installer. The
+  Ollama proxy task is left as it is, on or off, and not restarted, so an update never drops
+  other machines' requests. Checked on vrig: 52 s end to end.
+- `[mqtt.ssh]` maps a publisher's name to the ssh host to reach it by, where they differ
+  (`vrig = "VRig"`: ssh aliases are case-sensitive, and `vrig` went to the wrong host).
+
 ## [2.0.0-dash-0.112] - 2026-10-21
 
 ### Added

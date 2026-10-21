@@ -79,6 +79,10 @@ pub struct MqttConfig {
     /// machine's (clear the old one with `splitrail-dashboard mqtt --forget <old name>`).
     #[serde(default)]
     pub name: Option<String>,
+    /// Publisher name -> the ssh host `U` reaches it by, where they differ (ssh aliases are
+    /// case-sensitive): `[mqtt.ssh]` `vrig = "VRig"`.
+    #[serde(default)]
+    pub ssh: std::collections::HashMap<String, String>,
 }
 
 /// Local inference is costed as the electricity it uses, at the household rate. The proxy
