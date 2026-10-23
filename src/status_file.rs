@@ -85,6 +85,24 @@ pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
         .filter(|t| t.tks > 0.0 || t.cost_today > 0.0 || t.limits.is_some())
         .collect();
     tools.sort_by(|a, b| b.tks.total_cmp(&a.tks).then(b.cost_today.total_cmp(&a.cost_today)));
+    // Other logins on this machine's Claude accounts: each its own allowance, one `/login` away.
+    let other_logins: Vec<Value> = tools
+        .iter()
+        .filter(|t| t.name.starts_with("Claude (") && !t.name.contains('@'))
+        .flat_map(|t| {
+            crate::plan_limits::other_logins(&t.name).into_iter().map(move |o| {
+                json!({
+                    "name": format!("{} · {}", t.name, short_login(&o.account)),
+                    "account": o.account,
+                    "tks": 0.0,
+                    "cost_today": 0.0,
+                    "switch": true,
+                    "limits": {"five_hour": Value::Null, "monthly": Value::Null,
+                               "seven_day": window(Some(o.seven_day))},
+                })
+            })
+        })
+        .collect();
     let publishers: Vec<Value> = crate::rollup::publishers()
         .into_iter()
         .map(|p| json!({ "host": p.host, "version": p.version, "online": p.online, "behind": p.behind() }))
@@ -111,10 +129,17 @@ pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
                     "seven_day": window(t.limits.and_then(|l| l.seven_day)),
                     "monthly": window(t.limits.and_then(|l| l.monthly)),
                 })),
-        })).collect::<Vec<_>>(),
+        })).chain(other_logins).collect::<Vec<_>>(),
         "publishers": publishers,
         "month": month_pace(stats, now.with_timezone(&Local), goal_tks),
     })
+}
+
+/// `a@virti.us (Virtius)` -> `a@Virtius`; `a@virti.us (personal)` -> `a`.
+fn short_login(account: &str) -> String {
+    let (email, org) = account.split_once(" (").map_or((account, ""), |(e, o)| (e, o.trim_end_matches(')')));
+    let name = email.split('@').next().unwrap_or(email);
+    if org.is_empty() || org == "personal" { name.to_string() } else { format!("{name}@{org}") }
 }
 
 fn write(payload: &Value) -> std::io::Result<()> {
@@ -198,6 +223,13 @@ mod tests {
         assert_eq!(names, ["Status Test Busy", "Status Test Quiet"]);
         assert_eq!(payload["tks"], 11.0); // 9,900 output tokens over the 15-minute window.
         assert_eq!(payload["cost_today"], 2.5);
+    }
+
+    #[test]
+    fn other_logins_get_short_names() {
+        assert_eq!(short_login("a@virti.us (Virtius)"), "a@Virtius");
+        assert_eq!(short_login("a@virti.us (personal)"), "a");
+        assert_eq!(short_login("plain"), "plain");
     }
 
     #[test]

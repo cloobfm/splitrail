@@ -471,6 +471,69 @@ pub fn limits_for_analyzer(analyzer_name: &str) -> Option<AccountLimits> {
     parse_snapshot(&content, now_secs)
 }
 
+/// A login on a Claude account other than the one signed in now, with its weekly window as it
+/// stands: the status line recorded it when that login last ran.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OtherLogin {
+    /// `a@virti.us (Virtius)`, `ambertyeung@gmail.com (personal)`.
+    pub account: String,
+    pub seven_day: WindowStatus,
+}
+
+const WEEK_SECS: f64 = 7.0 * 24.0 * 3600.0;
+
+/// The weekly window of a login last seen with `window`, as of `now`. A weekly window resets at
+/// the same time each week, so a reset that has passed is followed by another a week later:
+/// the window is then empty (no one used the login since) with a known next reset.
+fn rolled_week(window: LimitWindow, now: f64) -> Option<WindowStatus> {
+    let used = window.used_percentage?;
+    let mut reset = window.resets_at?;
+    if reset > now {
+        return Some(WindowStatus { used_percentage: used, resets_in_secs: Some((reset - now) as i64) });
+    }
+    while reset <= now {
+        reset += WEEK_SECS;
+    }
+    Some(WindowStatus { used_percentage: 0.0, resets_in_secs: Some((reset - now) as i64) })
+}
+
+/// The other logins a Claude column's status line has seen (BZL-238 follow-up): each a
+/// separate allowance, reached by `/login`.
+pub fn other_logins(analyzer_name: &str) -> Vec<OtherLogin> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    let Some(content) = account_label(analyzer_name)
+        .and_then(|label| std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok())
+    else {
+        return Vec::new();
+    };
+    other_logins_in(&content, now)
+}
+
+fn other_logins_in(content: &str, now: f64) -> Vec<OtherLogin> {
+    #[derive(Deserialize)]
+    struct Entry {
+        rate_limits: Option<RateLimits>,
+    }
+    #[derive(Deserialize)]
+    struct File {
+        login: Option<String>,
+        #[serde(default)]
+        logins: HashMap<String, Entry>,
+    }
+    let Ok(file) = serde_json::from_str::<File>(content) else { return Vec::new() };
+    let mut out: Vec<OtherLogin> = file
+        .logins
+        .into_iter()
+        .filter(|(account, _)| Some(account) != file.login.as_ref())
+        .filter_map(|(account, entry)| {
+            let seven_day = rolled_week(entry.rate_limits?.seven_day?, now)?;
+            Some(OtherLogin { account, seven_day })
+        })
+        .collect();
+    out.sort_by(|a, b| a.account.cmp(&b.account));
+    out
+}
+
 /// The account behind an analyzer's column: what its own logs report (Codex's ChatGPT plan),
 /// `local` for Ollama, or the account a status line snapshot was last logged in to, as the email's local part with
 /// `·team` for a team organization (`support·team` for `support@virti.us` on a team plan). `None` for tools without snapshots or older snapshots.
@@ -632,6 +695,29 @@ mod tests {
         assert_eq!(parse_login(&snapshot(1.0, 2.0, 3.0)), None);
         let team = r#"{"captured_at":1,"rate_limits":null,"login":"s@v.us (Virtius)","login_name":"s·team"}"#;
         assert_eq!(parse_login(team).as_deref(), Some("s·team"));
+    }
+
+    #[test]
+    fn other_logins_carry_their_week_rolled_forward_to_now() {
+        let day = 86_400.0;
+        let now = 1_000.0 * day;
+        let content = format!(
+            r#"{{"login": "a@virti.us (personal)", "captured_at": {now},
+                "logins": {{
+                  "a@virti.us (personal)": {{"captured_at": {now}, "rate_limits": {{"seven_day": {{"used_percentage": 34, "resets_at": {}}}}}}},
+                  "a@virti.us (Virtius)": {{"captured_at": {}, "rate_limits": {{"seven_day": {{"used_percentage": 60, "resets_at": {}}}}}}},
+                  "b@virti.us (Virtius)": {{"captured_at": {}, "rate_limits": {{"seven_day": {{"used_percentage": 20, "resets_at": {}}}}}}}
+                }}}}"#,
+            now + day,
+            now - 10.0 * day, now - 9.0 * day,
+            now - 1.0 * day, now + 2.0 * day,
+        );
+        let others = other_logins_in(&content, now);
+        assert_eq!(others.iter().map(|o| o.account.as_str()).collect::<Vec<_>>(), ["a@virti.us (Virtius)", "b@virti.us (Virtius)"]);
+        // Reset 9 days ago: a week later (2 days ago) it reset again, and next resets in 5 days, empty.
+        assert_eq!(others[0].seven_day, WindowStatus { used_percentage: 0.0, resets_in_secs: Some((5.0 * day) as i64) });
+        // Not reset yet: as last seen.
+        assert_eq!(others[1].seven_day, WindowStatus { used_percentage: 20.0, resets_in_secs: Some((2.0 * day) as i64) });
     }
 
     #[test]

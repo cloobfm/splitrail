@@ -179,6 +179,8 @@ pub struct Window {
     pub spend: Option<Spend>,
     /// The tool's output tk/s over the last 15 minutes.
     pub now_tks: f64,
+    /// Another login on the account, not signed in: reached by `/login`.
+    pub switch_login: bool,
 }
 
 impl Window {
@@ -298,6 +300,7 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("?");
         let account = tool.get("account").and_then(Value::as_str).map(str::to_string);
         let now_tks = tool.get("tks").and_then(Value::as_f64).unwrap_or(0.0);
+        let switch_login = tool.get("switch").and_then(Value::as_bool).unwrap_or(false);
         for key in ["five_hour", "seven_day", "monthly"] {
             let Some(w) = tool.get("limits").and_then(|l| l.get(key)).filter(|w| !w.is_null()) else {
                 continue;
@@ -323,6 +326,7 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
                 projected,
                 spend: w.get("spend").and_then(Spend::from_json),
                 now_tks,
+                switch_login,
             });
         }
     }
@@ -466,6 +470,10 @@ impl Pick {
         let secs = |s: Option<i64>| s.map(human_secs).unwrap_or_else(|| "?".into());
         if !self.available {
             return format!("{} full · back in {}", w.window, secs(w.resets_in_secs));
+        }
+        if w.switch_login {
+            // Not signed in: it sits unused unless you switch to it.
+            return format!("switch with /login · {:.0}% free", (100.0 - w.used).max(0.0));
         }
         match (w.projected, w.runs_out_in_secs()) {
             (_, Some(out)) => format!("runs out in {}", human_secs(out)),
@@ -631,6 +639,20 @@ pub fn usage_answer(status: &Value, now: DateTime<Utc>) -> Value {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_fresh_signed_out_login_ranks_as_a_whole_week_to_use() {
+        // Two days into a fresh week nobody has touched: the whole allowance would go unused.
+        let status = serde_json::json!({"tools": [{
+            "name": "Claude (v) · a@Virtius", "account": "a@virti.us (Virtius)", "tks": 0.0, "switch": true,
+            "limits": {"five_hour": null, "monthly": null, "seven_day": {"used": 0.0, "resets_in": 5 * 86_400}}
+        }]});
+        let windows = windows(&status, Utc::now());
+        assert!(windows[0].switch_login);
+        let picks = where_to_spend(&windows);
+        assert_eq!(picks[0].action(), "USE NOW");
+        assert_eq!(picks[0].why(), "switch with /login · 100% free");
+    }
+
     fn status() -> Value {
         json!({"updated": 1000.0, "tools": [
             // Weekly 40% used with 1 day left of 7: pace 46.7%, about 53% would expire.
@@ -692,7 +714,7 @@ mod tests {
         // 70% of the week cost $381 for 3.77M output tokens; 9.2 hours left.
         let w = Window {
             tool: "Claude (main)".into(), account: None, window: "week", used: 70.0, resets_at: None,
-            resets_in_secs: Some(33_120), projected: Some(74.0), now_tks: 140.0,
+            resets_in_secs: Some(33_120), projected: Some(74.0), now_tks: 140.0, switch_login: false,
             spend: Some(Spend { input: 9_764.0, output: 3_770_000.0, cache_write: 17_259_201.0,
                                 cache_read: 1_094_254_105.0, cost: 381.0 }),
         };
@@ -717,7 +739,7 @@ mod tests {
         // 70% of a week used in 3.5 days: 20%/day, so the last 30% lasts 1.5 days.
         let w = Window {
             tool: "t".into(), account: None, window: "week", used: 70.0, resets_at: None,
-            resets_in_secs: Some(302_400), projected: Some(140.0), spend: None, now_tks: 0.0,
+            resets_in_secs: Some(302_400), projected: Some(140.0), spend: None, now_tks: 0.0, switch_login: false,
         };
         assert_eq!(w.runs_out_in_secs(), Some(129_600));
     }

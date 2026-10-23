@@ -188,7 +188,9 @@ def current_login(label):
 # Sessions not heard from in this long are forgotten.
 SESSION_TTL_SECS = 24 * 3600
 # Logins not heard from in this long are dropped: even their weekly window has rolled over.
-LOGIN_TTL_SECS = 8 * 24 * 3600
+# Other logins are kept for "Where to spend next": a Team seat unused this week is a whole week
+# of allowance waiting. Forgotten only after a year unused (an account that is gone).
+LOGIN_TTL_SECS = 365 * 24 * 3600
 
 
 def update_snapshot(previous, label, payload, login, now, login_name=None):

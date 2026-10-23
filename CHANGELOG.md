@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.117] - 2026-10-23
+
+### Added
+- "Where to spend next" lists every login a Claude account has used, not only the one signed
+  in now: a Max plan and Team seats behind one config directory are separate weekly allowances.
+  Each other login is its own row (`Claude (v) · a@Virtius`) whose Why reads "switch with
+  /login · N% free". A weekly window resets at the same time each week, so a login not used
+  since its reset counts as a whole fresh week (and ranks as USE NOW), with its next reset known.
+- The status line capture keeps logins for a year instead of 8 days, which had already
+  forgotten the Team seats. Each login is recorded the next time it runs a prompt.
+
 ## [2.0.0-dash-0.116] - 2026-10-21
 
 ### Fixed
