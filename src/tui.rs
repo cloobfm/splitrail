@@ -1797,6 +1797,7 @@ fn draw_pool_chart(
     // The y axis tops out at the cap: no plan holds more than its allowance, so neither can the pool.
     let top = past.iter().chain(&idle).map(|(_, v)| *v).fold(cap, f64::max).max(1.0);
     let cap_line = [(-(PAST_H as f64), cap), (AHEAD_H as f64, cap)];
+    let now_line = [(0.0, 0.0), (0.0, top)];
     let day_ago = past.first().map_or(left_now, |(_, v)| *v);
     let change = left_now - day_ago;
     let datasets = vec![
@@ -1807,11 +1808,11 @@ fn draw_pool_chart(
             .style(Style::default().fg(Color::Magenta))
             .data(&cap_line),
         Dataset::default()
-            .name("last 24h")
+            .name("now")
             .marker(Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::Cyan))
-            .data(&past),
+            .style(Style::default().fg(Color::DarkGray))
+            .data(&now_line),
         Dataset::default()
             .name("if unused (refills at each reset)")
             .marker(Marker::Braille)
@@ -1824,11 +1825,18 @@ fn draw_pool_chart(
             .graph_type(GraphType::Line)
             .style(Style::default().fg(Color::Green))
             .data(&paced),
+        // Actual, bright and drawn last so the projections never paint over it.
+        Dataset::default()
+            .name("actual, last 24h")
+            .marker(Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+            .data(&past),
     ];
     let money = |v: f64| if v >= 1000.0 { format!("${:.1}k", v / 1000.0) } else { format!("${v:.0}") };
     let title = Line::from(vec![
         Span::styled(" 📈 Pool · every plan's allowance, API $ · ", Style::default().bold()),
-        Span::styled(format!("{} left", money(left_now)), Style::default().fg(Color::Cyan).bold()),
+        Span::styled(format!("{} left", money(left_now)), Style::default().fg(Color::White).bold()),
         Span::styled(
             format!(" of {} cap ({:.0}%) ", money(cap), left_now / cap.max(1.0) * 100.0),
             Style::default().fg(Color::White),
@@ -1850,7 +1858,7 @@ fn draw_pool_chart(
         .block(
             Block::default().borders(Borders::ALL).title(title).title_bottom(Line::from(vec![
                 Span::styled(" ── cap: every plan full ", Style::default().fg(Color::Magenta)),
-                Span::styled(" ── last 24h ", Style::default().fg(Color::Cyan)),
+                Span::styled(" ── actual, last 24h ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                 Span::styled(" ── if unused (refills at each reset) ", Style::default().fg(Color::DarkGray)),
                 Span::styled(" ── using every plan by its reset ", Style::default().fg(Color::Green)),
             ])),

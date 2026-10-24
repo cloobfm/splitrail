@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.131] - 2026-10-23
+
+### Fixed
+- The 📈 Pool's last-24h line was hard to find: cyan, beside the green projection, an eighth of
+  the width. It is bright white now, drawn over the projections, with a grey divider at now.
+
 ## [2.0.0-dash-0.130] - 2026-10-23
 
 ### Changed
