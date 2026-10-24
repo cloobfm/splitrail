@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.130] - 2026-10-23
+
+### Changed
+- The 📈 Pool chart's left axis tops out at the cap (`cap $6.2k`, magenta), with a line across
+  the chart at that height: how far below it the pool sits is how much of the allowance is used.
+
 ## [2.0.0-dash-0.129] - 2026-10-23
 
 ### Added

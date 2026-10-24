@@ -1789,15 +1789,23 @@ fn draw_pool_chart(
     };
     let idle = ahead(false);
     let paced = ahead(true);
-    let top = past.iter().chain(&idle).map(|(_, v)| *v).fold(1.0f64, f64::max) * 1.05;
     let left_now: f64 = plans.iter().map(|p| p.value.left).sum();
     let tokens_now: f64 = plans.iter().filter_map(|p| Some(p.value.left * p.value.tokens_per_dollar?)).sum();
     // The cap: every plan full at once, the sum of the Allowance column.
     let cap: f64 = plans.iter().map(|p| p.value.allowance).sum();
     let cap_tokens: f64 = plans.iter().filter_map(|p| Some(p.value.allowance * p.value.tokens_per_dollar?)).sum();
+    // The y axis tops out at the cap: no plan holds more than its allowance, so neither can the pool.
+    let top = past.iter().chain(&idle).map(|(_, v)| *v).fold(cap, f64::max).max(1.0);
+    let cap_line = [(-(PAST_H as f64), cap), (AHEAD_H as f64, cap)];
     let day_ago = past.first().map_or(left_now, |(_, v)| *v);
     let change = left_now - day_ago;
     let datasets = vec![
+        Dataset::default()
+            .name("cap")
+            .marker(Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Magenta))
+            .data(&cap_line),
         Dataset::default()
             .name("last 24h")
             .marker(Marker::Braille)
@@ -1841,6 +1849,7 @@ fn draw_pool_chart(
     let chart = Chart::new(datasets)
         .block(
             Block::default().borders(Borders::ALL).title(title).title_bottom(Line::from(vec![
+                Span::styled(" ── cap: every plan full ", Style::default().fg(Color::Magenta)),
                 Span::styled(" ── last 24h ", Style::default().fg(Color::Cyan)),
                 Span::styled(" ── if unused (refills at each reset) ", Style::default().fg(Color::DarkGray)),
                 Span::styled(" ── using every plan by its reset ", Style::default().fg(Color::Green)),
@@ -1862,7 +1871,11 @@ fn draw_pool_chart(
         .y_axis(
             Axis::default()
                 .bounds([0.0, top])
-                .labels(vec![Span::raw("$0"), Span::raw(money(top / 2.0)), Span::raw(money(top))])
+                .labels(vec![
+                    Span::raw("$0"),
+                    Span::raw(money(top / 2.0)),
+                    Span::styled(format!("cap {}", money(top)), Style::default().fg(Color::Magenta)),
+                ])
                 .style(Style::default().fg(Color::DarkGray)),
         )
         .legend_position(None);
