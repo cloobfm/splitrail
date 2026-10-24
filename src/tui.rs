@@ -1792,6 +1792,9 @@ fn draw_pool_chart(
     let top = past.iter().chain(&idle).map(|(_, v)| *v).fold(1.0f64, f64::max) * 1.05;
     let left_now: f64 = plans.iter().map(|p| p.value.left).sum();
     let tokens_now: f64 = plans.iter().filter_map(|p| Some(p.value.left * p.value.tokens_per_dollar?)).sum();
+    // The cap: every plan full at once, the sum of the Allowance column.
+    let cap: f64 = plans.iter().map(|p| p.value.allowance).sum();
+    let cap_tokens: f64 = plans.iter().filter_map(|p| Some(p.value.allowance * p.value.tokens_per_dollar?)).sum();
     let day_ago = past.first().map_or(left_now, |(_, v)| *v);
     let change = left_now - day_ago;
     let datasets = vec![
@@ -1816,13 +1819,24 @@ fn draw_pool_chart(
     ];
     let money = |v: f64| if v >= 1000.0 { format!("${:.1}k", v / 1000.0) } else { format!("${v:.0}") };
     let title = Line::from(vec![
-        Span::styled(" 📈 Pool · every plan's allowance left, API $ ", Style::default().bold()),
-        Span::styled(format!("{} ", money(left_now)), Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" 📈 Pool · every plan's allowance, API $ · ", Style::default().bold()),
+        Span::styled(format!("{} left", money(left_now)), Style::default().fg(Color::Cyan).bold()),
+        Span::styled(
+            format!(" of {} cap ({:.0}%) ", money(cap), left_now / cap.max(1.0) * 100.0),
+            Style::default().fg(Color::White),
+        ),
         Span::styled(
             format!("{}{} 24h ", if change >= 0.0 { "▲" } else { "▼" }, money(change.abs())),
             Style::default().fg(if change >= 0.0 { Color::Green } else { Color::Red }),
         ),
-        Span::styled(format!("· ≈{} output tokens · local GPUs uncapped, not in the pool ", crate::advisor::human_tokens(tokens_now)), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!(
+                "· ≈{} of {} output tokens · local GPUs uncapped, not in it ",
+                crate::advisor::human_tokens(tokens_now),
+                crate::advisor::human_tokens(cap_tokens)
+            ),
+            Style::default().fg(Color::DarkGray),
+        ),
     ]);
     let chart = Chart::new(datasets)
         .block(
