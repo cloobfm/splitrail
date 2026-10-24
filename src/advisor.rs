@@ -607,8 +607,42 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
 /// dashboard's own Quotas view (no file needed).
 pub fn status_for_tools(stats: &[&crate::types::AgenticCodingToolStats]) -> Value {
     let now = Utc::now();
-    let tools: Vec<Value> = stats.iter().filter_map(|s| tool_json(s, now)).collect();
+    let mut tools: Vec<Value> = stats.iter().filter_map(|s| tool_json(s, now)).collect();
+    tools.extend(other_login_tools(stats, now));
     json!({"updated": now.timestamp_millis() as f64 / 1000.0, "tools": tools})
+}
+
+/// `a@virti.us (Virtius)` -> `a@Virtius`; `a@virti.us (personal)` -> `a`.
+pub fn short_login(account: &str) -> String {
+    let (email, org) = account.split_once(" (").map_or((account, ""), |(e, o)| (e, o.trim_end_matches(')')));
+    let name = email.split('@').next().unwrap_or(email);
+    if org.is_empty() || org == "personal" { name.to_string() } else { format!("{name}@{org}") }
+}
+
+/// The other logins on this machine's Claude accounts, as tools in the status shape: each its
+/// own allowance, one `/login` away, with its own week's spend once it has run (BZL-283).
+pub fn other_login_tools(stats: &[&crate::types::AgenticCodingToolStats], now: DateTime<Utc>) -> Vec<Value> {
+    let mut out = Vec::new();
+    for tool in stats.iter().filter(|t| t.analyzer_name.starts_with("Claude (") && !t.analyzer_name.contains('@')) {
+        for other in crate::plan_limits::other_logins(&tool.analyzer_name) {
+            let spend = other.seven_day.resets_in_secs.and_then(|left| {
+                let start = now + Duration::seconds(left) - Duration::days(7);
+                let spend = login_spend(tool, start, &other.account, false);
+                (spend.cost > 0.0).then(|| spend.to_json())
+            });
+            out.push(json!({
+                "name": format!("{} · {}", tool.analyzer_name, short_login(&other.account)),
+                "account": other.account,
+                "tks": 0.0,
+                "cost_today": 0.0,
+                "switch": true,
+                "limits": {"five_hour": Value::Null, "monthly": Value::Null,
+                           "seven_day": {"used": (other.seven_day.used_percentage * 10.0).round() / 10.0,
+                                         "resets_in": other.seven_day.resets_in_secs, "spend": spend}},
+            }));
+        }
+    }
+    out
 }
 
 /// How old a status payload is, in seconds.

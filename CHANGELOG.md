@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.119] - 2026-10-23
+
+### Added
+- 🗓 Plans timeline under "Where to spend next" (`p` on the Summary tab): every plan on one
+  shared 7-day axis, each bar running from now to its reset, soonest first, so deadlines line
+  up instead of being read off "4d15h" one at a time. Coloured by the share left (green 50%+,
+  yellow 20-50%, red below; grey while full and waiting), a white mark at the reset, `»` for a
+  monthly plan that resets past the week (with its date), Team seats drawn as a shorter bar
+  (`T`), and each row ending with its % left, reset time and the Do action. In the bordered,
+  bold-titled style of the Summary's charts.
+- The dashboard's own quota view now lists a Claude account's other logins too (it built its
+  list apart from `status.json`), and names the signed-in login on its row.
+
 ## [2.0.0-dash-0.118] - 2026-10-23
 
 ### Added

@@ -1682,7 +1682,130 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
     )
     .column_spacing(1)
     .block(block);
-    frame.render_widget(picks_table, picks_area);
+    // The list, then the timeline of the same plans below it when there is room.
+    let list_height = (picks.len() as u16 + 4).min(picks_area.height);
+    let [list_area, timeline_area] =
+        Layout::vertical([Constraint::Length(list_height), Constraint::Min(0)]).areas(picks_area);
+    frame.render_widget(picks_table, list_area);
+    if timeline_area.height >= 5 {
+        draw_plan_timeline(frame, timeline_area, &picks, now);
+    }
+}
+
+/// Colour for the share of a plan left: plenty to use (green), some (yellow), nearly out (red).
+fn left_color(left: f64) -> Color {
+    if left >= 50.0 {
+        Color::Green
+    } else if left >= 20.0 {
+        Color::Yellow
+    } else {
+        Color::Red
+    }
+}
+
+/// The plans on one shared week: each bar runs from now to that plan's reset, coloured by the
+/// share left, so the deadlines line up instead of being read off "4d15h" one by one. Soonest
+/// reset first; a full plan (waiting for its reset) is grey. Max-style plans draw full height,
+/// Team seats a shorter bar.
+fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pick], now: chrono::DateTime<chrono::Utc>) {
+    use chrono::{Datelike, Duration, Local, Timelike};
+    const SPAN_SECS: f64 = 7.0 * 86_400.0;
+    const NAME_W: usize = 26;
+    let block = Block::default()
+        .title(" 🗓  Plans · next 7 days · each bar ends at its reset ")
+        .title_style(Style::default().bold())
+        .borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let label_w = 36usize;
+    let bar_w = (inner.width as usize).saturating_sub(NAME_W + label_w + 2).max(10);
+
+    let mut rows: Vec<(&crate::advisor::Pick, &crate::advisor::Window, i64)> = picks
+        .iter()
+        .filter_map(|p| {
+            let w = p.window.as_ref()?;
+            Some((p, w, w.resets_in_secs?))
+        })
+        .collect();
+    rows.sort_by_key(|(_, _, secs)| *secs);
+
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut lines: Vec<Line> = Vec::new();
+    // Axis: "now", then each local midnight in the week, by weekday.
+    let mut axis = vec![' '; bar_w];
+    let mut marks = vec![' '; bar_w];
+    let local_now = now.with_timezone(&Local);
+    let mut day = local_now.date_naive().succ_opt();
+    while let Some(d) = day {
+        let Some(midnight) = d.and_hms_opt(0, 0, 0).and_then(|m| m.and_local_timezone(Local).earliest()) else { break };
+        let offset = (midnight.with_timezone(&chrono::Utc) - now).num_seconds() as f64;
+        if offset >= SPAN_SECS {
+            break;
+        }
+        let col = (offset / SPAN_SECS * bar_w as f64) as usize;
+        if col < bar_w {
+            marks[col] = '┊';
+            for (i, ch) in d.weekday().to_string().chars().take(3).enumerate() {
+                if col + 1 + i < bar_w {
+                    axis[col + 1 + i] = ch;
+                }
+            }
+        }
+        day = d.succ_opt();
+    }
+    lines.push(Line::from(vec![
+        Span::styled(format!("{:<NAME_W$}", format!("now {:02}:{:02}", local_now.hour(), local_now.minute())), dim),
+        Span::styled(axis.iter().collect::<String>(), Style::default().fg(Color::Cyan)),
+    ]));
+    for (pick, w, secs) in rows.iter().take(inner.height.saturating_sub(1) as usize) {
+        let left = (100.0 - w.used).clamp(0.0, 100.0);
+        let color = if pick.available { left_color(left) } else { Color::DarkGray };
+        let team = pick.account.as_deref().is_some_and(|a| a.contains('(') && !a.contains("(personal)"));
+        let glyph = if !pick.available { '░' } else if team { '▆' } else { '█' };
+        let beyond = (*secs as f64) > SPAN_SECS;
+        let filled = ((*secs as f64).min(SPAN_SECS) / SPAN_SECS * bar_w as f64).round().max(1.0) as usize;
+        // A monthly plan runs past the week shown: its end is off the right edge.
+        let filled = if beyond { bar_w.saturating_sub(1) } else { filled.min(bar_w) };
+        // The bar, with the week's day lines showing through the empty part after it.
+        let bar: String = (0..filled).map(|_| glyph).collect();
+        let rest: String = (filled..bar_w).map(|i| if marks[i] == '┊' { '┊' } else { ' ' }).collect();
+        let reset_at = now + Duration::seconds(*secs);
+        let reset_local = reset_at.with_timezone(&Local);
+        let action = pick.action();
+        let action_color = match action {
+            "USE NOW" => Color::Green,
+            "USE" => Color::LightGreen,
+            "EASE OFF" => Color::Yellow,
+            "WAIT" => Color::Red,
+            _ => Color::DarkGray,
+        };
+        // A Claude account's signed-in row names its login too, beside its other logins' rows.
+        let tool = match pick.account.as_deref() {
+            Some(account) if pick.tool.starts_with("Claude (") && !pick.tool.contains('·') && !pick.tool.contains(',') => {
+                format!("{} · {}", pick.tool, crate::advisor::short_login(account))
+            }
+            _ => pick.tool.clone(),
+        };
+        let name: String = tool.chars().take(NAME_W - 3).collect();
+        lines.push(Line::from(vec![
+            Span::styled(format!("{name:<w$}", w = NAME_W - 2), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(if team { "T " } else { "  " }, dim),
+            Span::styled(bar, Style::default().fg(color)),
+            Span::styled(if beyond { "»" } else { "▏" }, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(rest, dim),
+            Span::styled(format!(" {left:>3.0}% left", ), Style::default().fg(color)),
+            Span::styled(
+                if beyond {
+                    format!(" · {} · ", reset_local.format("%b %-d"))
+                } else {
+                    format!(" · {} {:02}:{:02} · ", &reset_local.weekday().to_string()[..3], reset_local.hour(), reset_local.minute())
+                },
+                dim,
+            ),
+            Span::styled(action, Style::default().fg(action_color).add_modifier(Modifier::BOLD)),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_ui(
