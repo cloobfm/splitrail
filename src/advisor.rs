@@ -180,7 +180,7 @@ pub fn tool_json(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc
     Some(json!({
         "name": name,
         "account": crate::plan_limits::account_for_analyzer(name),
-        "plan": crate::plan_limits::plan_for_analyzer(name),
+        "plan": crate::plan_limits::plan_for_analyzer(name).or_else(|| codex_plan(name)),
         "tks": round1(recent_tks(stats, now)),
         "limits": {
             "five_hour": window("five_hour", limits.five_hour),
@@ -617,11 +617,21 @@ pub fn status_for_tools(stats: &[&crate::types::AgenticCodingToolStats]) -> Valu
     json!({"updated": now.timestamp_millis() as f64 / 1000.0, "tools": tools})
 }
 
-/// `a@virti.us (Virtius)` -> `a@Virtius`; `a@virti.us (personal)` -> `a`.
+/// Codex's ChatGPT plan from its logs (`chatgpt·plus` -> `Plus`).
+fn codex_plan(name: &str) -> Option<String> {
+    let account = crate::plan_limits::account_for_analyzer(name).filter(|_| name == "Codex CLI")?;
+    let plan = account.rsplit('·').next()?;
+    let mut chars = plan.chars();
+    Some(chars.next()?.to_uppercase().chain(chars).collect())
+}
+
+/// `a@virti.us (Virtius)` -> `a@Virtius`; `a@virti.us (personal)` -> `a@virti.us`.
 pub fn short_login(account: &str) -> String {
     let (email, org) = account.split_once(" (").map_or((account, ""), |(e, o)| (e, o.trim_end_matches(')')));
     let name = email.split('@').next().unwrap_or(email);
-    if org.is_empty() || org == "personal" { name.to_string() } else { format!("{name}@{org}") }
+    // A personal login by its whole email (`a` alone is too short to recognise); a team seat by
+    // the name and the team, which is what tells seats on one email apart.
+    if org == "personal" { email.to_string() } else if org.is_empty() { name.to_string() } else { format!("{name}@{org}") }
 }
 
 /// The other logins on this machine's Claude accounts, as tools in the status shape: each its

@@ -1688,7 +1688,7 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
         Layout::vertical([Constraint::Length(list_height), Constraint::Min(0)]).areas(picks_area);
     frame.render_widget(picks_table, list_area);
     if timeline_area.height >= 5 {
-        draw_plan_timeline(frame, timeline_area, &picks, now);
+        draw_plan_timeline(frame, timeline_area, &picks, filtered_stats, now);
     }
 }
 
@@ -1703,23 +1703,38 @@ fn left_color(left: f64) -> Color {
     }
 }
 
-/// The plans on one shared week: each bar runs from now to that plan's reset, coloured by the
-/// share left, so the deadlines line up instead of being read off "4d15h" one by one. Soonest
-/// reset first; a full plan (waiting for its reset) is grey. Drawn in braille dots like the
-/// Summary's sparklines: full height for a Max-style plan, half for a Team seat.
-fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pick], now: chrono::DateTime<chrono::Utc>) {
+/// The plans on one shared axis, the last day and the next week: each bar's height is what is
+/// left of the plan, in dollars at API prices so plans of every kind compare (a Max 20x is worth
+/// thousands a week, Kiro Free a dollar a month). Left of "now", what was left each hour of the
+/// last day, rebuilt from the hourly usage; right of it, the taper to the reset at the pace that
+/// uses it all, so the aim is to drive every bar down to a single dot by its deadline. Coloured
+/// by the share left; grey while a plan is full and waiting for its reset. Braille dots, like
+/// the Summary's sparklines, soonest reset first.
+fn draw_plan_timeline(
+    frame: &mut Frame,
+    area: Rect,
+    picks: &[crate::advisor::Pick],
+    stats: &[&AgenticCodingToolStats],
+    now: chrono::DateTime<chrono::Utc>,
+) {
     use chrono::{Datelike, Duration, Local, Timelike};
-    const SPAN_SECS: f64 = 7.0 * 86_400.0;
+    const PAST_SECS: f64 = 86_400.0;
+    const AHEAD_SECS: f64 = 7.0 * 86_400.0;
     const NAME_W: usize = 26;
     const PLAN_W: usize = 9;
+    // Braille rows from the bottom: one to four dots high.
+    const LEVELS: [char; 5] = [' ', '⣀', '⣤', '⣶', '⣿'];
     let block = Block::default()
-        .title(" 🗓  Plans · next 7 days · each bar ends at its reset ")
+        .title(" 🗓  Plans · last day and next week · height = what is left ")
         .title_style(Style::default().bold())
         .borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let label_w = 36usize;
-    let bar_w = (inner.width as usize).saturating_sub(NAME_W - 2 + PLAN_W + label_w + 2).max(10);
+    let width = (inner.width as usize).saturating_sub(NAME_W - 2 + PLAN_W + label_w + 2).max(16);
+    let past_w = (width as f64 * PAST_SECS / (PAST_SECS + AHEAD_SECS)).round().max(3.0) as usize;
+    let ahead_w = width - past_w - 1; // One column for "now".
+    let col_secs_past = PAST_SECS / past_w as f64;
 
     let mut rows: Vec<(&crate::advisor::Pick, &crate::advisor::Window, i64)> = picks
         .iter()
@@ -1730,54 +1745,156 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
         .collect();
     rows.sort_by_key(|(_, _, secs)| *secs);
 
+    // Dollars left, comparable across plans: measured where the plan has been used this window,
+    // else its plan's value (a Claude plan as a share of the measured Max 20x week; a credit
+    // plan's monthly allowance) times the share left.
+    let max_week = rows
+        .iter()
+        .filter(|(_, w, _)| w.plan.as_deref() == Some("Max 20x"))
+        .filter_map(|(_, w, _)| Some(w.left_dollars()? / ((100.0 - w.used) / 100.0).max(0.01)))
+        .fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a: f64| a.max(b))))
+        .unwrap_or(2_000.0);
+    let dollars_left = |pick: &crate::advisor::Pick, w: &crate::advisor::Window| -> f64 {
+        let left = (100.0 - w.used).max(0.0) / 100.0;
+        // A Claude plan by its size (usage per login has only been credited since 2026-10-23,
+        // so a login's measured week can be a sliver of it); anything else as measured.
+        let claude_plan = w.plan.as_deref().is_some_and(|p| p.starts_with("Max") || p.starts_with("Team") || p == "Pro");
+        if !claude_plan && let Some(d) = w.left_dollars() {
+            return d;
+        }
+        let base = tool_base(&pick.tool);
+        let value = match w.plan.as_deref() {
+            Some("Max 20x") => max_week,
+            Some("Max 5x") | Some("Max") => max_week * 0.25,
+            Some("Team Prem") => max_week * 6.25 / 20.0,
+            Some("Team Std") | Some("Team") => max_week * 1.25 / 20.0,
+            Some("Pro") => max_week / 20.0,
+            _ => crate::plan_limits::plan_value_dollars(base).unwrap_or(20.0),
+        };
+        value * left
+    };
+    // Spend in each column of the last day, for the plan's own usage (a Claude login's slices).
+    let past_spend = |pick: &crate::advisor::Pick| -> Vec<f64> {
+        let mut spent = vec![0.0; past_w];
+        let base = tool_base(&pick.tool);
+        let Some(tool) = stats.iter().find(|s| s.analyzer_name == base) else { return spent };
+        let login = pick.account.as_deref();
+        let signed_in = !pick.window.as_ref().is_some_and(|w| w.switch_login);
+        let local = |day: &str, hour: u8| {
+            chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+                .ok()?
+                .and_hms_opt(hour as u32, 30, 0)?
+                .and_local_timezone(Local)
+                .earliest()
+                .map(|t| t.with_timezone(&chrono::Utc))
+        };
+        let since = now - Duration::seconds(PAST_SECS as i64);
+        let first_day = since.with_timezone(&Local).format("%Y-%m-%d").to_string();
+        for (day, totals) in tool.daily_stats.range(first_day..) {
+            for s in &totals.slices {
+                let mine = match login {
+                    Some(l) if !s.account.is_empty() || !signed_in => s.account == l,
+                    _ => true,
+                };
+                let Some(at) = local(day, s.hour) else { continue };
+                if !mine || at < since || at > now {
+                    continue;
+                }
+                let col = (((at - since).num_seconds() as f64) / col_secs_past) as usize;
+                if col < past_w {
+                    spent[col] += s.cost;
+                }
+            }
+        }
+        spent
+    };
+    // Height in dot rows: 1-4 in one text row, 1-8 for a big plan drawn two rows tall.
+    let dots = |dollars: f64, biggest: f64, rows: usize| ((dollars / biggest * (4 * rows) as f64).ceil() as usize).clamp(1, 4 * rows);
+
+    let measured: Vec<(f64, Vec<f64>)> = rows.iter().map(|(p, w, _)| (dollars_left(p, w), past_spend(p))).collect();
+    // The tallest over the whole picture, the past included, sets the scale.
+    let biggest = measured
+        .iter()
+        .map(|(now_left, spent)| now_left + spent.iter().sum::<f64>())
+        .fold(1.0f64, f64::max);
+
     let dim = Style::default().fg(Color::DarkGray);
     let mut lines: Vec<Line> = Vec::new();
-    // Axis: "now", then each local midnight in the week, by weekday.
-    let mut axis = vec![' '; bar_w];
-    let mut marks = vec![' '; bar_w];
+    // Axis: "-24h", "now", then each local midnight ahead by weekday.
+    let mut axis = vec![' '; width];
+    let mut marks = vec![' '; width];
+    for (i, ch) in "-24h".chars().enumerate() {
+        axis[i] = ch;
+    }
+    marks[past_w] = '┃';
     let local_now = now.with_timezone(&Local);
     let mut day = local_now.date_naive().succ_opt();
     while let Some(d) = day {
         let Some(midnight) = d.and_hms_opt(0, 0, 0).and_then(|m| m.and_local_timezone(Local).earliest()) else { break };
         let offset = (midnight.with_timezone(&chrono::Utc) - now).num_seconds() as f64;
-        if offset >= SPAN_SECS {
+        if offset >= AHEAD_SECS {
             break;
         }
-        let col = (offset / SPAN_SECS * bar_w as f64) as usize;
-        if col < bar_w {
+        let col = past_w + 1 + (offset / AHEAD_SECS * ahead_w as f64) as usize;
+        if col < width {
             marks[col] = '┊';
             for (i, ch) in d.weekday().to_string().chars().take(3).enumerate() {
-                if col + 1 + i < bar_w {
+                if col + 1 + i < width {
                     axis[col + 1 + i] = ch;
                 }
             }
         }
         day = d.succ_opt();
     }
+    // "now hh:mm" ends just before the now line, clear of the day names after it.
+    let now_label = format!("now {:02}:{:02}", local_now.hour(), local_now.minute());
+    let label_start = past_w.saturating_sub(now_label.len());
+    if label_start > 4 {
+        for (i, ch) in now_label.chars().enumerate() {
+            axis[label_start + i] = ch;
+        }
+    }
     lines.push(Line::from(vec![
-        Span::styled(format!("{:<w$}", format!("now {:02}:{:02}", local_now.hour(), local_now.minute()), w = NAME_W - 2 + PLAN_W), dim),
+        Span::styled(format!("{:<w$}", "", w = NAME_W - 2 + PLAN_W), dim),
         Span::styled(axis.iter().collect::<String>(), Style::default().fg(Color::Cyan)),
     ]));
-    for (pick, w, secs) in rows.iter().take(inner.height.saturating_sub(2) as usize) {
-        let left = (100.0 - w.used).clamp(0.0, 100.0);
-        let color = if pick.available { left_color(left) } else { Color::DarkGray };
-        let plan = w.plan.clone();
-        let team = plan.as_deref().map_or_else(
-            || pick.account.as_deref().is_some_and(|a| a.contains('(') && !a.contains("(personal)")),
-            |p| p.starts_with("Team"),
-        );
-        // Braille dots, as the Summary's sparklines: a full cell for a full plan, the lower half
-        // for a Team seat, a single dot row for a plan that is full and waiting.
-        let glyph = if !pick.available { '⣀' } else if team { '⣤' } else { '⣿' };
-        let beyond = (*secs as f64) > SPAN_SECS;
-        let filled = ((*secs as f64).min(SPAN_SECS) / SPAN_SECS * bar_w as f64).round().max(1.0) as usize;
-        // A monthly plan runs past the week shown: its end is off the right edge.
-        let filled = if beyond { bar_w.saturating_sub(1) } else { filled.min(bar_w) };
-        // The bar, with the week's day lines showing through the empty part after it.
-        let bar: String = (0..filled).map(|_| glyph).collect();
-        let rest: String = (filled..bar_w).map(|i| if marks[i] == '┊' { '┊' } else { ' ' }).collect();
-        let reset_at = now + Duration::seconds(*secs);
-        let reset_local = reset_at.with_timezone(&Local);
+    for ((pick, w, secs), (left_now, spent)) in rows.iter().zip(&measured).take(inner.height.saturating_sub(2) as usize) {
+        let left_pct = (100.0 - w.used).clamp(0.0, 100.0);
+        let color = if pick.available { left_color(left_pct) } else { Color::DarkGray };
+        // A plan with a quarter or more of the biggest is drawn two rows tall, for finer steps.
+        let tall = left_now + spent.iter().sum::<f64>() >= biggest / 4.0;
+        let text_rows = if tall { 2 } else { 1 };
+        // The past: what was left at each column, from what has been spent since.
+        let mut after: f64 = spent.iter().sum();
+        let past_dots: Vec<usize> = spent
+            .iter()
+            .map(|cost| {
+                after -= cost;
+                dots(left_now + after + cost, biggest, text_rows)
+            })
+            .collect();
+        // Ahead: tapering to the reset along the pace that uses it all.
+        let beyond = (*secs as f64) > AHEAD_SECS;
+        let filled = ((*secs as f64).min(AHEAD_SECS) / AHEAD_SECS * ahead_w as f64).round().max(1.0) as usize;
+        let filled = if beyond { ahead_w.saturating_sub(1) } else { filled.min(ahead_w) };
+        let ahead_dots: Vec<usize> = (0..filled)
+            .map(|col| {
+                if !pick.available {
+                    return 1;
+                }
+                dots(left_now * (1.0 - col as f64 / filled.max(1) as f64), biggest, text_rows)
+            })
+            .collect();
+        // Split dot heights into text rows: the lower row fills first.
+        let row_of = |heights: &[usize], row: usize| -> String {
+            heights.iter().map(|h| LEVELS[h.saturating_sub(4 * row).min(4)]).collect()
+        };
+        let past = row_of(&past_dots, 0);
+        let ahead = row_of(&ahead_dots, 0);
+        let rest: String = (past_w + 1 + filled + 1..past_w + 1 + ahead_w + 1)
+            .map(|i| if marks.get(i) == Some(&'┊') { '┊' } else { ' ' })
+            .collect();
+        let reset_local = (now + Duration::seconds(*secs)).with_timezone(&Local);
         let action = pick.action();
         let action_color = match action {
             "USE NOW" => Color::Green,
@@ -1786,7 +1903,6 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
             "WAIT" => Color::Red,
             _ => Color::DarkGray,
         };
-        // A Claude account's signed-in row names its login too, beside its other logins' rows.
         let tool = match pick.account.as_deref() {
             Some(account) if pick.tool.starts_with("Claude (") && !pick.tool.contains('·') && !pick.tool.contains(',') => {
                 format!("{} · {}", pick.tool, crate::advisor::short_login(account))
@@ -1794,16 +1910,30 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
             _ => pick.tool.clone(),
         };
         let name: String = tool.chars().take(NAME_W - 3).collect();
+        if tall {
+            // The upper row of a two-row bar, above the labelled one.
+            let blank_rest: String = (past_w + 1 + filled..past_w + 1 + ahead_w + 1)
+                .map(|i| if marks.get(i) == Some(&'┊') { '┊' } else { ' ' })
+                .collect();
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(NAME_W - 2 + PLAN_W)),
+                Span::styled(row_of(&past_dots, 1), Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM)),
+                Span::styled("┃", Style::default().fg(Color::Cyan)),
+                Span::styled(row_of(&ahead_dots, 1), Style::default().fg(color)),
+                Span::styled(blank_rest, dim),
+            ]));
+        }
         lines.push(Line::from(vec![
             Span::styled(format!("{name:<w$}", w = NAME_W - 2), Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{:<9}", plan.as_deref().unwrap_or(if team { "Team" } else { "" })), Style::default().fg(Color::Magenta)),
-            Span::styled(bar, Style::default().fg(color)),
+            Span::styled(format!("{:<PLAN_W$}", w.plan.as_deref().unwrap_or("")), Style::default().fg(Color::Magenta)),
+            Span::styled(past, Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM)),
+            Span::styled("┃", Style::default().fg(Color::Cyan)),
+            Span::styled(ahead, Style::default().fg(color)),
             // Box drawing and » are one cell in every terminal font; ▏ was two in some.
             Span::styled(if beyond { "»" } else { "│" }, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
             Span::styled(rest, dim),
-            Span::styled(format!(" {left:>3.0}% left", ), Style::default().fg(color)),
+            Span::styled(format!(" {left_pct:>3.0}% left"), Style::default().fg(color)),
             Span::styled(
-                // One width for both, so the action column lines up.
                 format!(
                     " · {:<9} · ",
                     if beyond {
@@ -1819,9 +1949,18 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
     }
     lines.push(Line::from(vec![
         Span::styled(format!("{:<w$}", "", w = NAME_W - 2 + PLAN_W), dim),
-        Span::styled("⣿ full plan   ⣤ Team seat (a smaller weekly allowance)   ⣀ full, waiting for its reset   │ reset   » resets after this week", dim),
+        Span::styled(
+            "height = $ left at API prices (tallest = most) · last day ┃ now · tapers to the reset at the pace that uses it all · │ reset · » after this week",
+            dim,
+        ),
     ]));
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The analyzer behind a timeline row: `Claude (v) · a@virti.us` and `Claude (main), dev-a`
+/// are `Claude (v)` and `Claude (main)`.
+fn tool_base(tool: &str) -> &str {
+    tool.split(" · ").next().unwrap_or(tool).split(", ").next().unwrap_or(tool)
 }
 
 fn draw_ui(

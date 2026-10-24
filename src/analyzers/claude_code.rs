@@ -1056,7 +1056,9 @@ where
                 stats.cache_read_tokens = usage.cache_read_input_tokens;
                 stats.cached_tokens =
                     usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
-                stats.cost = calculate_cost_from_tokens(&usage, &model);
+                // A model this Mac's Ollama served is dropped before folding (the Ollama column
+                // has it); not pricing it here also keeps it from raising "No price" warnings.
+                stats.cost = if local_ollama_models().contains(&model) { 0.0 } else { calculate_cost_from_tokens(&usage, &model) };
                 stats.tool_calls = match content {
                     Content::Blocks(blocks) => blocks
                         .iter()

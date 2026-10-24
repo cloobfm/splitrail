@@ -498,7 +498,35 @@ pub fn plan_for_analyzer(analyzer_name: &str) -> Option<String> {
     }
     let label = account_label(analyzer_name)?;
     let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
-    serde_json::from_str::<File>(&content).ok()?.plan?.label
+    if let Some(plan) = serde_json::from_str::<File>(&content).ok().and_then(|f| f.plan?.label) {
+        return Some(plan);
+    }
+    // Other tools' plans, from what their limit files record.
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let number = |key: &str| value.get(key).and_then(serde_json::Value::as_f64);
+    match analyzer_name {
+        "Cursor Agent" => number("limit_cents").map(|c| format!("${:.0}/mo", c / 100.0)),
+        "Warp" => number("credits_limit").map(|c| format!("{:.0} cr", c)),
+        "Kiro CLI" => value.get("login_name").and_then(|v| v.as_str()).map(|n| n.trim_start_matches("Kiro ").to_string()),
+        _ => None,
+    }
+}
+
+/// A plan's allowance in dollars a week at API prices, where its limit file says (credit
+/// plans: Cursor's included spend, Warp's included usage, Kiro's credits at $0.02), for sizing it
+/// against other plans. Monthly allowances are spread over the month.
+pub fn plan_value_dollars(analyzer_name: &str) -> Option<f64> {
+    let label = account_label(analyzer_name)?;
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?).ok()?;
+    let number = |key: &str| value.get(key).and_then(serde_json::Value::as_f64);
+    let monthly = match analyzer_name {
+        "Cursor Agent" => number("limit_cents")? / 100.0,
+        "Warp" => number("included_usage_cents")? / 100.0,
+        "Kiro CLI" => number("credits_limit")? * crate::analyzers::kiro_sessions::DOLLARS_PER_CREDIT,
+        _ => return None,
+    };
+    Some(monthly)
 }
 
 /// Every plan this machine's accounts are on, as `(key, signature)`: a Claude login's plan

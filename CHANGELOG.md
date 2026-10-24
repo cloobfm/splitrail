@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.124] - 2026-10-23
+
+### Changed
+- The 🗓 Plans timeline is a burn-down. A bar's height is what is left of the plan in dollars at
+  API prices, so plans of every kind compare: a Max 20x worth thousands a week stands tall,
+  Kiro Free's dollar a month is one dot. Left of `┃now`, the last 24 hours: what was left each
+  hour, rebuilt from the hourly usage (per login for a Claude account). Right of it, the bar
+  tapers to its reset at the pace that uses it all, so the aim is a single dot by the deadline.
+  Plans with a quarter or more of the biggest are drawn two text rows tall (eight steps of
+  height instead of four). A Claude plan is sized by its plan (Max 20x, Team Std...), since
+  per-login usage has only been credited since today.
+- Every row names its plan: Claude logins as before, Codex `Plus`, Cursor `$20/mo`, Warp
+  `1500 cr`, Kiro `Free`. A personal Claude login shows its whole email (`a@virti.us`, not
+  `a`); `a@virti.us (personal)` is recorded as Max 20x until it is next signed in.
+
+### Fixed
+- "No price for model gemma4:31b …" kept showing: 0.121 skipped those replies when folding,
+  but they were priced (and warned about) while the transcript was read. Not priced at all now.
+
 ## [2.0.0-dash-0.123] - 2026-10-23
 
 ### Fixed

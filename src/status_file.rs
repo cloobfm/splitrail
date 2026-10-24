@@ -207,7 +207,7 @@ mod tests {
     fn other_logins_get_short_names() {
         use crate::advisor::short_login;
         assert_eq!(short_login("a@virti.us (Virtius)"), "a@Virtius");
-        assert_eq!(short_login("a@virti.us (personal)"), "a");
+        assert_eq!(short_login("a@virti.us (personal)"), "a@virti.us");
         assert_eq!(short_login("plain"), "plain");
     }
 
