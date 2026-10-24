@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.137] - 2026-10-24
+
+### Fixed
+- Antigravity read 100% used when one model's quota ran out (Gemini 4), though its other
+  models had quota left: the status line capture took the fullest per-model bucket as the
+  plan's. It takes the emptiest now (the plan is usable while any model has quota), and keeps
+  each model's bucket in `~/.config/splitrail/antigravity/quota_models.json`. The raw quota is
+  kept only from reports that carry one, rather than overwritten with an empty one.
+
 ## [2.0.0-dash-0.136] - 2026-10-24
 
 ### Fixed

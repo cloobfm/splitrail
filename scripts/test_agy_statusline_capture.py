@@ -23,15 +23,26 @@ def payload(conversation, total_in, total_out, model="gemini-3-pro"):
 
 
 class QuotaTests(unittest.TestCase):
-    def test_buckets_split_by_reset_horizon_keeping_the_fullest(self):
+    def test_buckets_split_by_reset_horizon_keeping_the_emptiest(self):
         quota = {
             "gemini-3-pro": {"remaining_fraction": 0.8, "reset_in_seconds": 3 * 3600},
             "gemini-3-flash": {"remaining_fraction": 0.4, "reset_in_seconds": 4 * 3600},
             "weekly": {"remaining_fraction": 0.9, "reset_in_seconds": 5 * 86400},
         }
         windows = agy.quota_windows(quota, NOW)
-        self.assertEqual(windows["five_hour"], {"used_percentage": 60.0, "resets_at": NOW + 4 * 3600})
+        # Flash at 60% leaves Pro at 20%: the plan still has Pro.
+        self.assertEqual(windows["five_hour"], {"used_percentage": 20.0, "resets_at": NOW + 3 * 3600})
         self.assertEqual(windows["seven_day"]["used_percentage"], 10.0)
+
+    def test_one_model_out_leaves_the_plan_usable(self):
+        quota = {
+            "gemini-4": {"remaining_fraction": 0.0, "reset_in_seconds": 3 * 86400},
+            "claude-sonnet": {"remaining_fraction": 0.7, "reset_in_seconds": 3 * 86400},
+        }
+        self.assertEqual(agy.quota_windows(quota, NOW)["seven_day"]["used_percentage"], 30.0)
+        models = agy.quota_models(quota, NOW)
+        self.assertEqual(models["gemini-4"]["used_percentage"], 100.0)
+        self.assertEqual(models["claude-sonnet"]["used_percentage"], 30.0)
 
     def test_iso_reset_time_wins_over_relative(self):
         quota = {"m": {"remaining_fraction": 0.5, "reset_time": "2026-10-02T00:00:00Z", "reset_in_seconds": 1}}

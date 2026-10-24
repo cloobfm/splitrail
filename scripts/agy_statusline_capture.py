@@ -47,11 +47,31 @@ SHORT_WINDOW_MAX_SECS = 24 * 3600
 STATE_TTL_SECS = 30 * 24 * 3600
 
 
+def quota_models(quota, now):
+    """Each model's quota bucket as `{model: {used_percentage, resets_at}}`, or None."""
+    if not isinstance(quota, dict):
+        return None
+    models = {}
+    for model, bucket in quota.items():
+        if not isinstance(bucket, dict):
+            continue
+        remaining = bucket.get("remaining_fraction")
+        if not isinstance(remaining, (int, float)):
+            continue
+        reset = parse_reset(bucket.get("reset_time"))
+        if reset is None and isinstance(bucket.get("reset_in_seconds"), (int, float)):
+            reset = now + bucket["reset_in_seconds"]
+        models[model] = {"used_percentage": round((1 - remaining) * 100, 2), "resets_at": reset}
+    return models or None
+
+
 def quota_windows(quota, now):
-    """Per-model quota buckets as `rate_limits`: the fullest bucket per reset horizon.
+    """Per-model quota buckets as `rate_limits`: the emptiest bucket per reset horizon.
 
     `quota` maps a model id to `{remaining_fraction, reset_time, reset_in_seconds}`. A bucket
-    resetting within a day is a short window, any later one a weekly window.
+    resetting within a day is a short window, any later one a weekly window. Each model has its
+    own bucket, and the plan is usable while any model has quota left: one model running out
+    (Gemini 4 at 100%) leaves the others, so the plan reads as the model with the most left.
     """
     if not isinstance(quota, dict):
         return None
@@ -67,7 +87,7 @@ def quota_windows(quota, now):
             reset = now + bucket["reset_in_seconds"]
         window = {"used_percentage": round((1 - remaining) * 100, 2), "resets_at": reset}
         key = "five_hour" if reset is None or reset - now <= SHORT_WINDOW_MAX_SECS else "seven_day"
-        if key not in windows or used_percent(window) > used_percent(windows[key]):
+        if key not in windows or used_percent(window) < used_percent(windows[key]):
             windows[key] = window
     return windows or None
 
@@ -180,14 +200,19 @@ def main():
     except OSError:
         pass  # A read-only or full disk must not break the line.
     windows = quota_windows(payload.get("quota"), time.time())
+    models = quota_models(payload.get("quota"), time.time())
     try:
-        # The raw buckets, to check how they map to windows (agy does not document them).
-        os.makedirs(USAGE_DIR, exist_ok=True)
-        _write_json(
-            os.path.join(USAGE_DIR, "quota_raw.json"),
-            {"captured_at": time.time(), "quota": payload.get("quota"),
-             "plan_tier": payload.get("plan_tier")},
-        )
+        # The raw buckets, to check how they map to windows (agy does not document them), and
+        # each model's quota. Only when this report had them: most reports carry no quota.
+        if payload.get("quota") is not None:
+            os.makedirs(USAGE_DIR, exist_ok=True)
+            _write_json(
+                os.path.join(USAGE_DIR, "quota_raw.json"),
+                {"captured_at": time.time(), "quota": payload.get("quota"),
+                 "plan_tier": payload.get("plan_tier")},
+            )
+        if models:
+            _write_json(os.path.join(USAGE_DIR, "quota_models.json"), {"captured_at": time.time(), "models": models})
     except OSError:
         pass
     try:
