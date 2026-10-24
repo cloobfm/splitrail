@@ -1705,8 +1705,8 @@ fn left_color(left: f64) -> Color {
 
 /// The plans on one shared week: each bar runs from now to that plan's reset, coloured by the
 /// share left, so the deadlines line up instead of being read off "4d15h" one by one. Soonest
-/// reset first; a full plan (waiting for its reset) is grey. Max-style plans draw full height,
-/// Team seats a shorter bar.
+/// reset first; a full plan (waiting for its reset) is grey. Drawn in braille dots like the
+/// Summary's sparklines: full height for a Max-style plan, half for a Team seat.
 fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pick], now: chrono::DateTime<chrono::Utc>) {
     use chrono::{Datelike, Duration, Local, Timelike};
     const SPAN_SECS: f64 = 7.0 * 86_400.0;
@@ -1766,7 +1766,9 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
             || pick.account.as_deref().is_some_and(|a| a.contains('(') && !a.contains("(personal)")),
             |p| p.starts_with("Team"),
         );
-        let glyph = if !pick.available { '░' } else if team { '▆' } else { '█' };
+        // Braille dots, as the Summary's sparklines: a full cell for a full plan, the lower half
+        // for a Team seat, a single dot row for a plan that is full and waiting.
+        let glyph = if !pick.available { '⣀' } else if team { '⣤' } else { '⣿' };
         let beyond = (*secs as f64) > SPAN_SECS;
         let filled = ((*secs as f64).min(SPAN_SECS) / SPAN_SECS * bar_w as f64).round().max(1.0) as usize;
         // A monthly plan runs past the week shown: its end is off the right edge.

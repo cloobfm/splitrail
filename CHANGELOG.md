@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.122] - 2026-10-23
+
+### Changed
+- The 🗓 Plans timeline draws in braille dots like the Summary's charts instead of solid
+  blocks, which ran together into one slab: `⣿` for a full plan, `⣤` (lower half) for a Team
+  seat, `⣀` for a plan that is full and waiting for its reset.
+
 ## [2.0.0-dash-0.121] - 2026-10-23
 
 ### Fixed
