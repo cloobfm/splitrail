@@ -15,7 +15,7 @@ fn window_secs(key: &str) -> f64 {
     }
 }
 
-fn window_secs_label(label: &str) -> f64 {
+pub fn window_secs_label(label: &str) -> f64 {
     match label {
         "5h" => window_secs("five_hour"),
         "week" => window_secs("seven_day"),

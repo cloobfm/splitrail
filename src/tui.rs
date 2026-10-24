@@ -1529,16 +1529,27 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             Color::Green
         }
     };
+    let yardstick = max_week_value(windows.iter());
     let rows: Vec<Row> = plans
         .iter()
         .map(|row| {
             let w = &row.plan;
+            // The whole window's worth, `~` where estimated from the plan rather than measured.
+            let value = plan_value(w, yardstick);
+            let allowance = format!(
+                "{}{} · ${:.0}",
+                if value.estimated { "~" } else { "" },
+                value.tokens_per_dollar.map_or("?".into(), |t| human_tokens(value.allowance * t)),
+                value.allowance
+            );
             // `ambertyeung@gmail.com (personal)` -> the email; a team name stays.
             let account = w.account.clone().map(|a| a.replace(" (personal)", "")).unwrap_or_else(|| "-".into());
-            let left = match (w.left_output(), w.left_dollars()) {
-                (Some(t), Some(d)) => format!("{} · ${d:.0}", human_tokens(t)),
-                _ => "-".into(),
-            };
+            let left = format!(
+                "{}{} · ${:.0}",
+                if value.estimated { "~" } else { "" },
+                value.tokens_per_dollar.map_or("?".into(), |t| human_tokens(value.left * t)),
+                value.left
+            );
             // Needed rate against the current one: green when keeping up, yellow when behind.
             let need = w.need_tks().map(|need| {
                 let keeping_up = w.now_tks >= need;
@@ -1573,6 +1584,7 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
                 Cell::from(account).style(Style::default().fg(if w.account.is_some() { Color::Cyan } else { Color::DarkGray })),
                 Cell::from(w.window),
                 Cell::from(format!("{:>3.0}%", w.used)).style(Style::default().fg(used_color(w.used))),
+                Cell::from(allowance).style(if value.estimated { dim } else { Style::default() }),
                 Cell::from(left),
                 need.unwrap_or_else(|| Cell::from("-").style(dim)),
                 Cell::from(if w.now_tks > 0.0 { format!("{:.0} tk/s", w.now_tks) } else { "-".into() }),
@@ -1596,6 +1608,7 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             Constraint::Length(22),
             Constraint::Length(5),
             Constraint::Length(4),
+            Constraint::Length(15),
             Constraint::Length(13),
             Constraint::Length(9),
             Constraint::Length(9),
@@ -1607,7 +1620,7 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
     )
     .header(
         Row::new(vec![
-            "Tool", "Account", "Plan", "Used", "Left", "Need", "Now", "Runs out", "Locked out", "Resets", "5h now",
+            "Tool", "Account", "Plan", "Used", "Allowance", "Left", "Need", "Now", "Runs out", "Locked out", "Resets", "5h now",
         ])
         .style(Style::default().add_modifier(Modifier::BOLD))
         .bottom_margin(1),
@@ -1687,9 +1700,158 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
     let [list_area, timeline_area] =
         Layout::vertical([Constraint::Length(list_height), Constraint::Min(0)]).areas(picks_area);
     frame.render_widget(picks_table, list_area);
+    let yardstick = max_week_value(windows.iter());
+    // The pool chart under the timeline, when there is room for both.
+    let timeline_rows = picks.iter().filter(|p| p.window.as_ref().is_some_and(|w| w.resets_in_secs.is_some())).count() as u16;
+    let timeline_height = (timeline_rows * 2 + 4).min(timeline_area.height);
+    let [timeline_area, pool_area] =
+        Layout::vertical([Constraint::Length(timeline_height), Constraint::Min(0)]).areas(timeline_area);
     if timeline_area.height >= 5 {
-        draw_plan_timeline(frame, timeline_area, &picks, filtered_stats, now);
+        draw_plan_timeline(frame, timeline_area, &picks, filtered_stats, yardstick, now);
     }
+    if pool_area.height >= 8 {
+        draw_pool_chart(frame, pool_area, &picks, filtered_stats, yardstick, now);
+    }
+}
+
+/// Every plan's allowance as one pool, like a stock chart: the API dollars left across all plans
+/// over the last day (rebuilt from the hourly usage) and the next week. Ahead, two lines: the
+/// pool if left unused (each plan refills at its reset), and at the pace that uses each plan by
+/// its reset (the burn-down the timeline asks for). Local GPUs have no allowance to run out, so
+/// they are not in it.
+fn draw_pool_chart(
+    frame: &mut Frame,
+    area: Rect,
+    picks: &[crate::advisor::Pick],
+    stats: &[&AgenticCodingToolStats],
+    yardstick: (f64, Option<f64>),
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    use chrono::Duration;
+    use ratatui::symbols::Marker;
+    use ratatui::widgets::{Axis, Chart, Dataset, GraphType};
+    const PAST_H: i64 = 24;
+    const AHEAD_H: i64 = 7 * 24;
+    struct Plan {
+        value: PlanValue,
+        resets_in_h: f64,
+        period_h: f64,
+        spent: Vec<(f64, f64)>, // (hours before now, dollars)
+    }
+    let since = now - Duration::hours(PAST_H);
+    let plans: Vec<Plan> = picks
+        .iter()
+        .filter_map(|p| {
+            let w = p.window.as_ref()?;
+            Some(Plan {
+                value: plan_value(w, yardstick),
+                resets_in_h: w.resets_in_secs? as f64 / 3600.0,
+                period_h: crate::advisor::window_secs_label(w.window) / 3600.0,
+                spent: plan_spend_events(p, stats, since, now)
+                    .into_iter()
+                    .map(|(at, cost)| ((now - at).num_seconds() as f64 / 3600.0, cost))
+                    .collect(),
+            })
+        })
+        .collect();
+    // Past: what is left now plus what has been spent since, capped at the plan's whole value.
+    let past: Vec<(f64, f64)> = (0..=PAST_H * 2)
+        .map(|half| {
+            let ago = (PAST_H * 2 - half) as f64 / 2.0;
+            let pool = plans
+                .iter()
+                .map(|p| (p.value.left + p.spent.iter().filter(|(h, _)| *h <= ago).map(|(_, c)| c).sum::<f64>()).min(p.value.allowance))
+                .sum::<f64>();
+            (-ago, pool)
+        })
+        .collect();
+    let ahead = |paced: bool| -> Vec<(f64, f64)> {
+        (0..=AHEAD_H)
+            .map(|h| {
+                let h = h as f64;
+                let pool = plans
+                    .iter()
+                    .map(|p| {
+                        if h < p.resets_in_h {
+                            if paced { p.value.left * (1.0 - h / p.resets_in_h) } else { p.value.left }
+                        } else if paced {
+                            let into = (h - p.resets_in_h) % p.period_h;
+                            p.value.allowance * (1.0 - into / p.period_h)
+                        } else {
+                            p.value.allowance
+                        }
+                    })
+                    .sum::<f64>();
+                (h, pool)
+            })
+            .collect()
+    };
+    let idle = ahead(false);
+    let paced = ahead(true);
+    let top = past.iter().chain(&idle).map(|(_, v)| *v).fold(1.0f64, f64::max) * 1.05;
+    let left_now: f64 = plans.iter().map(|p| p.value.left).sum();
+    let tokens_now: f64 = plans.iter().filter_map(|p| Some(p.value.left * p.value.tokens_per_dollar?)).sum();
+    let day_ago = past.first().map_or(left_now, |(_, v)| *v);
+    let change = left_now - day_ago;
+    let datasets = vec![
+        Dataset::default()
+            .name("last 24h")
+            .marker(Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Cyan))
+            .data(&past),
+        Dataset::default()
+            .name("if unused (refills at each reset)")
+            .marker(Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::DarkGray))
+            .data(&idle),
+        Dataset::default()
+            .name("using every plan by its reset")
+            .marker(Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Green))
+            .data(&paced),
+    ];
+    let money = |v: f64| if v >= 1000.0 { format!("${:.1}k", v / 1000.0) } else { format!("${v:.0}") };
+    let title = Line::from(vec![
+        Span::styled(" 📈 Pool · every plan's allowance left, API $ ", Style::default().bold()),
+        Span::styled(format!("{} ", money(left_now)), Style::default().fg(Color::Cyan).bold()),
+        Span::styled(
+            format!("{}{} 24h ", if change >= 0.0 { "▲" } else { "▼" }, money(change.abs())),
+            Style::default().fg(if change >= 0.0 { Color::Green } else { Color::Red }),
+        ),
+        Span::styled(format!("· ≈{} output tokens · local GPUs uncapped, not in the pool ", crate::advisor::human_tokens(tokens_now)), Style::default().fg(Color::DarkGray)),
+    ]);
+    let chart = Chart::new(datasets)
+        .block(
+            Block::default().borders(Borders::ALL).title(title).title_bottom(Line::from(vec![
+                Span::styled(" ── last 24h ", Style::default().fg(Color::Cyan)),
+                Span::styled(" ── if unused (refills at each reset) ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" ── using every plan by its reset ", Style::default().fg(Color::Green)),
+            ])),
+        )
+        .x_axis(
+            Axis::default()
+                .bounds([-(PAST_H as f64), AHEAD_H as f64])
+                // Labels are spread evenly over the bounds: one a day, "now" the second.
+                .labels(
+                    std::iter::once("-24h".to_string())
+                        .chain(std::iter::once("now".to_string()))
+                        .chain((1..=7).map(|d| format!("+{d}d")))
+                        .map(Span::raw)
+                        .collect::<Vec<_>>(),
+                )
+                .style(Style::default().fg(Color::DarkGray)),
+        )
+        .y_axis(
+            Axis::default()
+                .bounds([0.0, top])
+                .labels(vec![Span::raw("$0"), Span::raw(money(top / 2.0)), Span::raw(money(top))])
+                .style(Style::default().fg(Color::DarkGray)),
+        )
+        .legend_position(None);
+    frame.render_widget(chart, area);
 }
 
 /// Colour for the share of a plan left: plenty to use (green), some (yellow), nearly out (red).
@@ -1701,6 +1863,90 @@ fn left_color(left: f64) -> Color {
     } else {
         Color::Red
     }
+}
+
+/// What a plan's whole window is worth and what is left of it, in API dollars, so plans of every
+/// kind compare. Measured from this window's spend where there is some; else estimated from the
+/// plan (a Claude plan as a share of the measured Max 20x week, a credit plan's monthly
+/// allowance). A Claude plan is always sized by its plan: usage per login has only been credited
+/// since 2026-10-23, so a login's measured week can be a sliver of it.
+#[derive(Clone, Copy)]
+struct PlanValue {
+    allowance: f64,
+    left: f64,
+    /// Output tokens a dollar buys at this plan's mix of models and cache.
+    tokens_per_dollar: Option<f64>,
+    estimated: bool,
+}
+
+/// The measured value of a Max 20x week, the yardstick for estimating other Claude plans.
+fn max_week_value<'a>(windows: impl Iterator<Item = &'a crate::advisor::Window>) -> (f64, Option<f64>) {
+    windows
+        .filter(|w| w.plan.as_deref() == Some("Max 20x") && w.window == "week" && w.used >= 1.0)
+        .filter_map(|w| {
+            let spend = w.spend?;
+            let value = w.dollars_per_percent()? * 100.0;
+            Some((value, (spend.cost > 0.0).then(|| spend.output / spend.cost)))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap_or((2_000.0, None))
+}
+
+fn plan_value(w: &crate::advisor::Window, (max_week, max_tpd): (f64, Option<f64>)) -> PlanValue {
+    let left_share = (100.0 - w.used).clamp(0.0, 100.0) / 100.0;
+    let measured_tpd = w.spend.filter(|s| s.cost > 0.0 && s.output > 0.0).map(|s| s.output / s.cost);
+    let claude_plan = w.plan.as_deref().is_some_and(|p| p.starts_with("Max") || p.starts_with("Team") || p == "Pro");
+    if !claude_plan && let Some(per) = w.dollars_per_percent().filter(|_| w.used >= 1.0) {
+        return PlanValue { allowance: per * 100.0, left: per * (100.0 - w.used).max(0.0), tokens_per_dollar: measured_tpd, estimated: false };
+    }
+    let allowance = match w.plan.as_deref() {
+        Some("Max 20x") => max_week,
+        Some("Max 5x") | Some("Max") => max_week * 0.25,
+        Some("Team Prem") => max_week * 6.25 / 20.0,
+        Some("Team Std") | Some("Team") => max_week * 1.25 / 20.0,
+        Some("Pro") => max_week / 20.0,
+        _ => crate::plan_limits::plan_value_dollars(tool_base(&w.tool)).unwrap_or(20.0),
+    };
+    let estimated = !(w.plan.as_deref() == Some("Max 20x") && (allowance - w.dollars_per_percent().unwrap_or(0.0) * 100.0).abs() < 1.0);
+    PlanValue { allowance, left: allowance * left_share, tokens_per_dollar: measured_tpd.or(max_tpd), estimated }
+}
+
+/// API dollars spent on a plan's own usage (a Claude login's slices) between `since` and `now`,
+/// by hour.
+fn plan_spend_events(
+    pick: &crate::advisor::Pick,
+    stats: &[&AgenticCodingToolStats],
+    since: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<(chrono::DateTime<chrono::Utc>, f64)> {
+    use chrono::Local;
+    let base = tool_base(&pick.tool);
+    let Some(tool) = stats.iter().find(|s| s.analyzer_name == base) else { return Vec::new() };
+    let login = pick.account.as_deref();
+    let signed_in = !pick.window.as_ref().is_some_and(|w| w.switch_login);
+    let local = |day: &str, hour: u8| {
+        chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+            .ok()?
+            .and_hms_opt(hour as u32, 30, 0)?
+            .and_local_timezone(Local)
+            .earliest()
+            .map(|t| t.with_timezone(&chrono::Utc))
+    };
+    let first_day = since.with_timezone(&Local).format("%Y-%m-%d").to_string();
+    let mut events = Vec::new();
+    for (day, totals) in tool.daily_stats.range(first_day..) {
+        for s in &totals.slices {
+            let mine = match login {
+                Some(l) if !s.account.is_empty() || !signed_in => s.account == l,
+                _ => true,
+            };
+            let Some(at) = local(day, s.hour) else { continue };
+            if mine && at >= since && at <= now && s.cost > 0.0 {
+                events.push((at, s.cost));
+            }
+        }
+    }
+    events
 }
 
 /// The plans on one shared axis, the last day and the next week: each bar's height is what is
@@ -1715,6 +1961,7 @@ fn draw_plan_timeline(
     area: Rect,
     picks: &[crate::advisor::Pick],
     stats: &[&AgenticCodingToolStats],
+    yardstick: (f64, Option<f64>),
     now: chrono::DateTime<chrono::Utc>,
 ) {
     use chrono::{Datelike, Duration, Local, Timelike};
@@ -1745,65 +1992,14 @@ fn draw_plan_timeline(
         .collect();
     rows.sort_by_key(|(_, _, secs)| *secs);
 
-    // Dollars left, comparable across plans: measured where the plan has been used this window,
-    // else its plan's value (a Claude plan as a share of the measured Max 20x week; a credit
-    // plan's monthly allowance) times the share left.
-    let max_week = rows
-        .iter()
-        .filter(|(_, w, _)| w.plan.as_deref() == Some("Max 20x"))
-        .filter_map(|(_, w, _)| Some(w.left_dollars()? / ((100.0 - w.used) / 100.0).max(0.01)))
-        .fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a: f64| a.max(b))))
-        .unwrap_or(2_000.0);
-    let dollars_left = |pick: &crate::advisor::Pick, w: &crate::advisor::Window| -> f64 {
-        let left = (100.0 - w.used).max(0.0) / 100.0;
-        // A Claude plan by its size (usage per login has only been credited since 2026-10-23,
-        // so a login's measured week can be a sliver of it); anything else as measured.
-        let claude_plan = w.plan.as_deref().is_some_and(|p| p.starts_with("Max") || p.starts_with("Team") || p == "Pro");
-        if !claude_plan && let Some(d) = w.left_dollars() {
-            return d;
-        }
-        let base = tool_base(&pick.tool);
-        let value = match w.plan.as_deref() {
-            Some("Max 20x") => max_week,
-            Some("Max 5x") | Some("Max") => max_week * 0.25,
-            Some("Team Prem") => max_week * 6.25 / 20.0,
-            Some("Team Std") | Some("Team") => max_week * 1.25 / 20.0,
-            Some("Pro") => max_week / 20.0,
-            _ => crate::plan_limits::plan_value_dollars(base).unwrap_or(20.0),
-        };
-        value * left
-    };
-    // Spend in each column of the last day, for the plan's own usage (a Claude login's slices).
+    // Spend in each column of the last day, for the plan's own usage.
     let past_spend = |pick: &crate::advisor::Pick| -> Vec<f64> {
         let mut spent = vec![0.0; past_w];
-        let base = tool_base(&pick.tool);
-        let Some(tool) = stats.iter().find(|s| s.analyzer_name == base) else { return spent };
-        let login = pick.account.as_deref();
-        let signed_in = !pick.window.as_ref().is_some_and(|w| w.switch_login);
-        let local = |day: &str, hour: u8| {
-            chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
-                .ok()?
-                .and_hms_opt(hour as u32, 30, 0)?
-                .and_local_timezone(Local)
-                .earliest()
-                .map(|t| t.with_timezone(&chrono::Utc))
-        };
         let since = now - Duration::seconds(PAST_SECS as i64);
-        let first_day = since.with_timezone(&Local).format("%Y-%m-%d").to_string();
-        for (day, totals) in tool.daily_stats.range(first_day..) {
-            for s in &totals.slices {
-                let mine = match login {
-                    Some(l) if !s.account.is_empty() || !signed_in => s.account == l,
-                    _ => true,
-                };
-                let Some(at) = local(day, s.hour) else { continue };
-                if !mine || at < since || at > now {
-                    continue;
-                }
-                let col = (((at - since).num_seconds() as f64) / col_secs_past) as usize;
-                if col < past_w {
-                    spent[col] += s.cost;
-                }
+        for (at, cost) in plan_spend_events(pick, stats, since, now) {
+            let col = (((at - since).num_seconds() as f64) / col_secs_past) as usize;
+            if col < past_w {
+                spent[col] += cost;
             }
         }
         spent
@@ -1811,7 +2007,7 @@ fn draw_plan_timeline(
     // Height in dot rows: 1-4 in one text row, 1-8 for a big plan drawn two rows tall.
     let dots = |dollars: f64, biggest: f64, rows: usize| ((dollars / biggest * (4 * rows) as f64).ceil() as usize).clamp(1, 4 * rows);
 
-    let measured: Vec<(f64, Vec<f64>)> = rows.iter().map(|(p, w, _)| (dollars_left(p, w), past_spend(p))).collect();
+    let measured: Vec<(f64, Vec<f64>)> = rows.iter().map(|(p, w, _)| (plan_value(w, yardstick).left, past_spend(p))).collect();
     // The tallest over the whole picture, the past included, sets the scale.
     let biggest = measured
         .iter()

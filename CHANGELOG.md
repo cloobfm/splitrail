@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.127] - 2026-10-23
+
+### Added
+- **Allowance** column in the plan quotas table (`p`): what the whole week or month is worth,
+  as output tokens and API dollars. Measured from the window's spend; `~` and grey where
+  estimated from the plan (Claude logins by plan size against the measured Max 20x week; credit
+  plans from their monthly allowance). **Left** uses the same figures.
+- 📈 **Pool** chart under the Plans timeline: every plan's allowance left as one line, in API
+  dollars, like a stock chart. The last 24 hours rebuilt from the hourly usage (cyan), then the
+  next week if left unused (grey: each plan refills at its reset) and if every plan is used by
+  its reset (green). The title gives the pool now, its change over the day and its worth in
+  output tokens. Local GPUs have no allowance to run out and are not in it.
+
 ## [2.0.0-dash-0.126] - 2026-10-23
 
 ### Added
