@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.128] - 2026-10-23
+
+### Fixed
+- The 📈 Pool chart never showed on a 150-column, 70-row pane: the Plans timeline reserved two
+  rows per plan. It takes what it draws now, and the pool the rest.
+- Allowance and Left were jammed (`~6.9M · $1760` cut off): tokens and dollars in their own
+  aligned columns, `~` in front where estimated; Resets no longer cut off.
+
 ## [2.0.0-dash-0.127] - 2026-10-23
 
 ### Added

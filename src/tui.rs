@@ -1536,20 +1536,19 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
             let w = &row.plan;
             // The whole window's worth, `~` where estimated from the plan rather than measured.
             let value = plan_value(w, yardstick);
-            let allowance = format!(
-                "{}{} · ${:.0}",
-                if value.estimated { "~" } else { "" },
-                value.tokens_per_dollar.map_or("?".into(), |t| human_tokens(value.allowance * t)),
-                value.allowance
-            );
+            // Tokens and dollars in aligned columns, `~` where estimated.
+            let amount = |dollars: f64| {
+                format!(
+                    "{}{:>6} {:>6}",
+                    if value.estimated { "~" } else { " " },
+                    value.tokens_per_dollar.map_or("?".into(), |t| human_tokens(dollars * t)),
+                    format!("${dollars:.0}")
+                )
+            };
+            let allowance = amount(value.allowance);
             // `ambertyeung@gmail.com (personal)` -> the email; a team name stays.
             let account = w.account.clone().map(|a| a.replace(" (personal)", "")).unwrap_or_else(|| "-".into());
-            let left = format!(
-                "{}{} · ${:.0}",
-                if value.estimated { "~" } else { "" },
-                value.tokens_per_dollar.map_or("?".into(), |t| human_tokens(value.left * t)),
-                value.left
-            );
+            let left = amount(value.left);
             // Needed rate against the current one: green when keeping up, yellow when behind.
             let need = w.need_tks().map(|need| {
                 let keeping_up = w.now_tks >= need;
@@ -1605,16 +1604,16 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
         rows,
         [
             Constraint::Length(20),
-            Constraint::Length(22),
+            Constraint::Length(19),
             Constraint::Length(5),
             Constraint::Length(4),
-            Constraint::Length(15),
-            Constraint::Length(13),
-            Constraint::Length(9),
-            Constraint::Length(9),
+            Constraint::Length(14),
+            Constraint::Length(14),
+            Constraint::Length(8),
+            Constraint::Length(8),
             Constraint::Length(8),
             Constraint::Length(10),
-            Constraint::Length(17),
+            Constraint::Length(18),
             Constraint::Min(11),
         ],
     )
@@ -1703,7 +1702,9 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
     let yardstick = max_week_value(windows.iter());
     // The pool chart under the timeline, when there is room for both.
     let timeline_rows = picks.iter().filter(|p| p.window.as_ref().is_some_and(|w| w.resets_in_secs.is_some())).count() as u16;
-    let timeline_height = (timeline_rows * 2 + 4).min(timeline_area.height);
+    // A row per plan, a second for the few big ones, the axis, marks, legend and borders; the
+    // pool chart takes the rest.
+    let timeline_height = (timeline_rows + 7).min(timeline_area.height);
     let [timeline_area, pool_area] =
         Layout::vertical([Constraint::Length(timeline_height), Constraint::Min(0)]).areas(timeline_area);
     if timeline_area.height >= 5 {
