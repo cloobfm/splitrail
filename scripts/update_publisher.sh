@@ -6,6 +6,12 @@ ssh_host=$1 name=$2 broker=$3 user=$4
 cd "$(dirname "$0")/.."
 os=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$ssh_host" uname -s 2>/dev/null || true)
 if [ "$os" = "Linux" ]; then
+    # The Linux installer sets up a systemd service; a host without systemd (the QNAP NAS, whose
+    # publisher runs in Docker) is updated by hand rather than given a second publisher.
+    if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$ssh_host" 'command -v systemctl' >/dev/null 2>&1; then
+        echo "$ssh_host: no systemd (a Docker publisher?); not updated, update its container by hand" >&2
+        exit 1
+    fi
     exec scripts/install_mqtt_publisher.sh "$ssh_host" "$broker" "$user"
 fi
 win=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$ssh_host" 'echo %OS%' 2>/dev/null | tr -d '\r' || true)

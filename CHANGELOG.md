@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.134] - 2026-10-23
+
+### Fixed
+- `U` would have installed a systemd publisher on a Linux host without systemd once it answered
+  over ssh: the QNAP NAS (ts677, now reachable as `ssh ts677` / `ssh cloobvault`), whose
+  publisher runs in Docker. Such a host is skipped, with "update its container by hand".
+
 ## [2.0.0-dash-0.133] - 2026-10-23
 
 ### Changed
