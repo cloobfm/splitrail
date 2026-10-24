@@ -1938,27 +1938,63 @@ struct PlanValue {
     estimated: bool,
 }
 
-/// The measured value of a Max 20x week, the yardstick for estimating other Claude plans.
+/// The measured value of a Max 20x week, the yardstick for estimating other Claude plans: the
+/// biggest measured this week, from a window used enough (20%+) to measure it, and kept in
+/// `plan_values.json` so a reset (an empty week measures nothing) does not shrink every Claude
+/// plan with it. Kept for a month; a bigger measurement replaces it.
 fn max_week_value<'a>(windows: impl Iterator<Item = &'a crate::advisor::Window>) -> (f64, Option<f64>) {
-    windows
-        .filter(|w| w.plan.as_deref() == Some("Max 20x") && w.window == "week" && w.used >= 1.0)
+    use std::sync::Mutex;
+    static LAST_SAVED: Mutex<Option<(f64, Option<f64>)>> = Mutex::new(None);
+    const KEEP_SECS: f64 = 30.0 * 86_400.0;
+    let measured = windows
+        .filter(|w| w.plan.as_deref() == Some("Max 20x") && w.window == "week" && w.used >= 20.0)
         .filter_map(|w| {
             let spend = w.spend?;
             let value = w.dollars_per_percent()? * 100.0;
             Some((value, (spend.cost > 0.0).then(|| spend.output / spend.cost)))
         })
-        .max_by(|a, b| a.0.total_cmp(&b.0))
-        .unwrap_or((2_000.0, None))
+        .max_by(|a, b| a.0.total_cmp(&b.0));
+    let path = (!cfg!(test))
+        .then(|| std::env::home_dir().map(|h| h.join(".config/splitrail/plan_values.json")))
+        .flatten();
+    let now = chrono::Utc::now().timestamp() as f64;
+    let saved = path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .filter(|v| now - v["at"].as_f64().unwrap_or(0.0) < KEEP_SECS)
+        .and_then(|v| Some((v["max_week"].as_f64()?, v["tokens_per_dollar"].as_f64())));
+    let best = match (measured, saved) {
+        (Some(m), Some(s)) if s.0 > m.0 => s,
+        (Some(m), _) => m,
+        (None, Some(s)) => s,
+        (None, None) => return (2_000.0, None),
+    };
+    if measured == Some(best)
+        && let Some(path) = path
+        && let Ok(mut last) = LAST_SAVED.lock()
+        && last.is_none_or(|l| (l.0 - best.0).abs() > 1.0)
+    {
+        let json = serde_json::json!({"max_week": best.0, "tokens_per_dollar": best.1, "at": now});
+        if std::fs::write(&path, json.to_string()).is_ok() {
+            *last = Some(best);
+        }
+    }
+    best
 }
 
 fn plan_value(w: &crate::advisor::Window, (max_week, max_tpd): (f64, Option<f64>)) -> PlanValue {
     let left_share = (100.0 - w.used).clamp(0.0, 100.0) / 100.0;
-    let measured_tpd = w.spend.filter(|s| s.cost > 0.0 && s.output > 0.0).map(|s| s.output / s.cost);
-    let claude_plan = w.plan.as_deref().is_some_and(|p| p.starts_with("Max") || p.starts_with("Team") || p == "Pro");
+    // Tokens a dollar buys, from a window used enough to say (just after a reset, a few cached
+    // requests can make it look ten times dearer).
+    let measured_tpd = w.spend.filter(|s| s.cost > 0.0 && s.output > 0.0 && w.used >= 10.0).map(|s| s.output / s.cost);
+    // Claude's plans by name; Droid's "Pro" is Factory's.
+    let claude_plan = w.tool.starts_with("Claude")
+        && w.plan.as_deref().is_some_and(|p| p.starts_with("Max") || p.starts_with("Team") || p == "Pro");
     if !claude_plan && let Some(per) = w.dollars_per_percent().filter(|_| w.used >= 1.0) {
         return PlanValue { allowance: per * 100.0, left: per * (100.0 - w.used).max(0.0), tokens_per_dollar: measured_tpd, estimated: false };
     }
-    let allowance = match w.plan.as_deref() {
+    let allowance = match w.plan.as_deref().filter(|_| claude_plan) {
         Some("Max 20x") => max_week,
         Some("Max 5x") | Some("Max") => max_week * 0.25,
         Some("Team Prem") => max_week * 6.25 / 20.0,

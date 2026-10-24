@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.136] - 2026-10-24
+
+### Fixed
+- The 📈 Pool's cap fell from $6.2k to $4.2k when Claude (main)'s week reset: an empty week
+  measures nothing, so the Max 20x yardstick every Claude plan is sized by fell back to another,
+  smaller measurement. The biggest measured Max 20x week (from a window 20%+ used) is kept in
+  `~/.config/splitrail/plan_values.json` for a month, so a reset no longer shrinks the plans.
+- Droid's plan, "Pro", was sized as a Claude Pro. Claude's plan names count only for Claude.
+- Just after a reset a few cached requests made a plan's tokens per dollar look ten times
+  lower (Claude (main): 980k for $1,761); a window under 10% used takes the yardstick's.
+
 ## [2.0.0-dash-0.135] - 2026-10-24
 
 ### Fixed
