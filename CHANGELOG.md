@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.118] - 2026-10-23
+
+### Added
+- Claude usage is credited to the login it ran under (BZL-283). One account directory (Claude
+  (v)) is used with a Max plan and Team seats, each its own weekly allowance, and switching
+  mid-week used to mix them. The status line capture now keeps a permanent login history
+  (`~/.config/splitrail/logins/<label>.jsonl`, a line per change). `/login` switches the whole
+  directory at once, so each reply belongs to the login the directory was on at its time.
+  Each hour/model/project slice of a day now also carries that login.
+- "Where to spend next" measures each login against its own week, to the hour: the signed-in
+  row counts its own usage (plus anything from before history was kept), and another login's
+  row gets its own spend once it has been used, so a Team seat's quota is measured instead of
+  guessed. History starts on 2026-10-23, seeded from the sessions the capture already knew.
+
 ## [2.0.0-dash-0.117] - 2026-10-23
 
 ### Added

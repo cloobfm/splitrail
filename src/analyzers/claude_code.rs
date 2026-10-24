@@ -27,6 +27,40 @@ pub struct ClaudeCodeAnalyzer {
     accum: std::sync::Mutex<Accumulator>,
 }
 
+/// When the account's config directory was on which login, from the status line capture's
+/// history (`~/.config/splitrail/logins/<label>.jsonl`, one line per change, BZL-283). `/login`
+/// switches the whole directory, so the login at a time is the latest change before it.
+#[derive(Default)]
+struct LoginTimeline {
+    changes: Vec<(f64, String)>,
+}
+
+impl LoginTimeline {
+    fn load(label: Option<&str>) -> Self {
+        let Some(path) = label.and_then(|l| Some(std::env::home_dir()?.join(format!(".config/splitrail/logins/{l}.jsonl")))) else {
+            return Self::default();
+        };
+        Self::parse(&std::fs::read_to_string(path).unwrap_or_default())
+    }
+
+    fn parse(content: &str) -> Self {
+        let mut changes: Vec<(f64, String)> = content
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter_map(|v| Some((v.get("t")?.as_f64()?, v.get("login")?.as_str()?.to_string())))
+            .collect();
+        changes.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Self { changes }
+    }
+
+    /// The login at `date`; empty before the history starts.
+    fn at(&self, date: chrono::DateTime<Utc>) -> &str {
+        let t = date.timestamp_millis() as f64 / 1000.0;
+        let index = self.changes.partition_point(|(at, _)| *at <= t);
+        index.checked_sub(1).map_or("", |i| self.changes[i].1.as_str())
+    }
+}
+
 /// Fold state for one `local_hash`. Claude Code writes a single assistant turn as several JSONL
 /// rows; dedup folds them back together. Their `usage` is a cumulative snapshot of the one billed
 /// request (input and cache repeat, output only grows, the last row is the bill), so the tokens
@@ -44,13 +78,15 @@ struct FoldState {
     /// Its slice of that day (BZL-138), so corrections land there too.
     hour: u8,
     project: String,
+    /// The login it ran under (BZL-283), so corrections land on its slice.
+    account: String,
 }
 
 impl FoldState {
     /// Move the day's slice for this message by a correction.
     fn add_to_slice(&self, day: &mut DailyStats, delta: &Stats, cost: f64) {
         if let Some(model) = &self.model {
-            let slice = crate::utils::slice_mut(day, self.hour, model, &self.project);
+            let slice = crate::utils::slice_mut_for(day, self.hour, model, &self.project, &self.account);
             crate::utils::add_to_slice(slice, delta, cost, 0);
         }
     }
@@ -83,7 +119,7 @@ impl Accumulator {
     }
 
     /// Fold one freshly parsed message in, applying the same dedup rules as `dedup_messages`.
-    fn fold(&mut self, message: &ConversationMessage) {
+    fn fold(&mut self, message: &ConversationMessage, account: &str) {
         let date = Self::day_of(message);
 
         self.conversation_start
@@ -147,7 +183,7 @@ impl Accumulator {
             date: date.clone(),
             ..Default::default()
         });
-        crate::utils::fold_entry_into_day(day, message);
+        crate::utils::fold_entry_into_day_for(day, message, account);
         self.timestamps_by_day
             .entry(date.clone())
             .or_default()
@@ -165,6 +201,7 @@ impl Accumulator {
                     model: message.model.clone(),
                     hour: crate::utils::local_hour(&message.date),
                     project: message.project_hash.clone(),
+                    account: account.to_string(),
                 },
             );
         }
@@ -352,9 +389,11 @@ impl ClaudeCodeAnalyzer {
             report.needs_rebuild = true;
         }
 
+        // Which login the account's directory was on when each reply ran (BZL-283).
+        let logins = LoginTimeline::load(crate::plan_limits::account_label(self.name).as_deref());
         for chunk in &chunks {
             for message in chunk.iter() {
-                accum.fold(message);
+                accum.fold(message, logins.at(message.date));
             }
         }
         accum.trim_recent(crate::utils::current_live_window_cutoff());
@@ -1249,6 +1288,43 @@ mod tests {
         assert_eq!(day.slices.len(), 1);
         assert_eq!((day.slices[0].replies, day.slices[0].output_tokens, day.slices[0].project.as_str()), (1, 300, "p"));
         assert!((day.slices[0].cost - day.stats.cost).abs() < 1e-9);
+    }
+
+    #[test]
+    fn replies_are_credited_to_the_login_the_account_was_on_then() {
+        let t0 = chrono::Utc::now() - chrono::Duration::hours(3);
+        let timeline = LoginTimeline::parse(&format!(
+            "{{\"t\": {}, \"session\": \"s\", \"login\": \"a@virti.us (personal)\"}}\n{{\"t\": {}, \"session\": \"s\", \"login\": \"support@virti.us (Virtius)\"}}\n",
+            t0.timestamp(),
+            (t0 + chrono::Duration::hours(1)).timestamp()
+        ));
+        assert_eq!(timeline.at(t0 - chrono::Duration::minutes(1)), "");
+        assert_eq!(timeline.at(t0 + chrono::Duration::minutes(30)), "a@virti.us (personal)");
+        assert_eq!(timeline.at(t0 + chrono::Duration::hours(2)), "support@virti.us (Virtius)");
+
+        let reply = |minutes: i64, id: &str| ConversationMessage {
+            global_hash: id.into(),
+            local_hash: Some(id.into()),
+            application: Application::ClaudeCode,
+            model: Some("claude-opus-5-5".into()),
+            date: t0 + chrono::Duration::minutes(minutes),
+            project_hash: "p".into(),
+            conversation_hash: "c".into(),
+            role: MessageRole::Assistant,
+            content: None,
+            stats: Stats { output_tokens: 100, ..Default::default() },
+        };
+        let mut accum = Accumulator::default();
+        for message in [reply(30, "a"), reply(120, "b")] {
+            accum.fold(&message, timeline.at(message.date));
+        }
+        let accounts: Vec<(String, u64)> = accum
+            .daily_stats()
+            .values()
+            .flat_map(|d| d.slices.iter().map(|s| (s.account.clone(), s.output_tokens)))
+            .collect();
+        assert!(accounts.contains(&("a@virti.us (personal)".into(), 100)));
+        assert!(accounts.contains(&("support@virti.us (Virtius)".into(), 100)));
     }
 
     #[test]

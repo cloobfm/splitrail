@@ -494,11 +494,16 @@ fn active_seconds_for_day(timestamps: &mut [i64]) -> u64 {
 /// Fold one message's contribution into its day. Shared by the batch aggregator and the
 /// incremental accumulator so the two cannot drift apart.
 pub fn fold_entry_into_day(day: &mut DailyStats, entry: &ConversationMessage) {
+    fold_entry_into_day_for(day, entry, "");
+}
+
+/// [`fold_entry_into_day`], crediting the reply to a login (BZL-283).
+pub fn fold_entry_into_day_for(day: &mut DailyStats, entry: &ConversationMessage, account: &str) {
     match &entry.model {
         Some(model) => {
             // AI message
             day.ai_messages += 1;
-            let slice = slice_mut(day, local_hour(&entry.date), model, &entry.project_hash);
+            let slice = slice_mut_for(day, local_hour(&entry.date), model, &entry.project_hash, account);
             add_to_slice(slice, &entry.stats, entry.stats.cost, 1);
             *day
                 .models
@@ -571,13 +576,29 @@ pub fn caller_project(cwd: Option<&str>, caller: Option<&str>) -> Option<String>
 
 /// The day's slice for (`hour`, `model`, `project`), added if new.
 pub fn slice_mut<'a>(day: &'a mut DailyStats, hour: u8, model: &str, project: &str) -> &'a mut crate::types::Slice {
-    let index = match day.slices.iter().position(|s| s.hour == hour && s.model == model && s.project == project) {
+    slice_mut_for(day, hour, model, project, "")
+}
+
+/// [`slice_mut`] for a login as well (BZL-283).
+pub fn slice_mut_for<'a>(
+    day: &'a mut DailyStats,
+    hour: u8,
+    model: &str,
+    project: &str,
+    account: &str,
+) -> &'a mut crate::types::Slice {
+    let index = match day
+        .slices
+        .iter()
+        .position(|s| s.hour == hour && s.model == model && s.project == project && s.account == account)
+    {
         Some(index) => index,
         None => {
             day.slices.push(crate::types::Slice {
                 hour,
                 model: model.to_string(),
                 project: project.to_string(),
+                account: account.to_string(),
                 ..Default::default()
             });
             day.slices.len() - 1

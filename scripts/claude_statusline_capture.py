@@ -39,6 +39,9 @@ import time
 from datetime import datetime
 
 LIMITS_DIR = os.path.expanduser("~/.config/splitrail/limits")
+# Which login each session ran under, from when (BZL-283): one line per change, kept for good, so
+# the dashboard can credit each reply's tokens to the allowance they came out of.
+LOGINS_DIR = os.path.expanduser("~/.config/splitrail/logins")
 # Claude Code's own per-session totals, to check splitrail's sums against (BZL-193).
 SESSIONS_DIR = os.path.expanduser("~/.config/splitrail/claude_sessions")
 # Ledger entries not updated in this long are dropped.
@@ -284,13 +287,35 @@ def save_snapshot(label, payload, login=None):
                 previous = json.load(f)
         except (OSError, ValueError):
             previous = None
-        snapshot = update_snapshot(previous, label, payload, login, time.time(), login_name)
+        now = time.time()
+        if login_changed(previous, payload.get("session_id"), login):
+            record_login(label, now, payload["session_id"], login)
+        snapshot = update_snapshot(previous, label, payload, login, now, login_name)
         # Write-then-rename: the dashboard may read while a status line refresh is writing.
         fd, tmp = tempfile.mkstemp(dir=LIMITS_DIR, prefix=f".{label}.", suffix=".tmp")
         with os.fdopen(fd, "w") as f:
             json.dump(snapshot, f)
         os.replace(tmp, path)
     return snapshot
+
+
+def login_changed(previous, session_id, login):
+    """Whether this session is on a login the snapshot has not recorded for it yet: a new
+    session, or a `/login` in a running one."""
+    if not session_id or not login:
+        return False
+    sessions = (previous or {}).get("sessions") if isinstance(previous, dict) else None
+    last = sessions.get(session_id) if isinstance(sessions, dict) else None
+    return not isinstance(last, dict) or last.get("login") != login
+
+
+def record_login(label, now, session_id, login, directory=None):
+    """Append `{"t", "session", "login"}` to the account's login history."""
+    directory = directory or LOGINS_DIR
+    os.makedirs(directory, exist_ok=True)
+    line = json.dumps({"t": round(now, 3), "session": session_id, "login": login}) + "\n"
+    with open(os.path.join(directory, f"{label}.jsonl"), "a") as f:
+        f.write(line)
 
 
 def update_ledger(previous, payload, now):

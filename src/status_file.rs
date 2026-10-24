@@ -90,7 +90,17 @@ pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
         .iter()
         .filter(|t| t.name.starts_with("Claude (") && !t.name.contains('@'))
         .flat_map(|t| {
+            let tool_stats = stats.analyzer_stats.iter().find(|s| s.analyzer_name == t.name).cloned();
             crate::plan_limits::other_logins(&t.name).into_iter().map(move |o| {
+                // What this login has used in its own week, measured once it has run (BZL-283).
+                let spend = match (&tool_stats, o.seven_day.resets_in_secs) {
+                    (Some(s), Some(left)) => {
+                        let start = now + chrono::Duration::seconds(left) - chrono::Duration::days(7);
+                        let spend = crate::advisor::login_spend(s, start, &o.account, false);
+                        (spend.cost > 0.0).then(|| spend.to_json())
+                    }
+                    _ => None,
+                };
                 json!({
                     "name": format!("{} · {}", t.name, short_login(&o.account)),
                     "account": o.account,
@@ -98,7 +108,9 @@ pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
                     "cost_today": 0.0,
                     "switch": true,
                     "limits": {"five_hour": Value::Null, "monthly": Value::Null,
-                               "seven_day": window(Some(o.seven_day))},
+                               "seven_day": {"used": round(o.seven_day.used_percentage, 1),
+                                             "resets_in": o.seven_day.resets_in_secs,
+                                             "spend": spend}},
                 })
             })
         })

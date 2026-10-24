@@ -63,7 +63,7 @@ impl Spend {
         )
     }
 
-    fn to_json(self) -> Value {
+    pub fn to_json(self) -> Value {
         json!({"input": self.input.round(), "output": self.output.round(), "cache_write": self.cache_write.round(),
                "cache_read": self.cache_read.round(), "cost": round2(self.cost)})
     }
@@ -109,6 +109,43 @@ pub fn window_spend(stats: &crate::types::AgenticCodingToolStats, start: DateTim
     spend
 }
 
+/// A login's spend since `start` (BZL-283), from the slices credited to it, to the hour.
+/// `with_unknown` also counts usage from before login history was kept, which belongs to
+/// whoever was signed in then: the signed-in login's row takes it, other logins' do not.
+pub fn login_spend(
+    stats: &crate::types::AgenticCodingToolStats,
+    start: DateTime<Utc>,
+    login: &str,
+    with_unknown: bool,
+) -> Spend {
+    let start_local = start.with_timezone(&Local);
+    let first_day = start_local.date_naive().format("%Y-%m-%d").to_string();
+    let first_hour = chrono::Timelike::hour(&start_local) as u8;
+    let mut spend = Spend::default();
+    for (day, totals) in stats.daily_stats.range(first_day.clone()..) {
+        for s in &totals.slices {
+            if *day == first_day && s.hour < first_hour {
+                continue;
+            }
+            if s.account == login || (with_unknown && s.account.is_empty()) {
+                spend.add(&Spend {
+                    input: s.input_tokens as f64,
+                    output: s.output_tokens as f64,
+                    cache_write: s.cache_creation_tokens as f64,
+                    cache_read: s.cache_read_tokens as f64,
+                    cost: s.cost,
+                });
+            }
+        }
+    }
+    spend
+}
+
+/// Whether a column's usage is credited to logins (a Claude account's directory).
+fn has_logins(stats: &crate::types::AgenticCodingToolStats) -> bool {
+    stats.daily_stats.values().rev().take(14).any(|d| d.slices.iter().any(|s| !s.account.is_empty()))
+}
+
 /// Output tokens per second over the last 15 minutes, as the rest of the dashboard counts it.
 pub fn recent_tks(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc>) -> f64 {
     let since = now - Duration::minutes(15);
@@ -127,9 +164,16 @@ pub fn tool_json(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc
     let limits = crate::plan_limits::limits_for_analyzer(name)?;
     let window = |key: &str, w: Option<crate::plan_limits::WindowStatus>| {
         w.map_or(Value::Null, |w| {
-            let spend = w
-                .resets_in_secs
-                .map(|left| window_spend(stats, now + Duration::seconds(left) - Duration::seconds(window_secs(key) as i64)));
+            // Signed-in login only, where usage is credited per login (BZL-283): another login's
+            // use this week came out of its own allowance.
+            let signed_in = has_logins(stats).then(|| crate::plan_limits::account_for_analyzer(name)).flatten();
+            let spend = w.resets_in_secs.map(|left| {
+                let start = now + Duration::seconds(left) - Duration::seconds(window_secs(key) as i64);
+                match &signed_in {
+                    Some(login) => login_spend(stats, start, login, true),
+                    None => window_spend(stats, start),
+                }
+            });
             json!({"used": w.used_percentage, "resets_in": w.resets_in_secs, "spend": spend.map(Spend::to_json)})
         })
     };
@@ -638,6 +682,27 @@ pub fn usage_answer(status: &Value, now: DateTime<Utc>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_logins_spend_is_its_own_slices_from_the_windows_hour() {
+        let slice = |hour: u8, account: &str, cost: f64| crate::types::Slice {
+            hour, account: account.into(), model: "m".into(), replies: 1, output_tokens: 10, cost, ..Default::default()
+        };
+        let mut day = crate::types::DailyStats::default();
+        day.slices = vec![slice(8, "a (personal)", 1.0), slice(12, "a (personal)", 2.0), slice(12, "s (Virtius)", 4.0), slice(13, "", 8.0)];
+        let mut stats = crate::types::AgenticCodingToolStats {
+            daily_stats: Default::default(), num_conversations: 0, messages: Vec::new(), analyzer_name: "Claude (v)".into(),
+        };
+        stats.daily_stats.insert("2026-10-23".into(), day);
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 10, 23).unwrap().and_hms_opt(10, 0, 0).unwrap()
+            .and_local_timezone(Local).unwrap().with_timezone(&Utc);
+        // From 10:00: the 08:00 slice is before the window.
+        assert_eq!(login_spend(&stats, start, "a (personal)", false).cost, 2.0);
+        // The signed-in login also takes usage from before logins were recorded.
+        assert_eq!(login_spend(&stats, start, "a (personal)", true).cost, 10.0);
+        assert_eq!(login_spend(&stats, start, "s (Virtius)", false).cost, 4.0);
+        assert!(has_logins(&stats));
+    }
 
     #[test]
     fn a_fresh_signed_out_login_ranks_as_a_whole_week_to_use() {

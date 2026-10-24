@@ -98,6 +98,10 @@ pub struct Slice {
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
     pub cost: f64,
+    /// The login it ran under (`a@virti.us (Virtius)`), where known (BZL-283); empty before
+    /// login history was kept, and for tools without logins.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub account: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -12,6 +12,8 @@ from claude_statusline_capture import (  # noqa: E402
     merge_limits,
     merge_window,
     summary,
+    login_changed,
+    record_login,
     update_ledger,
     update_snapshot,
 )
@@ -165,6 +167,23 @@ class LedgerTests(unittest.TestCase):
         ledger = update_ledger(None, self.payload(1, 0.01, "old"), 0)
         ledger = update_ledger(ledger, self.payload(1, 0.01, "new"), 46 * 86400)
         self.assertEqual(sorted(ledger), ["new"])
+
+
+
+class LoginHistoryTests(unittest.TestCase):
+    def test_a_new_session_or_a_login_switch_is_recorded_once(self):
+        previous = {"sessions": {"s1": {"login": "a@virti.us (personal)", "seen": 1}}}
+        self.assertFalse(login_changed(previous, "s1", "a@virti.us (personal)"))
+        self.assertTrue(login_changed(previous, "s1", "support@virti.us (Virtius)"))
+        self.assertTrue(login_changed(previous, "s2", "a@virti.us (personal)"))
+        self.assertFalse(login_changed(previous, None, "x"))
+        import tempfile, json as _json
+        with tempfile.TemporaryDirectory() as d:
+            record_login("v", 10.0, "s1", "support@virti.us (Virtius)", directory=d)
+            record_login("v", 20.0, "s2", "a@virti.us (personal)", directory=d)
+            with open(os.path.join(d, "v.jsonl")) as f:
+                lines = [_json.loads(l) for l in f]
+        self.assertEqual([l["login"] for l in lines], ["support@virti.us (Virtius)", "a@virti.us (personal)"])
 
 
 if __name__ == "__main__":
