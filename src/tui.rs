@@ -1797,7 +1797,6 @@ fn draw_pool_chart(
     // The y axis tops out at the cap: no plan holds more than its allowance, so neither can the pool.
     let top = past.iter().chain(&idle).map(|(_, v)| *v).fold(cap, f64::max).max(1.0);
     let cap_line = [(-(PAST_H as f64), cap), (AHEAD_H as f64, cap)];
-    let now_line = [(0.0, 0.0), (0.0, top)];
     let day_ago = past.first().map_or(left_now, |(_, v)| *v);
     let change = left_now - day_ago;
     let datasets = vec![
@@ -1807,12 +1806,6 @@ fn draw_pool_chart(
             .graph_type(GraphType::Line)
             .style(Style::default().fg(Color::Magenta))
             .data(&cap_line),
-        Dataset::default()
-            .name("now")
-            .marker(Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::Cyan))
-            .data(&now_line),
         Dataset::default()
             .name("if unused (refills at each reset)")
             .marker(Marker::Braille)
@@ -1895,6 +1888,14 @@ fn draw_pool_chart(
     let local_now = now.with_timezone(&chrono::Local);
     let now_label = format!("now {}", local_now.format("%H:%M"));
     let now_col = col_of(0.0);
+    // The now line in the box-drawing ┃ the Plans timeline uses, over the plot.
+    let x = axis_area.x + now_col as u16;
+    if x < chart_area.right() {
+        let buf = frame.buffer_mut();
+        for y in chart_area.top()..chart_area.bottom() {
+            buf[(x, y)].set_char('┃').set_style(Style::default().fg(Color::Cyan));
+        }
+    }
     let now_start = now_col.saturating_sub(now_label.len() - 1);
     let text: String = axis.into_iter().collect();
     let before: String = text.chars().take(now_start).collect();
