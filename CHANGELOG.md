@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.120] - 2026-10-23
+
+### Added
+- Each Claude login's plan is recorded and shown: the status line capture reads Claude Code's
+  own account record (`organizationType`, `seatTier`, rate-limit tier, extra usage) into
+  `Max 20x`, `Max 5x`, `Team Std`, `Team Prem`, `Pro`. The timeline and quota views name it
+  per row. Here: Claude (main) is Max 20x; Claude (v)'s two Team logins are Team Std (not
+  Premium).
+- Plan changes are noticed: `plan_history.json` keeps every account's plan over time (Claude
+  logins, Cursor's and Warp's monthly limits, Kiro's plan and credits, Codex's ChatGPT plan),
+  checked every 30 s, with a "📈 Plan changed" notification and a log line on an upgrade, a
+  downgrade or a new credit limit. A newly seen account is recorded, not announced.
+
 ## [2.0.0-dash-0.119] - 2026-10-23
 
 ### Added

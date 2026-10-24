@@ -478,6 +478,81 @@ pub struct OtherLogin {
     /// `a@virti.us (Virtius)`, `ambertyeung@gmail.com (personal)`.
     pub account: String,
     pub seven_day: WindowStatus,
+    /// Its plan as last seen (`Max 20x`, `Team Std`), when the capture recorded one.
+    pub plan: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PlanEntry {
+    label: Option<String>,
+    tier: Option<String>,
+    #[serde(default)]
+    extra_usage: bool,
+}
+
+/// The plan a Claude column is signed in on (`Max 20x`, `Team Std`), from the capture.
+pub fn plan_for_analyzer(analyzer_name: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct File {
+        plan: Option<PlanEntry>,
+    }
+    let label = account_label(analyzer_name)?;
+    let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
+    serde_json::from_str::<File>(&content).ok()?.plan?.label
+}
+
+/// Every plan this machine's accounts are on, as `(key, signature)`: a Claude login's plan
+/// (label, rate tier, extra usage), Cursor's and Warp's monthly limits, Kiro's plan and credits,
+/// Codex's ChatGPT plan. A signature that changes is an upgrade or a downgrade.
+pub fn plan_signatures() -> Vec<(String, String)> {
+    #[derive(Deserialize)]
+    struct LoginEntry {
+        plan: Option<PlanEntry>,
+    }
+    #[derive(Deserialize)]
+    struct ClaudeFile {
+        #[serde(default)]
+        logins: HashMap<String, LoginEntry>,
+    }
+    let Some(dir) = limits_dir() else { return Vec::new() };
+    let read = |name: &str| std::fs::read_to_string(dir.join(format!("{name}.json"))).ok();
+    let mut out = Vec::new();
+    for label in ["main", "v"] {
+        let Some(file) = read(label).and_then(|c| serde_json::from_str::<ClaudeFile>(&c).ok()) else { continue };
+        for (login, entry) in file.logins {
+            if let Some(plan) = entry.plan.filter(|p| p.label.is_some()) {
+                let sig = format!(
+                    "{}{}{}",
+                    plan.label.unwrap_or_default(),
+                    plan.tier.map(|t| format!(" ({t})")).unwrap_or_default(),
+                    if plan.extra_usage { " + extra usage" } else { "" }
+                );
+                out.push((format!("Claude ({label}) · {login}"), sig));
+            }
+        }
+    }
+    let fields = |name: &str, keys: &[&str]| -> Option<String> {
+        let value: serde_json::Value = serde_json::from_str(&read(name)?).ok()?;
+        let parts: Vec<String> = keys
+            .iter()
+            .filter_map(|k| value.get(*k).filter(|v| !v.is_null()).map(|v| format!("{k} {}", v.as_str().map_or_else(|| v.to_string(), str::to_string))))
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(", "))
+    };
+    for (tool, file, keys) in [
+        ("Cursor Agent", "cursor", &["limit_cents"][..]),
+        ("Warp", "warp", &["credits_limit", "included_usage_cents"][..]),
+        ("Kiro CLI", "kiro", &["login_name", "credits_limit"][..]),
+    ] {
+        if let Some(sig) = fields(file, keys) {
+            out.push((tool.to_string(), sig));
+        }
+    }
+    if let Some(plan) = account_for_analyzer("Codex CLI") {
+        out.push(("Codex CLI".to_string(), plan));
+    }
+    out.sort();
+    out
 }
 
 const WEEK_SECS: f64 = 7.0 * 24.0 * 3600.0;
@@ -513,6 +588,7 @@ fn other_logins_in(content: &str, now: f64) -> Vec<OtherLogin> {
     #[derive(Deserialize)]
     struct Entry {
         rate_limits: Option<RateLimits>,
+        plan: Option<PlanEntry>,
     }
     #[derive(Deserialize)]
     struct File {
@@ -526,8 +602,9 @@ fn other_logins_in(content: &str, now: f64) -> Vec<OtherLogin> {
         .into_iter()
         .filter(|(account, _)| Some(account) != file.login.as_ref())
         .filter_map(|(account, entry)| {
+            let plan = entry.plan.and_then(|p| p.label);
             let seven_day = rolled_week(entry.rate_limits?.seven_day?, now)?;
-            Some(OtherLogin { account, seven_day })
+            Some(OtherLogin { account, seven_day, plan })
         })
         .collect();
     out.sort_by(|a, b| a.account.cmp(&b.account));
@@ -716,6 +793,7 @@ mod tests {
         assert_eq!(others.iter().map(|o| o.account.as_str()).collect::<Vec<_>>(), ["a@virti.us (Virtius)", "b@virti.us (Virtius)"]);
         // Reset 9 days ago: a week later (2 days ago) it reset again, and next resets in 5 days, empty.
         assert_eq!(others[0].seven_day, WindowStatus { used_percentage: 0.0, resets_in_secs: Some((5.0 * day) as i64) });
+        assert_eq!(others[0].plan, None);
         // Not reset yet: as last seen.
         assert_eq!(others[1].seven_day, WindowStatus { used_percentage: 20.0, resets_in_secs: Some((2.0 * day) as i64) });
     }

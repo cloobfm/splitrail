@@ -13,6 +13,7 @@ from claude_statusline_capture import (  # noqa: E402
     merge_window,
     summary,
     login_changed,
+    plan_from_account,
     record_login,
     update_ledger,
     update_snapshot,
@@ -184,6 +185,16 @@ class LoginHistoryTests(unittest.TestCase):
             with open(os.path.join(d, "v.jsonl")) as f:
                 lines = [_json.loads(l) for l in f]
         self.assertEqual([l["login"] for l in lines], ["support@virti.us (Virtius)", "a@virti.us (personal)"])
+
+
+
+class PlanTests(unittest.TestCase):
+    def test_plans_get_readable_labels(self):
+        self.assertEqual(plan_from_account({"organizationType": "claude_max", "organizationRateLimitTier": "default_claude_max_20x", "hasExtraUsageEnabled": True})["label"], "Max 20x")
+        self.assertEqual(plan_from_account({"organizationType": "claude_team", "seatTier": "team_standard", "organizationRateLimitTier": "default_raven"})["label"], "Team Std")
+        self.assertEqual(plan_from_account({"organizationType": "claude_team", "seatTier": "team_premium"})["label"], "Team Prem")
+        self.assertEqual(plan_from_account({"organizationType": "claude_pro"})["label"], "Pro")
+        self.assertIsNone(plan_from_account({}))
 
 
 if __name__ == "__main__":

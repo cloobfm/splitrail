@@ -188,6 +188,36 @@ def current_login(label):
     return login_from_account(account)
 
 
+def plan_from_account(account):
+    """The plan behind an `oauthAccount`, for telling allowances apart and noticing an upgrade
+    or downgrade: `{"label": "Max 20x", "type": "claude_max", "seat": None, "tier":
+    "default_claude_max_20x", "extra_usage": True}`. None without an account."""
+    if not isinstance(account, dict) or not account:
+        return None
+    kind = account.get("organizationType") or ""
+    seat = account.get("seatTier") or None
+    tier = account.get("organizationRateLimitTier") or account.get("userRateLimitTier") or ""
+    if seat:
+        label = {"team_standard": "Team Std", "team_premium": "Team Prem"}.get(seat, seat.replace("_", " ").title())
+    elif "max_20x" in tier:
+        label = "Max 20x"
+    elif "max_5x" in tier:
+        label = "Max 5x"
+    else:
+        label = {"claude_max": "Max", "claude_pro": "Pro", "claude_team": "Team",
+                 "claude_enterprise": "Enterprise"}.get(kind, kind.replace("claude_", "").title() or "?")
+    return {"label": label, "type": kind or None, "seat": seat, "tier": tier or None,
+            "extra_usage": bool(account.get("hasExtraUsageEnabled"))}
+
+
+def current_plan(label):
+    try:
+        with open(claude_json_path(label)) as f:
+            return plan_from_account(json.load(f).get("oauthAccount") or {})
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 # Sessions not heard from in this long are forgotten.
 SESSION_TTL_SECS = 24 * 3600
 # Logins not heard from in this long are dropped: even their weekly window has rolled over.
@@ -247,6 +277,7 @@ def update_snapshot(previous, label, payload, login, now, login_name=None):
         entry = {
             "captured_at": now,
             "name": login_name or login_name_of(key),
+            **({"plan": entry["plan"]} if isinstance(entry.get("plan"), dict) else {}),
             "rate_limits": (
                 replace_limits(entry.get("rate_limits"), reported)
                 if mode == "replace"
@@ -291,6 +322,11 @@ def save_snapshot(label, payload, login=None):
         if login_changed(previous, payload.get("session_id"), login):
             record_login(label, now, payload["session_id"], login)
         snapshot = update_snapshot(previous, label, payload, login, now, login_name)
+        # The signed-in login's plan, kept on its entry so other logins' plans stay known.
+        plan = current_plan(label) if not payload.get("_plan_test") else payload["_plan_test"]
+        if plan and login and isinstance(snapshot.get("logins", {}).get(login), dict):
+            snapshot["logins"][login]["plan"] = plan
+            snapshot["plan"] = plan
         # Write-then-rename: the dashboard may read while a status line refresh is writing.
         fd, tmp = tempfile.mkstemp(dir=LIMITS_DIR, prefix=f".{label}.", suffix=".tmp")
         with os.fdopen(fd, "w") as f:

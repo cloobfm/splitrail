@@ -570,6 +570,51 @@ static PLANS_CHECKED: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Note every plan window's current figure (Claude, Codex, Cursor...), at most every 30 s, and
 /// announce windows that have just reset with how full they closed.
+/// Where each account's plan is kept over time (`plan_history.json`): `{key: [{since, plan}]}`.
+fn plan_history_path() -> Option<PathBuf> {
+    Some(std::env::home_dir()?.join(".config/splitrail/plan_history.json"))
+}
+
+/// Fold the plans seen now into the history: a key's plan that differs from its last entry is
+/// a change (an upgrade, a downgrade, a new credit limit). Returns the changes as
+/// `(key, before, after)`; a key seen for the first time is recorded, not reported.
+fn fold_plan_history(
+    history: &mut BTreeMap<String, Vec<serde_json::Value>>,
+    seen: &[(String, String)],
+    now: i64,
+) -> Vec<(String, String, String)> {
+    let mut changes = Vec::new();
+    for (key, plan) in seen {
+        let entries = history.entry(key.clone()).or_default();
+        let last = entries.last().and_then(|e| e.get("plan")).and_then(|p| p.as_str()).map(str::to_string);
+        if last.as_deref() == Some(plan.as_str()) {
+            continue;
+        }
+        if let Some(before) = last {
+            changes.push((key.clone(), before, plan.clone()));
+        }
+        entries.push(serde_json::json!({"since": now, "plan": plan}));
+    }
+    changes
+}
+
+/// Notice plan changes on every account (checked with the plan closes, every 30 s).
+fn observe_plan_changes(now: i64) {
+    let Some(path) = plan_history_path() else { return };
+    let mut history: BTreeMap<String, Vec<serde_json::Value>> =
+        std::fs::read_to_string(&path).ok().and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default();
+    let changes = fold_plan_history(&mut history, &crate::plan_limits::plan_signatures(), now);
+    let Ok(text) = serde_json::to_vec_pretty(&history) else { return };
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path)).is_err() {
+        return;
+    }
+    for (key, before, after) in changes {
+        crate::utils::log_error(format!("Plan change: {key}: {before} -> {after}"));
+        notify_text("📈 Plan changed", &format!("{key}: {before} → {after}"));
+    }
+}
+
 fn observe_plans(stats: &[&AgenticCodingToolStats]) {
     {
         let mut checked = PLANS_CHECKED.lock().unwrap_or_else(|e| e.into_inner());
@@ -579,6 +624,7 @@ fn observe_plans(stats: &[&AgenticCodingToolStats]) {
         *checked = Some(Instant::now());
     }
     let now = Utc::now().timestamp();
+    observe_plan_changes(now);
     let mut seen = Vec::new();
     for tool in stats {
         let Some(limits) = crate::plan_limits::limits_for_analyzer(&tool.analyzer_name) else { continue };
@@ -631,6 +677,17 @@ pub fn cached() -> Option<Board> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plan_change_is_reported_once_and_a_new_account_is_only_recorded() {
+        let mut history = BTreeMap::new();
+        let seen = |plan: &str| vec![("Claude (v) · s@virti.us (Virtius)".to_string(), plan.to_string())];
+        assert!(fold_plan_history(&mut history, &seen("Team Std"), 1).is_empty());
+        assert!(fold_plan_history(&mut history, &seen("Team Std"), 2).is_empty());
+        let changes = fold_plan_history(&mut history, &seen("Team Prem"), 3);
+        assert_eq!(changes, [("Claude (v) · s@virti.us (Virtius)".to_string(), "Team Std".to_string(), "Team Prem".to_string())]);
+        assert_eq!(history["Claude (v) · s@virti.us (Virtius)"].len(), 2);
+    }
 
     #[test]
     #[cfg(unix)]

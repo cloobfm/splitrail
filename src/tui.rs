@@ -1711,6 +1711,7 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
     use chrono::{Datelike, Duration, Local, Timelike};
     const SPAN_SECS: f64 = 7.0 * 86_400.0;
     const NAME_W: usize = 26;
+    const PLAN_W: usize = 9;
     let block = Block::default()
         .title(" 🗓  Plans · next 7 days · each bar ends at its reset ")
         .title_style(Style::default().bold())
@@ -1718,7 +1719,7 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let label_w = 36usize;
-    let bar_w = (inner.width as usize).saturating_sub(NAME_W + label_w + 2).max(10);
+    let bar_w = (inner.width as usize).saturating_sub(NAME_W - 2 + PLAN_W + label_w + 2).max(10);
 
     let mut rows: Vec<(&crate::advisor::Pick, &crate::advisor::Window, i64)> = picks
         .iter()
@@ -1754,13 +1755,17 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
         day = d.succ_opt();
     }
     lines.push(Line::from(vec![
-        Span::styled(format!("{:<NAME_W$}", format!("now {:02}:{:02}", local_now.hour(), local_now.minute())), dim),
+        Span::styled(format!("{:<w$}", format!("now {:02}:{:02}", local_now.hour(), local_now.minute()), w = NAME_W - 2 + PLAN_W), dim),
         Span::styled(axis.iter().collect::<String>(), Style::default().fg(Color::Cyan)),
     ]));
     for (pick, w, secs) in rows.iter().take(inner.height.saturating_sub(1) as usize) {
         let left = (100.0 - w.used).clamp(0.0, 100.0);
         let color = if pick.available { left_color(left) } else { Color::DarkGray };
-        let team = pick.account.as_deref().is_some_and(|a| a.contains('(') && !a.contains("(personal)"));
+        let plan = w.plan.clone();
+        let team = plan.as_deref().map_or_else(
+            || pick.account.as_deref().is_some_and(|a| a.contains('(') && !a.contains("(personal)")),
+            |p| p.starts_with("Team"),
+        );
         let glyph = if !pick.available { '░' } else if team { '▆' } else { '█' };
         let beyond = (*secs as f64) > SPAN_SECS;
         let filled = ((*secs as f64).min(SPAN_SECS) / SPAN_SECS * bar_w as f64).round().max(1.0) as usize;
@@ -1789,7 +1794,7 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
         let name: String = tool.chars().take(NAME_W - 3).collect();
         lines.push(Line::from(vec![
             Span::styled(format!("{name:<w$}", w = NAME_W - 2), Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(if team { "T " } else { "  " }, dim),
+            Span::styled(format!("{:<9}", plan.as_deref().unwrap_or(if team { "Team" } else { "" })), Style::default().fg(Color::Magenta)),
             Span::styled(bar, Style::default().fg(color)),
             Span::styled(if beyond { "»" } else { "▏" }, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
             Span::styled(rest, dim),

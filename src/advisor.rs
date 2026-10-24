@@ -180,6 +180,7 @@ pub fn tool_json(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc
     Some(json!({
         "name": name,
         "account": crate::plan_limits::account_for_analyzer(name),
+        "plan": crate::plan_limits::plan_for_analyzer(name),
         "tks": round1(recent_tks(stats, now)),
         "limits": {
             "five_hour": window("five_hour", limits.five_hour),
@@ -225,6 +226,8 @@ pub struct Window {
     pub now_tks: f64,
     /// Another login on the account, not signed in: reached by `/login`.
     pub switch_login: bool,
+    /// The plan (`Max 20x`, `Team Std`), where known.
+    pub plan: Option<String>,
 }
 
 impl Window {
@@ -345,6 +348,7 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
         let account = tool.get("account").and_then(Value::as_str).map(str::to_string);
         let now_tks = tool.get("tks").and_then(Value::as_f64).unwrap_or(0.0);
         let switch_login = tool.get("switch").and_then(Value::as_bool).unwrap_or(false);
+        let plan = tool.get("plan").and_then(Value::as_str).map(str::to_string);
         for key in ["five_hour", "seven_day", "monthly"] {
             let Some(w) = tool.get("limits").and_then(|l| l.get(key)).filter(|w| !w.is_null()) else {
                 continue;
@@ -371,6 +375,7 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
                 spend: w.get("spend").and_then(Spend::from_json),
                 now_tks,
                 switch_login,
+                plan: plan.clone(),
             });
         }
     }
@@ -633,6 +638,7 @@ pub fn other_login_tools(stats: &[&crate::types::AgenticCodingToolStats], now: D
             out.push(json!({
                 "name": format!("{} · {}", tool.analyzer_name, short_login(&other.account)),
                 "account": other.account,
+                "plan": other.plan,
                 "tks": 0.0,
                 "cost_today": 0.0,
                 "switch": true,
@@ -813,7 +819,7 @@ mod tests {
         // 70% of the week cost $381 for 3.77M output tokens; 9.2 hours left.
         let w = Window {
             tool: "Claude (main)".into(), account: None, window: "week", used: 70.0, resets_at: None,
-            resets_in_secs: Some(33_120), projected: Some(74.0), now_tks: 140.0, switch_login: false,
+            resets_in_secs: Some(33_120), projected: Some(74.0), now_tks: 140.0, switch_login: false, plan: None,
             spend: Some(Spend { input: 9_764.0, output: 3_770_000.0, cache_write: 17_259_201.0,
                                 cache_read: 1_094_254_105.0, cost: 381.0 }),
         };
@@ -838,7 +844,7 @@ mod tests {
         // 70% of a week used in 3.5 days: 20%/day, so the last 30% lasts 1.5 days.
         let w = Window {
             tool: "t".into(), account: None, window: "week", used: 70.0, resets_at: None,
-            resets_in_secs: Some(302_400), projected: Some(140.0), spend: None, now_tks: 0.0, switch_login: false,
+            resets_in_secs: Some(302_400), projected: Some(140.0), spend: None, now_tks: 0.0, switch_login: false, plan: None,
         };
         assert_eq!(w.runs_out_in_secs(), Some(129_600));
     }
