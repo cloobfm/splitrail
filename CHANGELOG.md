@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.132] - 2026-10-23
+
+### Fixed
+- The 📈 Pool's time labels drifted ("now" hours right of the now line): the chart spreads
+  labels only roughly. Drawn by hand now, each on its own hour, with `now hh:mm` in cyan ending
+  at a cyan now line, as on the Plans timeline. The actual (last 24h) line is light cyan again,
+  drawn over the projections.
+- The Plans timeline dropped its `now hh:mm` label on a 150-column pane; it takes "-24h"'s place
+  when there is no room for both.
+
 ## [2.0.0-dash-0.131] - 2026-10-23
 
 ### Fixed

@@ -1811,7 +1811,7 @@ fn draw_pool_chart(
             .name("now")
             .marker(Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(Color::Cyan))
             .data(&now_line),
         Dataset::default()
             .name("if unused (refills at each reset)")
@@ -1830,7 +1830,7 @@ fn draw_pool_chart(
             .name("actual, last 24h")
             .marker(Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD))
             .data(&past),
     ];
     let money = |v: f64| if v >= 1000.0 { format!("${:.1}k", v / 1000.0) } else { format!("${v:.0}") };
@@ -1854,40 +1854,60 @@ fn draw_pool_chart(
             Style::default().fg(Color::DarkGray),
         ),
     ]);
+    let block = Block::default().borders(Borders::ALL).title(title).title_bottom(Line::from(vec![
+        Span::styled(" ── cap: every plan full ", Style::default().fg(Color::Magenta)),
+        Span::styled(" ── actual, last 24h ", Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)),
+        Span::styled(" ── if unused (refills at each reset) ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" ── using every plan by its reset ", Style::default().fg(Color::Green)),
+    ]));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [chart_area, axis_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(inner);
+    let y_labels = vec![
+        Span::raw("$0"),
+        Span::raw(money(top / 2.0)),
+        Span::styled(format!("cap {}", money(top)), Style::default().fg(Color::Magenta)),
+    ];
+    let y_label_w = y_labels.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
     let chart = Chart::new(datasets)
-        .block(
-            Block::default().borders(Borders::ALL).title(title).title_bottom(Line::from(vec![
-                Span::styled(" ── cap: every plan full ", Style::default().fg(Color::Magenta)),
-                Span::styled(" ── actual, last 24h ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(" ── if unused (refills at each reset) ", Style::default().fg(Color::DarkGray)),
-                Span::styled(" ── using every plan by its reset ", Style::default().fg(Color::Green)),
-            ])),
-        )
-        .x_axis(
-            Axis::default()
-                .bounds([-(PAST_H as f64), AHEAD_H as f64])
-                // Labels are spread evenly over the bounds: one a day, "now" the second.
-                .labels(
-                    std::iter::once("-24h".to_string())
-                        .chain(std::iter::once("now".to_string()))
-                        .chain((1..=7).map(|d| format!("+{d}d")))
-                        .map(Span::raw)
-                        .collect::<Vec<_>>(),
-                )
-                .style(Style::default().fg(Color::DarkGray)),
-        )
-        .y_axis(
-            Axis::default()
-                .bounds([0.0, top])
-                .labels(vec![
-                    Span::raw("$0"),
-                    Span::raw(money(top / 2.0)),
-                    Span::styled(format!("cap {}", money(top)), Style::default().fg(Color::Magenta)),
-                ])
-                .style(Style::default().fg(Color::DarkGray)),
-        )
+        .x_axis(Axis::default().bounds([-(PAST_H as f64), AHEAD_H as f64]).style(Style::default().fg(Color::DarkGray)))
+        .y_axis(Axis::default().bounds([0.0, top]).labels(y_labels).style(Style::default().fg(Color::DarkGray)))
         .legend_position(None);
-    frame.render_widget(chart, area);
+    frame.render_widget(chart, chart_area);
+    // The time axis drawn here rather than by the chart, which spreads labels only roughly: each
+    // label centred on its own hour, so "now" sits on the now line. The plot starts after the y
+    // labels and the axis line.
+    let plot_x = y_label_w as usize + 1;
+    let plot_w = (axis_area.width as usize).saturating_sub(plot_x).max(1);
+    let col_of = |hours: f64| plot_x + ((hours + PAST_H as f64) / (PAST_H + AHEAD_H) as f64 * (plot_w - 1) as f64).round() as usize;
+    let mut axis = vec![' '; axis_area.width as usize];
+    let mut put = |label: &str, centre: usize| {
+        let start = centre.saturating_sub(label.chars().count() / 2).min(axis.len().saturating_sub(label.chars().count()));
+        for (i, ch) in label.chars().enumerate() {
+            axis[start + i] = ch;
+        }
+    };
+    put("-24h", col_of(-(PAST_H as f64)) + 2);
+    for d in 1..=7 {
+        put(&format!("+{d}d"), col_of(d as f64 * 24.0));
+    }
+    // "now hh:mm" ends at the now line, as on the Plans timeline above.
+    let local_now = now.with_timezone(&chrono::Local);
+    let now_label = format!("now {}", local_now.format("%H:%M"));
+    let now_col = col_of(0.0);
+    let now_start = now_col.saturating_sub(now_label.len() - 1);
+    let text: String = axis.into_iter().collect();
+    let before: String = text.chars().take(now_start).collect();
+    let after: String = text.chars().skip(now_col + 1).collect();
+    let dim = Style::default().fg(Color::DarkGray);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(before, dim),
+            Span::styled(now_label, Style::default().fg(Color::Cyan)),
+            Span::styled(after, dim),
+        ])),
+        axis_area,
+    );
 }
 
 /// Colour for the share of a plan left: plenty to use (green), some (yellow), nearly out (red).
@@ -2080,9 +2100,13 @@ fn draw_plan_timeline(
     }
     // "now hh:mm" ends just before the now line, clear of the day names after it.
     let now_label = format!("now {:02}:{:02}", local_now.hour(), local_now.minute());
+    // On a narrow chart it takes "-24h"'s place.
     let label_start = past_w.saturating_sub(now_label.len());
-    if label_start > 4 {
-        for (i, ch) in now_label.chars().enumerate() {
+    if label_start < 5 {
+        axis[..4].fill(' ');
+    }
+    for (i, ch) in now_label.chars().enumerate() {
+        if label_start + i < past_w {
             axis[label_start + i] = ch;
         }
     }
