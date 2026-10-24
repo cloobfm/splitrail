@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.123] - 2026-10-23
+
+### Fixed
+- The 🗓 Plans timeline's right-hand columns did not line up: the reset mark `▏` is two cells
+  wide in some terminal fonts, and a monthly plan's date (`Oct 31`) was shorter than a weekly
+  one's (`Sat 10:59`). The mark is now `│` (one cell everywhere) and the date column has one
+  width.
+- A legend under the bars: `⣿` full plan, `⣤` Team seat (a smaller weekly allowance), `⣀`
+  full and waiting for its reset, `│` the reset, `»` resets after this week.
+
 ## [2.0.0-dash-0.122] - 2026-10-23
 
 ### Changed

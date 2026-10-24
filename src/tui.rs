@@ -1758,7 +1758,7 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
         Span::styled(format!("{:<w$}", format!("now {:02}:{:02}", local_now.hour(), local_now.minute()), w = NAME_W - 2 + PLAN_W), dim),
         Span::styled(axis.iter().collect::<String>(), Style::default().fg(Color::Cyan)),
     ]));
-    for (pick, w, secs) in rows.iter().take(inner.height.saturating_sub(1) as usize) {
+    for (pick, w, secs) in rows.iter().take(inner.height.saturating_sub(2) as usize) {
         let left = (100.0 - w.used).clamp(0.0, 100.0);
         let color = if pick.available { left_color(left) } else { Color::DarkGray };
         let plan = w.plan.clone();
@@ -1798,20 +1798,29 @@ fn draw_plan_timeline(frame: &mut Frame, area: Rect, picks: &[crate::advisor::Pi
             Span::styled(format!("{name:<w$}", w = NAME_W - 2), Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(format!("{:<9}", plan.as_deref().unwrap_or(if team { "Team" } else { "" })), Style::default().fg(Color::Magenta)),
             Span::styled(bar, Style::default().fg(color)),
-            Span::styled(if beyond { "»" } else { "▏" }, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            // Box drawing and » are one cell in every terminal font; ▏ was two in some.
+            Span::styled(if beyond { "»" } else { "│" }, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
             Span::styled(rest, dim),
             Span::styled(format!(" {left:>3.0}% left", ), Style::default().fg(color)),
             Span::styled(
-                if beyond {
-                    format!(" · {} · ", reset_local.format("%b %-d"))
-                } else {
-                    format!(" · {} {:02}:{:02} · ", &reset_local.weekday().to_string()[..3], reset_local.hour(), reset_local.minute())
-                },
+                // One width for both, so the action column lines up.
+                format!(
+                    " · {:<9} · ",
+                    if beyond {
+                        reset_local.format("%b %-d").to_string()
+                    } else {
+                        format!("{} {:02}:{:02}", &reset_local.weekday().to_string()[..3], reset_local.hour(), reset_local.minute())
+                    }
+                ),
                 dim,
             ),
             Span::styled(action, Style::default().fg(action_color).add_modifier(Modifier::BOLD)),
         ]));
     }
+    lines.push(Line::from(vec![
+        Span::styled(format!("{:<w$}", "", w = NAME_W - 2 + PLAN_W), dim),
+        Span::styled("⣿ full plan   ⣤ Team seat (a smaller weekly allowance)   ⣀ full, waiting for its reset   │ reset   » resets after this week", dim),
+    ]));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
