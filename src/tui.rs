@@ -1556,7 +1556,9 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
                     .style(Style::default().fg(if keeping_up { Color::Green } else { Color::Yellow }))
             });
             let runs_out = w.runs_out_in_secs().map(human_secs);
-            let locked = w.locked_out_secs().map(human_secs);
+            // Locked out by the week running out, or now by a full 5-hour window (back at its reset).
+            let five_locked = row.five_hour.as_ref().filter(|f| f.used >= 99.5).and_then(|f| f.resets_in_secs);
+            let locked = w.locked_out_secs().or(five_locked).map(|s| format!("🔒 {}", human_secs(s)));
             let resets = match (w.resets_in_secs, w.resets_at) {
                 (Some(secs), Some(at)) => format!(
                     "{} ({})",
@@ -2117,7 +2119,9 @@ fn draw_plan_timeline(
     ]));
     for ((pick, w, secs), (left_now, spent)) in rows.iter().zip(&measured).take(inner.height.saturating_sub(2) as usize) {
         let left_pct = (100.0 - w.used).clamp(0.0, 100.0);
-        let color = if pick.available { left_color(left_pct) } else { Color::DarkGray };
+        // A full 5-hour window: locked out until its reset, the end of this bar.
+        let locked = w.window == "5h" && w.used >= 99.5;
+        let color = if locked { Color::Red } else if pick.available { left_color(left_pct) } else { Color::DarkGray };
         // A plan with a quarter or more of the biggest is drawn two rows tall, for finer steps.
         let tall = left_now + spent.iter().sum::<f64>() >= biggest / 4.0;
         let text_rows = if tall { 2 } else { 1 };
@@ -2189,11 +2193,16 @@ fn draw_plan_timeline(
             // Box drawing and » are one cell in every terminal font; ▏ was two in some.
             Span::styled(if beyond { "»" } else { "│" }, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
             Span::styled(rest, dim),
-            Span::styled(format!(" {left_pct:>3.0}% left"), Style::default().fg(color)),
+            Span::styled(
+                if locked { "    locked".to_string() } else { format!(" {left_pct:>3.0}% left") },
+                Style::default().fg(color).add_modifier(if locked { Modifier::BOLD } else { Modifier::empty() }),
+            ),
             Span::styled(
                 format!(
                     " · {:<9} · ",
-                    if beyond {
+                    if locked {
+                        format!("in {}", crate::advisor::human_secs(*secs))
+                    } else if beyond {
                         reset_local.format("%b %-d").to_string()
                     } else {
                         format!("{} {:02}:{:02}", &reset_local.weekday().to_string()[..3], reset_local.hour(), reset_local.minute())

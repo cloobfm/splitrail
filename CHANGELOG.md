@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.135] - 2026-10-24
+
+### Fixed
+- A Claude login you had switched away from after its 5-hour window filled (team@virti.us) still
+  read "USE NOW · 83% free": only its week was read for logins other than the signed-in one.
+  Its 5-hour window is read too, so it is WAIT, "5h full · back in 1h44m".
+- Locked out shows on the `p` view: the quota table's **Locked out** column gives `🔒 1h44m` for a
+  full 5-hour window as well as a spent week, and the Plans timeline row reads `locked · in
+  1h44m · WAIT` in red, its bar ending at the unlock.
+
 ## [2.0.0-dash-0.134] - 2026-10-23
 
 ### Fixed

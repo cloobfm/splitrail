@@ -483,6 +483,9 @@ pub struct OtherLogin {
     /// `a@virti.us (Virtius)`, `ambertyeung@gmail.com (personal)`.
     pub account: String,
     pub seven_day: WindowStatus,
+    /// Its 5-hour window as last seen: full means it is locked out until the reset, signed in
+    /// or not. Past its reset, empty.
+    pub five_hour: Option<WindowStatus>,
     /// Its plan as last seen (`Max 20x`, `Team Std`), when the capture recorded one.
     pub plan: Option<String>,
 }
@@ -651,8 +654,10 @@ fn other_logins_in(content: &str, now: f64) -> Vec<OtherLogin> {
         .filter(|(account, _)| Some(account) != file.login.as_ref())
         .filter_map(|(account, entry)| {
             let plan = entry.plan.and_then(|p| p.label);
-            let seven_day = rolled_week(entry.rate_limits?.seven_day?, now)?;
-            Some(OtherLogin { account, seven_day, plan })
+            let limits = entry.rate_limits?;
+            let five_hour = limits.five_hour.and_then(|w| window_status(w, now));
+            let seven_day = rolled_week(limits.seven_day?, now)?;
+            Some(OtherLogin { account, seven_day, five_hour, plan })
         })
         .collect();
     out.sort_by(|a, b| a.account.cmp(&b.account));

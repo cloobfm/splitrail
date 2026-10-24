@@ -671,7 +671,9 @@ pub fn other_login_tools(stats: &[&crate::types::AgenticCodingToolStats], now: D
                 "tks": 0.0,
                 "cost_today": 0.0,
                 "switch": true,
-                "limits": {"five_hour": Value::Null, "monthly": Value::Null,
+                "limits": {"five_hour": other.five_hour.map(|f| json!({
+                               "used": (f.used_percentage * 10.0).round() / 10.0, "resets_in": f.resets_in_secs})),
+                           "monthly": Value::Null,
                            "seven_day": {"used": (other.seven_day.used_percentage * 10.0).round() / 10.0,
                                          "resets_in": other.seven_day.resets_in_secs, "spend": spend}},
             }));
