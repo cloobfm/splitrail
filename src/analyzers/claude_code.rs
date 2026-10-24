@@ -27,6 +27,33 @@ pub struct ClaudeCodeAnalyzer {
     accum: std::sync::Mutex<Accumulator>,
 }
 
+/// The models this Mac's Ollama has served, from its usage proxy's log, re-read only when the
+/// log changes.
+fn local_ollama_models() -> std::sync::Arc<HashSet<String>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<(Option<std::time::SystemTime>, std::sync::Arc<HashSet<String>>)>> =
+        std::sync::OnceLock::new();
+    let Some(path) = std::env::home_dir().map(|h| h.join(".config/splitrail/ollama/usage.jsonl")) else {
+        return Default::default();
+    };
+    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut cached = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if cached.0 != modified || modified.is_none() {
+        let models: HashSet<String> = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                // `"model": "…"` without parsing the whole line.
+                let start = l.find("\"model\": \"")? + 10;
+                let end = l[start..].find('"')? + start;
+                Some(l[start..end].to_string())
+            })
+            .collect();
+        *cached = (modified, std::sync::Arc::new(models));
+    }
+    cached.1.clone()
+}
+
 /// When the account's config directory was on which login, from the status line capture's
 /// history (`~/.config/splitrail/logins/<label>.jsonl`, one line per change, BZL-283). `/login`
 /// switches the whole directory, so the login at a time is the latest change before it.
@@ -391,8 +418,15 @@ impl ClaudeCodeAnalyzer {
 
         // Which login the account's directory was on when each reply ran (BZL-283).
         let logins = LoginTimeline::load(crate::plan_limits::account_label(self.name).as_deref());
+        let local = local_ollama_models();
         for chunk in &chunks {
             for message in chunk.iter() {
+                // Claude Code pointed at this Mac's Ollama: the Ollama column has the request
+                // (through its proxy, with its transcript and a price); counting it here too would
+                // count it twice and put an open model in a Claude plan's numbers.
+                if message.model.as_ref().is_some_and(|m| local.contains(m)) {
+                    continue;
+                }
                 accum.fold(message, logins.at(message.date));
             }
         }

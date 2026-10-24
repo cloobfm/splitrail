@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.121] - 2026-10-23
+
+### Fixed
+- "No price for model gemma4:31b / gpt-oss:120b / nemotron-3-*" warnings, and those requests
+  counted twice. While testing models, Claude Code was pointed at Ollama (its Anthropic-
+  compatible endpoint): the replies landed in Claude (main) at $0, and again in the Ollama column
+  through its proxy. Claude columns now skip replies on models this Mac's Ollama has served
+  (from its usage log, re-read when it changes); the Ollama column keeps them with their
+  transcript and price, and they stay out of the Claude plan's numbers. Of 171 such replies in
+  Claude (main), 64 are in this Mac's Ollama log; the rest went to another Ollama before its
+  proxy existed and are no longer counted.
+- `gemma4:31b` had no hosted price: price lists write `gemma-4-31b`. A single-word name with a
+  whole-number version is also tried hyphenated (`gemma4` -> `gemma-4`; `qwen3.8` is left as is).
+
 ## [2.0.0-dash-0.120] - 2026-10-23
 
 ### Added

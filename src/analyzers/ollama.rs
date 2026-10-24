@@ -141,11 +141,22 @@ pub fn street_names(model: &str, param_size: Option<&str>) -> Vec<String> {
         let number: f64 = number.parse().ok()?;
         Some(format!("{}{unit}", number.floor() as u64))
     });
+    // `gemma4` is `gemma-4` in hosted price lists: try both spellings.
+    let hyphenated = (!base.contains('-'))
+        .then_some(base)
+        .into_iter()
+        .flat_map(|b| b.char_indices())
+        .find(|&(i, c)| c.is_ascii_digit() && i > 0 && base.as_bytes()[i - 1].is_ascii_alphabetic())
+        // A whole-number version only: `gemma4`, not `qwen3.8`, which providers write as is.
+        .filter(|&(i, _)| !base[i..].contains('.'))
+        .map(|(i, _)| format!("{}-{}", &base[..i], &base[i..]));
     let mut names = Vec::new();
-    if let Some(size) = size {
-        names.push(format!("{base}-{size}"));
+    for stem in std::iter::once(base.to_string()).chain(hyphenated) {
+        if let Some(size) = &size {
+            names.push(format!("{stem}-{size}"));
+        }
+        names.push(stem);
     }
-    names.push(base.to_string());
     names
 }
 
@@ -504,6 +515,7 @@ mod tests {
     fn a_context_length_variant_is_priced_as_its_model() {
         assert_eq!(street_names("qwen3.8-64k", Some("27.8B")), ["qwen3.8-27b", "qwen3.8"]);
         assert_eq!(street_names("qwen3.8:27b-mlx", None), ["qwen3.8-27b", "qwen3.8"]);
+        assert_eq!(street_names("gemma4:31b", None), ["gemma4-31b", "gemma4", "gemma-4-31b", "gemma-4"]);
         // A name that only looks alike keeps its suffix.
         assert_eq!(street_names("deepseek-r1", None), ["deepseek-r1"]);
     }
@@ -592,7 +604,7 @@ mod tests {
         );
         assert_eq!(
             street_names("gemma3:27b", Some("27.4B")),
-            ["gemma3-27b", "gemma3"]
+            ["gemma3-27b", "gemma3", "gemma-3-27b", "gemma-3"]
         );
         assert_eq!(street_names("moondream:latest", None), ["moondream"]);
         assert_eq!(street_names("smollm:135m", None), ["smollm-135m", "smollm"]);
