@@ -1957,6 +1957,25 @@ fn draw_plan_timeline(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// The overall output rate from the status file (written every second), read at most once a
+/// second.
+fn overall_tks() -> Option<f64> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(std::time::Instant, Option<f64>)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().ok()?;
+    if let Some((at, tks)) = *cache
+        && at.elapsed().as_secs_f64() < 1.0
+    {
+        return tks;
+    }
+    let tks = crate::status_file::path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .and_then(|v| v.get("tks")?.as_f64());
+    *cache = Some((std::time::Instant::now(), tks));
+    tks
+}
+
 /// The analyzer behind a timeline row: `Claude (v) · a@virti.us` and `Claude (main), dev-a`
 /// are `Claude (v)` and `Claude (main)`.
 fn tool_base(tool: &str) -> &str {
@@ -2041,6 +2060,10 @@ fn draw_ui(
 
     // The update state goes beside the version, the perf readout (if on) after it.
     let mut header_spans = vec![Span::styled(version.to_string(), Style::new().cyan().bold())];
+    // Output rate across every tool and machine, on every view (the menu bar's number).
+    if let Some(tks) = overall_tks() {
+        header_spans.push(Span::styled(format!("  ⚡ {tks:.0} tk/s"), Style::new().yellow().bold()));
+    }
     header_spans.extend(crate::tui::summary_dashboard::update_spans());
     if header_line.len() > version.len() {
         header_spans.push(Span::styled(
