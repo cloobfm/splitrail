@@ -141,6 +141,20 @@ pub fn login_spend(
     spend
 }
 
+/// The login on a Claude account that has used the most of its week, signed in or not: usage
+/// from before login history was kept most likely came out of its allowance.
+fn top_login(analyzer_name: &str) -> Option<String> {
+    let signed_in = crate::plan_limits::account_for_analyzer(analyzer_name);
+    let signed_in_used = crate::plan_limits::limits_for_analyzer(analyzer_name)
+        .and_then(|l| l.seven_day)
+        .map_or(0.0, |w| w.used_percentage);
+    std::iter::once((signed_in, signed_in_used))
+        .chain(crate::plan_limits::other_logins(analyzer_name).into_iter().map(|o| (Some(o.account), o.seven_day.used_percentage)))
+        .filter(|(_, used)| *used > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .and_then(|(login, _)| login)
+}
+
 /// Whether a column's usage is credited to logins (a Claude account's directory).
 fn has_logins(stats: &crate::types::AgenticCodingToolStats) -> bool {
     stats.daily_stats.values().rev().take(14).any(|d| d.slices.iter().any(|s| !s.account.is_empty()))
@@ -165,12 +179,16 @@ pub fn tool_json(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc
     let window = |key: &str, w: Option<crate::plan_limits::WindowStatus>| {
         w.map_or(Value::Null, |w| {
             // Signed-in login only, where usage is credited per login (BZL-283): another login's
-            // use this week came out of its own allowance.
+            // use this week came out of its own allowance. Usage from before logins were
+            // recorded goes to whichever login used its week most.
             let signed_in = has_logins(stats).then(|| crate::plan_limits::account_for_analyzer(name)).flatten();
             let spend = w.resets_in_secs.map(|left| {
                 let start = now + Duration::seconds(left) - Duration::seconds(window_secs(key) as i64);
                 match &signed_in {
-                    Some(login) => login_spend(stats, start, login, true),
+                    Some(login) => {
+                        let unknown_is_mine = top_login(name).is_none_or(|top| top == *login);
+                        login_spend(stats, start, login, unknown_is_mine)
+                    }
                     None => window_spend(stats, start),
                 }
             });
@@ -640,9 +658,10 @@ pub fn other_login_tools(stats: &[&crate::types::AgenticCodingToolStats], now: D
     let mut out = Vec::new();
     for tool in stats.iter().filter(|t| t.analyzer_name.starts_with("Claude (") && !t.analyzer_name.contains('@')) {
         for other in crate::plan_limits::other_logins(&tool.analyzer_name) {
+            let unknown_is_mine = top_login(&tool.analyzer_name).as_deref() == Some(other.account.as_str());
             let spend = other.seven_day.resets_in_secs.and_then(|left| {
                 let start = now + Duration::seconds(left) - Duration::days(7);
-                let spend = login_spend(tool, start, &other.account, false);
+                let spend = login_spend(tool, start, &other.account, unknown_is_mine);
                 (spend.cost > 0.0).then(|| spend.to_json())
             });
             out.push(json!({

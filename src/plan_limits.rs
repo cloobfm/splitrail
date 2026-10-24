@@ -104,13 +104,18 @@ fn window_status(window: LimitWindow, now: f64) -> Option<WindowStatus> {
 /// Parse a snapshot file's contents as of `now` (epoch seconds).
 pub fn parse_snapshot(content: &str, now: f64) -> Option<AccountLimits> {
     let file: SnapshotFile = serde_json::from_str(content).ok()?;
-    if now - file.captured_at > MAX_SNAPSHOT_AGE_SECS {
-        return None;
-    }
     let limits = file.rate_limits.unwrap_or_default();
+    if now - file.captured_at > MAX_SNAPSHOT_AGE_SECS {
+        // Too old to say what is used, except a weekly window past its reset: that is empty,
+        // with the reset at the same hour each week (a plan idle for a while still shows).
+        let status = AccountLimits { five_hour: None, seven_day: limits.seven_day.filter(|w| w.resets_at.is_some_and(|r| r <= now)).and_then(|w| rolled_week(w, now)), monthly: None };
+        return status.any().then_some(status);
+    }
     let status = AccountLimits {
         five_hour: limits.five_hour.and_then(|w| window_status(w, now)),
-        seven_day: limits.seven_day.and_then(|w| window_status(w, now)),
+        // A weekly window resets at the same time each week: past its reset it is empty, with
+        // the next reset a week on, rather than of unknown length until the tool runs again.
+        seven_day: limits.seven_day.and_then(|w| rolled_week(w, now).or_else(|| window_status(w, now))),
         monthly: file.monthly.and_then(|w| window_status(w, now)),
     };
     status.any().then_some(status)
@@ -490,11 +495,26 @@ struct PlanEntry {
     extra_usage: bool,
 }
 
+static PLAN_CONFIG: OnceLock<HashMap<String, crate::config::PlanConfig>> = OnceLock::new();
+
+/// Plans stated in the config (`[plans]`), for tools whose own files do not name theirs. Set once
+/// at startup.
+pub fn set_plan_config(plans: HashMap<String, crate::config::PlanConfig>) {
+    let _ = PLAN_CONFIG.set(plans);
+}
+
+fn plan_config(analyzer_name: &str) -> Option<&'static crate::config::PlanConfig> {
+    PLAN_CONFIG.get()?.get(analyzer_name)
+}
+
 /// The plan a Claude column is signed in on (`Max 20x`, `Team Std`), from the capture.
 pub fn plan_for_analyzer(analyzer_name: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct File {
         plan: Option<PlanEntry>,
+    }
+    if let Some(name) = plan_config(analyzer_name).and_then(|p| p.name.clone()) {
+        return Some(name);
     }
     let label = account_label(analyzer_name)?;
     let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
@@ -663,6 +683,9 @@ pub fn login_for_analyzer(analyzer_name: &str) -> Option<String> {
 /// The full account a column is signed in to, for the Quotas view: the email with its
 /// organisation (`ambertyeung@gmail.com (personal)`), else the plan or short name.
 pub fn account_for_analyzer(analyzer_name: &str) -> Option<String> {
+    if let Some(account) = plan_config(analyzer_name).and_then(|p| p.account.clone()) {
+        return Some(account);
+    }
     let full = |content: &str| {
         let file = serde_json::from_str::<SnapshotFile>(content).ok()?;
         file.login.filter(|l| !l.is_empty()).or(file.login_name.filter(|n| !n.is_empty()))
@@ -784,6 +807,19 @@ mod tests {
         let no_limits = r#"{"account":"main","captured_at":1790519606,"rate_limits":null}"#;
         assert!(parse_snapshot(no_limits, NOW).is_none());
         assert!(parse_snapshot("not json", NOW).is_none());
+    }
+
+    #[test]
+    fn an_old_snapshot_keeps_its_week_rolled_forward() {
+        // Last seen ten days ago, its week reset since: empty now, resetting a week after.
+        let old = format!(
+            r#"{{"captured_at":{},"rate_limits":{{"seven_day":{{"used_percentage":100,"resets_at":{}}}}}}}"#,
+            NOW - 10.0 * 86_400.0,
+            NOW - 5.0 * 86_400.0
+        );
+        let week = parse_snapshot(&old, NOW).unwrap().seven_day.unwrap();
+        assert_eq!(week.used_percentage, 0.0);
+        assert_eq!(week.resets_in_secs, Some(2 * 86_400));
     }
 
     #[test]

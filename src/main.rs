@@ -177,6 +177,7 @@ async fn main() {
 
     // Before anything publishes or reads the broker: this machine's name there.
     mqtt::set_name(config.mqtt.name.as_deref());
+    plan_limits::set_plan_config(config.plans.clone());
 
     // Prices must be in place before any analyzer parses a message.
     price_feed::init(

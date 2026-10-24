@@ -22,6 +22,19 @@ pub struct Config {
     pub mqtt: MqttConfig,
     #[serde(default)]
     pub goal: GoalConfig,
+    /// Plans a tool's own files do not name, by column: `[plans."Droid CLI"]` `name = "Pro"`,
+    /// `price_usd = 20`, and optionally the `account` it is on.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub plans: std::collections::HashMap<String, PlanConfig>,
+}
+
+/// One subscription as the user states it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlanConfig {
+    pub name: Option<String>,
+    /// What it costs a month, in dollars.
+    pub price_usd: Option<f64>,
+    pub account: Option<String>,
 }
 
 /// The output rate to average over each calendar month, every machine together; the menu bar's
@@ -352,6 +365,7 @@ impl Default for Config {
             ollama: OllamaConfig::default(),
             mqtt: MqttConfig::default(),
             goal: GoalConfig::default(),
+            plans: Default::default(),
         }
     }
 }

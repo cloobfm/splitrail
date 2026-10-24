@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.125] - 2026-10-23
+
+### Added
+- `[plans."<column>"]` in the config names a plan a tool's own files don't: `name`,
+  `price_usd` (a month, for the coming real-cost view) and `account`. Droid CLI is `Pro`,
+  Antigravity `AI Pro`.
+
+### Fixed
+- A plan unused for over a week dropped off the Plans timeline and where-to-spend, since its
+  last capture counted as too old. A weekly window past its reset is empty, with the next reset
+  a week on, however old the capture: Antigravity (idle ten days) shows again, 100% left.
+- Usage from before logins were recorded is credited to the Claude login that used its week
+  most, not to every login at once.
+
 ## [2.0.0-dash-0.124] - 2026-10-23
 
 ### Changed
