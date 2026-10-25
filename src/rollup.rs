@@ -465,9 +465,13 @@ pub fn remote_name(tool: &str, host: &str, keep_label: bool) -> String {
     let first = format!("{first}{label}");
     let abbreviated = format!("{}{label}", abbreviate(base));
     let initial = format!("{initial}{label}");
+    // A dotted name by its stem (`llama.cpp` → `llama`) before any abbreviation.
+    let stem = format!("{}{label}", first.split('.').next().unwrap_or(&first).trim_end_matches(&label));
     let candidates = [
         (&first, host),
         (&first, short_host.as_str()),
+        (&stem, host),
+        (&stem, short_host.as_str()),
         (&abbreviated, host),
         (&abbreviated, short_host.as_str()),
         (&initial, short_host.as_str()),
@@ -929,6 +933,8 @@ mod tests {
     #[test]
     fn remote_names_fit_a_column() {
         assert_eq!(remote_name("Claude Code", "devbox-a", false), "Claude@dev-a");
+        assert_eq!(remote_name("llama.cpp", "gpu-1", false), "llama@gpu-1");
+        assert_eq!(remote_name("vLLM", "gpu-1", false), "vLLM@gpu-1");
         assert_eq!(remote_name("OpenCode", "devbox-a", false), "OC@devbox-a");
         assert_eq!(remote_name("Codex", "devbox-a", false), "Codex@dev-a");
         assert_eq!(remote_name("Claude Code", "nas", false), "Claude@nas");
