@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.142] - 2026-10-25
+
+### Added
+- `[ollama] usage_files = [...]`: the usage logs to read, one per usage proxy where several run.
+  gpu-1 fronts Ollama, llama.cpp and vLLM each with its own proxy, logging under
+  `/var/lib/splitrail/<name>/usage.jsonl`; the default stays `~/.config/splitrail/ollama/usage.jsonl`.
+
+### Fixed
+- `scripts/install_mqtt_publisher.sh` stopped silently before enabling the service on a box
+  without Claude Code: its status line step `test -f ~/.claude/settings.json` failed under
+  `set -e`. It also enables linger now, so the user service survives logout and starts at boot.
+
 ## [2.0.0-dash-0.141] - 2026-10-25
 
 ### Fixed

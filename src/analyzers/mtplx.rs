@@ -451,7 +451,7 @@ mod tests {
             assert_eq!(model, "qwen-fast");
             Some(ModelPrice { input_per_1m: 0.25, output_per_1m: 1.5, cache_write_per_1m: None, cache_read_per_1m: None, tiers: Vec::new() })
         };
-        let power = OllamaConfig { power_watts: 20.0, electricity_per_kwh: 0.30 };
+        let power = OllamaConfig { power_watts: 20.0, electricity_per_kwh: 0.30, ..Default::default() };
         let reply = &parse_log(&path, &power, &price).unwrap()[0];
         assert!((reply.stats.cost - 1.75).abs() < 1e-9);
         // 20 W for an hour: 20 Wh, $0.006 at $0.30/kWh.
@@ -484,7 +484,7 @@ mod tests {
             r#"{"logged_at_s": 1792474420.57, "request_id": "chatcmpl-b", "session_id": "s", "served_model_id": "qwen-fast", "prompt_tokens": 2202, "cached_tokens": 2085, "completion_tokens": 54}"#,
         )
         .unwrap();
-        let power = OllamaConfig { power_watts: 15.0, electricity_per_kwh: 0.30 };
+        let power = OllamaConfig { power_watts: 15.0, electricity_per_kwh: 0.30, ..Default::default() };
         let merged = merge_proxy(parse_log(&log, &power, &none).unwrap(), &proxy_records(dir.path()), &power);
         assert_eq!(merged.len(), 2);
         let (prompt, reply) = (&merged[0], &merged[1]);

@@ -65,7 +65,9 @@ fi
 # Claude plan limits and login only reach Splitrail through the status line.
 ssh "$host" 'mkdir -p ~/.local/share/splitrail'
 scp -q scripts/claude_statusline_capture.py "$host:.local/share/splitrail/claude_statusline_capture.py"
-ssh "$host" 'test -f ~/.claude/settings.json && python3 - <<PY
+# A box without Claude Code (a GPU server) has no settings to change; under `set -e` a failing
+# `test` would end the install here, before the service is enabled.
+ssh "$host" 'test -f ~/.claude/settings.json || exit 0; python3 - <<PY
 import json, os, shutil
 path = os.path.expanduser("~/.claude/settings.json")
 settings = json.load(open(path))
@@ -87,4 +89,6 @@ if ! ssh "$host" 'test -s ~/.config/splitrail/mqtt_password'; then
     printf %s "$password" | ssh "$host" 'umask 077; cat > ~/.config/splitrail/mqtt_password'
 fi
 
+# Linger: a user service otherwise stops at logout and does not start at boot.
+ssh "$host" 'loginctl enable-linger "$USER" 2>/dev/null || echo "could not enable linger: the publisher stops at logout (run: sudo loginctl enable-linger $USER)"'
 ssh "$host" 'systemctl --user daemon-reload && systemctl --user enable splitrail-mqtt.service && systemctl --user restart splitrail-mqtt.service && sleep 2 && systemctl --user is-active splitrail-mqtt.service'

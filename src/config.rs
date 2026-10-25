@@ -114,6 +114,11 @@ pub struct OllamaConfig {
     pub power_watts: f64,
     #[serde(default)]
     pub electricity_per_kwh: f64,
+    /// Usage logs to read instead of `~/.config/splitrail/ollama/usage.jsonl`: one per usage
+    /// proxy where several run (gpu-1's Ollama, llama.cpp and vLLM proxies write under
+    /// `/var/lib/splitrail/<name>/`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_files: Vec<String>,
 }
 
 impl OllamaConfig {

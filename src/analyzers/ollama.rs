@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub struct OllamaAnalyzer {
-    usage_file: Option<std::path::PathBuf>,
+    usage_files: Vec<std::path::PathBuf>,
     /// Electricity pricing from `[ollama]` in the config.
     power: OllamaConfig,
     /// Parsed usage log against its (size, mtime) (BZL-74). `usage.jsonl` is append-only and
@@ -32,20 +32,31 @@ struct CachedUsage {
 
 impl OllamaAnalyzer {
     pub fn new() -> Self {
+        let power = crate::config::Config::load().ok().flatten().unwrap_or_default().ollama;
         Self {
             cache: Default::default(),
-            power: crate::config::Config::load()
-                .ok()
-                .flatten()
-                .unwrap_or_default()
-                .ollama,
-            usage_file: std::env::home_dir().map(|home| {
-                home.join(".config")
-                    .join("splitrail")
-                    .join("ollama")
-                    .join("usage.jsonl")
-            }),
+            usage_files: Self::usage_files_for(&power),
+            power,
         }
+    }
+
+    /// The usage logs to read: `[ollama] usage_files` (with `~` expanded) when set, else the
+    /// proxy's default under `~/.config/splitrail/ollama/`.
+    fn usage_files_for(config: &OllamaConfig) -> Vec<std::path::PathBuf> {
+        let home = std::env::home_dir();
+        if !config.usage_files.is_empty() {
+            return config
+                .usage_files
+                .iter()
+                .map(|path| match (path.strip_prefix("~/"), &home) {
+                    (Some(rest), Some(home)) => home.join(rest),
+                    _ => std::path::PathBuf::from(path),
+                })
+                .collect();
+        }
+        home.map(|home| home.join(".config").join("splitrail").join("ollama").join("usage.jsonl"))
+            .into_iter()
+            .collect()
     }
 }
 
@@ -417,7 +428,7 @@ impl Analyzer for OllamaAnalyzer {
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
-        self.usage_file
+        self.usage_files
             .iter()
             .map(|path| path.to_string_lossy().into_owned())
             .collect()
@@ -425,7 +436,7 @@ impl Analyzer for OllamaAnalyzer {
 
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
         Ok(self
-            .usage_file
+            .usage_files
             .iter()
             .filter(|path| path.is_file())
             .map(|path| DataSource { path: path.clone() })
@@ -561,6 +572,7 @@ mod tests {
         let power = OllamaConfig {
             power_watts: 60.0,
             electricity_per_kwh: 0.24,
+            ..Default::default()
         };
         let log = concat!(
             // One hour of generation: 60 W -> 0.06 kWh -> $0.0144.
@@ -597,6 +609,7 @@ mod tests {
         let power = OllamaConfig {
             power_watts: 60.0,
             electricity_per_kwh: 0.24,
+            ..Default::default()
         };
         // 36 kJ measured = 0.01 kWh = $0.0024, whatever 60 W x 1 h would say.
         let log = r#"{"ts": 1790880000, "model": "m", "endpoint": "/api/chat", "prompt_tokens": 1, "cached_tokens": 0, "completion_tokens": 1, "duration_ms": 3600000, "client": "127.0.0.1", "energy_j": 36000.0}"#;
