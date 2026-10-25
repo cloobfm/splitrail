@@ -228,12 +228,36 @@ pub fn record_busy(analyzer_name: &str, samples: Vec<BusySample>) {
     }
 }
 
-/// Capacity over the `window_secs` before `now`. Throughput is output tokens per busy second
-/// across the whole history, so it reflects the actual workload (prompt processing included)
-/// rather than a benchmark.
+/// Seconds covered by at least one request: overlapping requests (a server batching sixteen at
+/// once) count their shared time once.
+fn busy_wall_secs<'a>(samples: impl Iterator<Item = &'a BusySample>) -> f64 {
+    let mut spans: Vec<(f64, f64)> = samples.map(|s| (s.ended_at - s.busy_secs, s.ended_at)).collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut total = 0.0;
+    let mut current: Option<(f64, f64)> = None;
+    for (start, end) in spans {
+        match current {
+            Some((s, e)) if start <= e => current = Some((s, e.max(end))),
+            Some((s, e)) => {
+                total += e - s;
+                current = Some((start, end));
+            }
+            None => current = Some((start, end)),
+        }
+    }
+    total + current.map_or(0.0, |(s, e)| e - s)
+}
+
+/// Capacity over the `window_secs` before `now`: what the server could generate running nonstop
+/// at the rate it reaches while working, output tokens per second it was busy, overlapping
+/// requests counted once (so a batching server's sixteen streams add up), over the last week's
+/// work where there is some (the current setup), else the whole history. It reflects the actual
+/// workload, prompt processing included, rather than a benchmark.
 pub fn capacity_in(samples: &[BusySample], window_secs: f64, now: f64) -> Option<Capacity> {
-    let busy: f64 = samples.iter().map(|s| s.busy_secs).sum();
-    let output: u64 = samples.iter().map(|s| s.output_tokens).sum();
+    let recent: Vec<&BusySample> = samples.iter().filter(|s| s.ended_at > now - 7.0 * 86_400.0).collect();
+    let basis: Vec<&BusySample> = if recent.is_empty() { samples.iter().collect() } else { recent };
+    let busy = busy_wall_secs(basis.iter().copied());
+    let output: u64 = basis.iter().map(|s| s.output_tokens).sum();
     if busy <= 0.0 || output == 0 {
         return None;
     }
@@ -248,18 +272,56 @@ pub fn capacity_in(samples: &[BusySample], window_secs: f64, now: f64) -> Option
     })
 }
 
-/// Capacity for the 5h and weekly windows, for an analyzer that recorded its requests.
+/// Capacity for the 5h and weekly windows, for an analyzer that recorded its requests, or a
+/// remote server column as its machine published it.
 pub fn capacity_for_analyzer(analyzer_name: &str) -> Option<(Capacity, Capacity)> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs_f64();
-    let map = BUSY.get()?.lock().ok()?;
-    let samples = map.get(analyzer_name)?;
-    Some((
-        capacity_in(samples, 5.0 * 3600.0, now)?,
-        capacity_in(samples, 7.0 * 86_400.0, now)?,
-    ))
+    let local = || {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs_f64();
+        let map = BUSY.get()?.lock().ok()?;
+        let samples = map.get(analyzer_name)?;
+        Some((capacity_in(samples, 5.0 * 3600.0, now)?, capacity_in(samples, 7.0 * 86_400.0, now)?))
+    };
+    local().or_else(|| {
+        let (slug, tool) = crate::rollup::remote_source(analyzer_name)?;
+        REMOTE_CAPACITY.get()?.lock().ok()?.get(&slug)?.get(&tool).copied()
+    })
+}
+
+static REMOTE_CAPACITY: OnceLock<Mutex<HashMap<String, HashMap<String, (Capacity, Capacity)>>>> = OnceLock::new();
+
+/// This machine's server columns' capacity, to publish with its limits: `{tool: {five_hour:
+/// {used, capacity}, seven_day: {...}}}`.
+pub fn capacity_payload() -> serde_json::Value {
+    let names: Vec<String> = BUSY
+        .get()
+        .and_then(|m| m.lock().ok().map(|m| m.keys().cloned().collect()))
+        .unwrap_or_default();
+    let window = |c: &Capacity| serde_json::json!({"used": c.used_tokens, "capacity": c.capacity_tokens.round()});
+    serde_json::Value::Object(
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let (five, week) = capacity_for_analyzer(&name)?;
+                Some((name, serde_json::json!({"five_hour": window(&five), "seven_day": window(&week)})))
+            })
+            .collect(),
+    )
+}
+
+/// Another machine's published capacity (see `capacity_payload`).
+pub fn set_remote_capacity(host: &str, payload: &serde_json::Value) {
+    let window = |v: &serde_json::Value| {
+        Some(Capacity { used_tokens: v.get("used")?.as_u64()?, capacity_tokens: v.get("capacity")?.as_f64()? })
+    };
+    let parsed: HashMap<String, (Capacity, Capacity)> = payload
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(tool, v)| Some((tool.clone(), (window(v.get("five_hour")?)?, window(v.get("seven_day")?)?))))
+        .collect();
+    if let Ok(mut all) = REMOTE_CAPACITY.get_or_init(Default::default).lock() {
+        all.insert(host.to_string(), parsed);
+    }
 }
 
 /// A capacity cell: `4% of 1.6M`.
@@ -928,6 +990,15 @@ mod tests {
         assert_eq!(week.used_tokens, 1000);
         assert_eq!(format_capacity(&week), "0% of 6.0M");
         assert!(capacity_in(&[], 3600.0, NOW).is_none());
+    }
+
+    #[test]
+    fn parallel_requests_add_up_to_the_servers_rate() {
+        // Sixteen requests at once, each 100 s and 1,000 tokens: 160 tok/s, not 10.
+        let samples: Vec<BusySample> =
+            (0..16).map(|_| BusySample { ended_at: NOW - 60.0, busy_secs: 100.0, output_tokens: 1000 }).collect();
+        let five = capacity_in(&samples, 5.0 * 3600.0, NOW).unwrap();
+        assert!((five.capacity_tokens - 160.0 * 5.0 * 3600.0).abs() < 1e-6);
     }
 
     #[test]

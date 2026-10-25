@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.146] - 2026-10-25
+
+### Changed
+- A local model server's capacity (the 5h and Week rows: `N% of X`, what it could generate
+  running nonstop) is its rate while working with overlapping requests counted once: vLLM
+  batching sixteen requests is sixteen streams' worth, where summing each request's busy time
+  made it look one stream fast. The rate is the last week's work where there is some, so it
+  follows the current setup.
+- Remote server columns (vLLM@gpu-1, llama@gpu-1) show it too: a publisher sends its servers'
+  capacity with its limits.
+
 ## [2.0.0-dash-0.145] - 2026-10-25
 
 ### Added

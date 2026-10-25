@@ -327,8 +327,18 @@ pub fn limits_payload(now: f64) -> BTreeMap<String, Value> {
             let raw: Value = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
             Some((label, reduce_snapshot(&raw, now)?))
         })
+        .chain(
+            // Local model servers' capacity (what they could generate nonstop), under a key no
+            // limits file can have.
+            Some(crate::plan_limits::capacity_payload())
+                .filter(|c| c.as_object().is_some_and(|o| !o.is_empty()))
+                .map(|c| (CAPACITY_KEY.to_string(), c)),
+        )
         .collect()
 }
+
+/// The `limits` payload's entry for server capacity.
+const CAPACITY_KEY: &str = "_capacity";
 
 pub fn reduce_snapshot(raw: &Value, now: f64) -> Option<Value> {
     let captured_at = raw.get("captured_at")?.as_f64()?;
@@ -618,8 +628,10 @@ fn apply(topic: &str, payload: &[u8], own_slug: &str) -> bool {
     }
     match kind {
         "limits" => {
-            let snapshots: BTreeMap<String, Value> =
+            let mut snapshots: BTreeMap<String, Value> =
                 serde_json::from_slice(payload).unwrap_or_default();
+            let capacity = snapshots.remove(CAPACITY_KEY).unwrap_or(Value::Null);
+            crate::plan_limits::set_remote_capacity(slug, &capacity);
             crate::plan_limits::set_remote_snapshots(slug, snapshots.into_values().collect());
             true
         }
