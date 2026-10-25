@@ -310,13 +310,13 @@ pub fn login_hash(login: &str) -> String {
 /// This machine's limit snapshots as published: what `plan_limits` reads, with the login
 /// swapped for its hash (enough to match accounts across machines without sending the address).
 pub fn limits_payload(now: f64) -> BTreeMap<String, Value> {
-    let Some(dir) = std::env::home_dir().map(|h| h.join(".config/splitrail/limits")) else {
-        return BTreeMap::new();
-    };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return BTreeMap::new();
-    };
+    // No limits folder (a GPU box without coding agents) still has its servers' capacity.
+    let entries = std::env::home_dir()
+        .map(|h| h.join(".config/splitrail/limits"))
+        .and_then(|dir| std::fs::read_dir(dir).ok());
     entries
+        .into_iter()
+        .flatten()
         .flatten()
         .filter_map(|entry| {
             let path = entry.path();
