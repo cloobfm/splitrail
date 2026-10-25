@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.141] - 2026-10-25
+
+### Fixed
+- gpu-1's models (the RTX PRO 4000 VM replacing VRig Windows) priced: a Modelfile copy with a
+  variant after its size (`qwen3.8-27b-bench`) is priced as its model, and a point release no
+  provider hosts at that size falls back a generation at the same size (`qwen3.5:4b` as
+  `qwen3-4b`, $0.14 / $0.22 per 1M) before the bare family name, whose prefix match would price
+  a 4B model at the median of every qwen3.5 size. `qwen3.8:27b` (and llama.cpp / vLLM's
+  `qwen3.8-27b`) is $0.43 / $3.00.
+
 ## [2.0.0-dash-0.140] - 2026-10-25
 
 ### Fixed

@@ -127,14 +127,20 @@ pub fn street_names(model: &str, param_size: Option<&str>) -> Vec<String> {
         .rsplit_once('-')
         .filter(|(_, suffix)| suffix.len() > 1 && suffix.ends_with('k') && suffix[..suffix.len() - 1].chars().all(|c| c.is_ascii_digit()))
         .map_or(base, |(stem, _)| stem);
-    let size_from_tag = tag.split(['-', '_']).next().filter(|t| {
-        t.len() > 1
-            && t.ends_with(['b', 'm'])
-            && t[..t.len() - 1]
-                .chars()
-                .all(|c| c.is_ascii_digit() || c == '.')
-    });
-    let size = size_from_tag.map(str::to_string).or_else(|| {
+    let is_size = |t: &str| {
+        t.len() > 1 && t.ends_with(['b', 'm']) && t[..t.len() - 1].chars().all(|c| c.is_ascii_digit() || c == '.')
+    };
+    // A size in the name itself, with a variant after it (`qwen3.8-27b-bench`, a Modelfile copy
+    // for benchmarks): the model is the name up to the size.
+    let (base, size_in_name) = match base.split('-').position(is_size) {
+        Some(i) if i > 0 => {
+            let parts: Vec<&str> = base.split('-').collect();
+            (&base[..parts[..i].join("-").len()], Some(parts[i].to_string()))
+        }
+        _ => (base, None),
+    };
+    let size_from_tag = tag.split(['-', '_']).next().filter(|t| is_size(t));
+    let size = size_from_tag.map(str::to_string).or(size_in_name).or_else(|| {
         // `20.9B` -> `20b`: providers round parameter counts down.
         let count = param_size?.trim().to_lowercase();
         let (number, unit) = count.split_at(count.len().checked_sub(1)?);
@@ -156,6 +162,17 @@ pub fn street_names(model: &str, param_size: Option<&str>) -> Vec<String> {
             names.push(format!("{stem}-{size}"));
         }
         names.push(stem);
+    }
+    // The generation before at the same size (`qwen3.5-4b` -> `qwen3-4b`), for a point release
+    // no provider hosts at that size. Before the bare family name, which matches every size of
+    // it (`qwen3.5` would price a 4B model at the 397B's median).
+    if let (Some(size), Some((major, minor))) = (&size, base.rsplit_once('.'))
+        && !minor.is_empty()
+        && minor.chars().all(|c| c.is_ascii_digit())
+        && major.ends_with(|c: char| c.is_ascii_digit())
+        && !major.contains('-')
+    {
+        names.insert(1, format!("{major}-{size}"));
     }
     names
 }
@@ -513,8 +530,8 @@ mod tests {
 
     #[test]
     fn a_context_length_variant_is_priced_as_its_model() {
-        assert_eq!(street_names("qwen3.8-64k", Some("27.8B")), ["qwen3.8-27b", "qwen3.8"]);
-        assert_eq!(street_names("qwen3.8:27b-mlx", None), ["qwen3.8-27b", "qwen3.8"]);
+        assert_eq!(street_names("qwen3.8-64k", Some("27.8B")), ["qwen3.8-27b", "qwen3-27b", "qwen3.8"]);
+        assert_eq!(street_names("qwen3.8:27b-mlx", None), ["qwen3.8-27b", "qwen3-27b", "qwen3.8"]);
         assert_eq!(street_names("gemma4:31b", None), ["gemma4-31b", "gemma4", "gemma-4-31b", "gemma-4"]);
         // A name that only looks alike keeps its suffix.
         assert_eq!(street_names("deepseek-r1", None), ["deepseek-r1"]);
@@ -592,8 +609,12 @@ mod tests {
     fn ollama_names_map_to_hosted_names() {
         assert_eq!(
             street_names("qwen3.8:27b-mlx", None),
-            ["qwen3.8-27b", "qwen3.8"]
+            ["qwen3.8-27b", "qwen3-27b", "qwen3.8"]
         );
+        // gpu-1's: a benchmark copy is its model; a point release falls back a generation.
+        assert_eq!(street_names("qwen3.8-27b-bench", None), ["qwen3.8-27b", "qwen3-27b", "qwen3.8"]);
+        assert_eq!(street_names("qwen3.5:4b", None), ["qwen3.5-4b", "qwen3-4b", "qwen3.5"]);
+        assert_eq!(street_names("qwen3.5-4b-bench", None), ["qwen3.5-4b", "qwen3-4b", "qwen3.5"]);
         assert_eq!(
             street_names("gpt-oss:latest", Some("20.9B")),
             ["gpt-oss-20b", "gpt-oss"]
