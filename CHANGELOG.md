@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.148] - 2026-10-25
+
+### Added
+- `U` updates a publisher that runs in Docker (ts677, the QNAP NAS) like the systemd ones:
+  `scripts/update_docker_publisher.sh` finds the container running `splitrail-dashboard mqtt`
+  by its bind-mounted binary, builds the same static binary, swaps the mounted file and restarts
+  the container; the usage proxy's container likewise, only when its script changed (a restart
+  drops requests in flight). `scripts/update_publisher.sh` sends a Linux host without systemd
+  there instead of skipping it. ts677 is reachable as `ssh ts677`.
+
+### Fixed
+- A machine whose update failed kept its ❌ after it was updated another way; it shows as
+  current once its version matches.
+
 ## [2.0.0-dash-0.147] - 2026-10-25
 
 ### Fixed

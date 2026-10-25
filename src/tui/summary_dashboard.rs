@@ -1179,10 +1179,11 @@ pub fn update_spans() -> Vec<Span<'static>> {
                 Some(progress) => (format!("{version}⏳ {}", progress.label()), Color::Yellow),
                 None => (format!("{version}⏳ queued"), Color::Yellow),
             },
-            PublisherUpdate::Failed => (format!("{version}❌"), Color::Red),
-            PublisherUpdate::Idle if !publisher.online => ("off".to_string(), Color::DarkGray),
-            PublisherUpdate::Idle if publisher.behind() => (format!("{version}⬆"), Color::Yellow),
-            PublisherUpdate::Idle => (version, Color::Green),
+            // A failed update stops mattering once the machine is current (updated another way).
+            PublisherUpdate::Failed if publisher.behind() => (format!("{version}❌"), Color::Red),
+            _ if !publisher.online => ("off".to_string(), Color::DarkGray),
+            _ if publisher.behind() => (format!("{version}⬆"), Color::Yellow),
+            _ => (version, Color::Green),
         };
         spans.push(Span::raw(format!("  {} ", crate::rollup::short_host(&publisher.host))));
         spans.push(Span::styled(text, Style::default().fg(color)));
