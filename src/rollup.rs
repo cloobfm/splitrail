@@ -213,9 +213,44 @@ pub fn recent_payload(
                         .collect(),
                 );
             }
+        } else {
+            // Without previews, what kind of work it is and nothing of what was said: who called,
+            // which model, how big (`‹mediasrc · qwen3.8-27b · 1.2k in → 310 out›`).
+            let mut replies: Vec<&ConversationMessage> =
+                tool.messages.iter().filter(|m| m.date <= now && m.role == MessageRole::Assistant).collect();
+            replies.sort_by_key(|m| m.date);
+            let last = &replies[replies.len().saturating_sub(RECENT_TEXTS)..];
+            if !last.is_empty() {
+                payload.texts.insert(
+                    tool.analyzer_name.clone(),
+                    last.iter()
+                        .map(|m| RecentText {
+                            t: m.date.timestamp_millis(),
+                            a: true,
+                            p: m.project_hash.clone(),
+                            conv: m.conversation_hash.chars().take(16).collect(),
+                            text: work_line(m),
+                        })
+                        .collect(),
+                );
+            }
         }
     }
     payload
+}
+
+/// A reply described without its text: the caller where it is a readable name (a usage proxy's
+/// project, not a hash), the model and the tokens either way.
+fn work_line(m: &ConversationMessage) -> String {
+    let hashed = m.project_hash.len() >= 32 && m.project_hash.chars().all(|c| c.is_ascii_hexdigit());
+    let who = (!hashed && !m.project_hash.is_empty()).then(|| format!("{} · ", m.project_hash));
+    format!(
+        "‹{}{} · {} in → {} out›",
+        who.unwrap_or_default(),
+        m.model.as_deref().unwrap_or("?"),
+        crate::advisor::human_tokens(m.stats.input_tokens as f64),
+        crate::advisor::human_tokens(m.stats.output_tokens as f64),
+    )
 }
 
 /// A token that looks like a credential: a known key prefix, or a long unbroken run of key-ish
@@ -847,6 +882,9 @@ mod tests {
         assert_eq!(payload.tools["OpenCode"].len(), 1, "an idle tool still says when it last ran");
         assert_eq!(payload.tools["Claude Code"][0].conv, "conversation-has");
         assert!(payload.previews.is_empty(), "no text unless sharing is on");
+        // Only a description of each reply, never its words.
+        let lines = &payload.texts["Claude Code"];
+        assert!(lines.iter().all(|l| l.text.starts_with('‹') && !l.text.contains("rotated")), "{lines:?}");
 
         let shared = recent_payload("devbox-a", &stats(now), now, true);
         assert_eq!(shared.previews["Claude Code"], "Done, key [redacted] rotated");

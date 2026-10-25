@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.145] - 2026-10-25
+
+### Added
+- A publisher with previews off now sends a content-free line per recent reply, so another
+  dashboard can see what kind of work a machine is doing without what was said: `‹mediasrc ·
+  qwen3.8-27b · 1.2k in → 310 out›`. The caller appears where it is a readable name (a usage
+  proxy's project), never a hash; no prompt or reply text. gpu-1 (mediasrc's photo captions)
+  keeps previews off and shows these.
+
 ## [2.0.0-dash-0.144] - 2026-10-25
 
 ### Fixed
