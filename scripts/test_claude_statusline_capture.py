@@ -12,6 +12,7 @@ from claude_statusline_capture import (  # noqa: E402
     merge_limits,
     merge_window,
     summary,
+    login_by_reset,
     login_changed,
     plan_from_account,
     record_login,
@@ -140,6 +141,29 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(claude_json_path("v", {"CLAUDE_CONFIG_DIR": "/c"}, home), "/c/.claude.json")
         self.assertEqual(claude_json_path("main", {}, "/h"), "/h/.claude.json")
 
+
+
+class LoginByResetTests(unittest.TestCase):
+    def setUp(self):
+        # The personal Max resets Wednesdays, the Team seat at another hour.
+        state = update_snapshot(None, "v", report("s1", 38, WEEK), "a@x.com (personal)", NOW)
+        self.state = update_snapshot(state, "v", report("s2", 10, WEEK - 3 * 86400 + 3600), "a@x.com (Team)", NOW + 60)
+
+    def test_a_session_still_on_the_team_seat_is_filed_under_it(self):
+        # The config says personal (another session `/login`ed), but these numbers reset on the
+        # Team seat's schedule.
+        seat = {"seven_day": w(17, WEEK - 3 * 86400 + 3600)}
+        self.assertEqual(login_by_reset(self.state, seat, "a@x.com (personal)"), "a@x.com (Team)")
+        # A week on, the same schedule.
+        later = {"seven_day": w(2, WEEK + 4 * 86400 + 3600)}
+        self.assertEqual(login_by_reset(self.state, later, "a@x.com (personal)"), "a@x.com (Team)")
+
+    def test_the_config_login_wins_when_it_matches_or_nothing_does(self):
+        own = {"seven_day": w(40, WEEK)}
+        self.assertEqual(login_by_reset(self.state, own, "a@x.com (personal)"), "a@x.com (personal)")
+        unknown = {"seven_day": w(1, WEEK + 12 * 3600)}
+        self.assertEqual(login_by_reset(self.state, unknown, "a@x.com (personal)"), "a@x.com (personal)")
+        self.assertEqual(login_by_reset(self.state, None, "a@x.com (personal)"), "a@x.com (personal)")
 
 
 class LedgerTests(unittest.TestCase):

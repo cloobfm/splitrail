@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.138] - 2026-10-24
+
+### Fixed
+- The a@virti.us Max 20x showed 93% left, resetting Sunday 00:00 (its week resets Wednesday
+  03:00): the Team seat's numbers were filed under it. A status line report was credited to the
+  login the config directory names, which `/login` in any one session changes; sessions started
+  on the Team seat keep that account until they restart and went on reporting its numbers. A
+  report now goes to the login whose weekly reset it carries (each account's week resets at its
+  own hour) when exactly one other login matches and the config's does not; the top level stays
+  the signed-in login. The Max's last good reading (38%, Wed 03:00) is restored.
+
 ## [2.0.0-dash-0.137] - 2026-10-24
 
 ### Fixed

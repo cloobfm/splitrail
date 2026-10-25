@@ -300,15 +300,48 @@ def update_snapshot(previous, label, payload, login, now, login_name=None):
     }
 
 
+WEEK_SECS = 7 * 86400
+# A weekly reset this close to a login's (a week apart counts: the next cycle) is that login's.
+RESET_MATCH_SECS = 2 * 3600
+
+
+def login_by_reset(previous, reported, login):
+    """The login a session's numbers belong to. The config directory names the login `/login`
+    last chose, but a session keeps the account it started on until it restarts: sessions still
+    on a Team seat go on reporting the seat's numbers after another session `/login`s to the
+    personal Max. Each account's week resets at its own time, so a weekly reset matching exactly
+    one other recorded login (and not the config's) is that login's."""
+    week = (reported or {}).get("seven_day") if isinstance(reported, dict) else None
+    reset = parse_reset((week or {}).get("resets_at")) if isinstance(week, dict) else None
+    logins = (previous or {}).get("logins") if isinstance(previous, dict) else None
+    if reset is None or not isinstance(logins, dict):
+        return login
+
+    def matches(entry):
+        theirs = ((entry.get("rate_limits") or {}).get("seven_day") or {}).get("resets_at")
+        theirs = parse_reset(theirs)
+        if theirs is None:
+            return False
+        apart = (reset - theirs) % WEEK_SECS
+        return min(apart, WEEK_SECS - apart) < RESET_MATCH_SECS
+
+    candidates = [key for key, entry in logins.items() if isinstance(entry, dict) and matches(entry)]
+    if login in candidates or len(candidates) != 1:
+        return login
+    return candidates[0]
+
+
 def save_snapshot(label, payload, login=None):
     """Merge this payload into the account's snapshot and return the snapshot. `login` defaults
     to the Claude config directory's current login."""
     os.makedirs(LIMITS_DIR, exist_ok=True)
     path = os.path.join(LIMITS_DIR, f"{label}.json")
+    attributed = bool(login)
     if login:
         login_name = login.split("@")[0]
     else:
         login, login_name = current_login(label)
+    config_login = login
     # Sessions refresh concurrently; serialise the read-merge-write so none is lost.
     with open(os.path.join(LIMITS_DIR, f".{label}.lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -319,12 +352,26 @@ def save_snapshot(label, payload, login=None):
         except (OSError, ValueError):
             previous = None
         now = time.time()
+        if not attributed:
+            login = login_by_reset(previous, payload.get("rate_limits"), login)
+            if login != config_login:
+                login_name = login_name_of(login)
         if login_changed(previous, payload.get("session_id"), login):
             record_login(label, now, payload["session_id"], login)
         snapshot = update_snapshot(previous, label, payload, login, now, login_name)
+        if login != config_login:
+            # Filed under the session's own login; the top level stays the signed-in one's.
+            own = (snapshot.get("logins") or {}).get(config_login) or {}
+            _, config_name = current_login(label)
+            snapshot.update({
+                "login": config_login,
+                "login_name": config_name or login_name_of(config_login),
+                "captured_at": own.get("captured_at", snapshot.get("captured_at")),
+                "rate_limits": own.get("rate_limits"),
+            })
         # The signed-in login's plan, kept on its entry so other logins' plans stay known.
         plan = current_plan(label) if not payload.get("_plan_test") else payload["_plan_test"]
-        if plan and login and isinstance(snapshot.get("logins", {}).get(login), dict):
+        if plan and login and login == config_login and isinstance(snapshot.get("logins", {}).get(login), dict):
             snapshot["logins"][login]["plan"] = plan
             snapshot["plan"] = plan
         # Write-then-rename: the dashboard may read while a status line refresh is writing.
