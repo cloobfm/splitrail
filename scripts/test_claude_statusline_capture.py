@@ -12,6 +12,7 @@ from claude_statusline_capture import (  # noqa: E402
     merge_limits,
     merge_window,
     summary,
+    learn_week_per_5h,
     login_by_reset,
     login_changed,
     plan_from_account,
@@ -164,6 +165,25 @@ class LoginByResetTests(unittest.TestCase):
         unknown = {"seven_day": w(1, WEEK + 12 * 3600)}
         self.assertEqual(login_by_reset(self.state, unknown, "a@x.com (personal)"), "a@x.com (personal)")
         self.assertEqual(login_by_reset(self.state, None, "a@x.com (personal)"), "a@x.com (personal)")
+
+
+class WeekPer5hTests(unittest.TestCase):
+    def limits(self, five, week, five_reset=NOW + 3600):
+        return {"five_hour": w(five, five_reset), "seven_day": w(week, WEEK)}
+
+    def test_a_filling_5h_window_measures_its_share_of_the_week(self):
+        entry = learn_week_per_5h({}, self.limits(10, 20))
+        entry = learn_week_per_5h(entry, self.limits(25, 22))  # Too small a step yet.
+        self.assertNotIn("week_per_5h", entry)
+        entry = learn_week_per_5h(entry, self.limits(60, 28))  # 50 points of 5h, 8 of week.
+        self.assertEqual(entry["week_per_5h"], 16.0)
+        # A new 5-hour window starts a new measurement; the learned share stays.
+        entry = learn_week_per_5h(entry, self.limits(5, 30, NOW + 6 * 3600))
+        self.assertEqual(entry["week_per_5h"], 16.0)
+        self.assertEqual(entry["five_anchor"]["five"], 5)
+
+    def test_missing_windows_keep_what_was_learned(self):
+        self.assertEqual(learn_week_per_5h({"week_per_5h": 12.0}, {"seven_day": w(5, WEEK)}), {"week_per_5h": 12.0})
 
 
 class LedgerTests(unittest.TestCase):

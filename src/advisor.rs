@@ -199,6 +199,7 @@ pub fn tool_json(stats: &crate::types::AgenticCodingToolStats, now: DateTime<Utc
         "name": name,
         "account": crate::plan_limits::account_for_analyzer(name),
         "plan": crate::plan_limits::plan_for_analyzer(name).or_else(|| codex_plan(name)),
+        "week_per_5h": crate::plan_limits::week_per_5h(name, None),
         "tks": round1(recent_tks(stats, now)),
         "limits": {
             "five_hour": window("five_hour", limits.five_hour),
@@ -246,6 +247,8 @@ pub struct Window {
     pub switch_login: bool,
     /// The plan (`Max 20x`, `Team Std`), where known.
     pub plan: Option<String>,
+    /// Percent of the week one full 5-hour window uses, as measured for this login.
+    pub week_per_5h: Option<f64>,
 }
 
 impl Window {
@@ -367,6 +370,7 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
         let now_tks = tool.get("tks").and_then(Value::as_f64).unwrap_or(0.0);
         let switch_login = tool.get("switch").and_then(Value::as_bool).unwrap_or(false);
         let plan = tool.get("plan").and_then(Value::as_str).map(str::to_string);
+        let week_per_5h = tool.get("week_per_5h").and_then(Value::as_f64);
         for key in ["five_hour", "seven_day", "monthly"] {
             let Some(w) = tool.get("limits").and_then(|l| l.get(key)).filter(|w| !w.is_null()) else {
                 continue;
@@ -394,6 +398,7 @@ pub fn windows(status: &Value, now: DateTime<Utc>) -> Vec<Window> {
                 now_tks,
                 switch_login,
                 plan: plan.clone(),
+                week_per_5h,
             });
         }
     }
@@ -509,6 +514,102 @@ pub struct Pick {
     pub score: f64,
     /// The window the pick is about: the full one when unavailable, else the plan's longest.
     pub window: Option<Window>,
+    /// For a weekly plan with a 5-hour cap: how much of the week can still be used by its reset.
+    pub reach: Option<Reach>,
+}
+
+/// Seconds in a 5-hour window.
+const FIVE_HOURS: i64 = 5 * 3600;
+
+/// A week that can only be spent a 5-hour window at a time, each window using `per_window`% of
+/// it: how many more windows using it all takes, how long before the reset the last of them
+/// must start, and what can be used if not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reach {
+    /// Percent of the week one full 5-hour window uses.
+    pub per_window: f64,
+    /// Whether `per_window` was measured for this login, or assumed from its plan.
+    pub measured: bool,
+    /// Full 5-hour windows still needed after the current one.
+    pub windows_needed: u32,
+    /// Seconds to spare: until the last moment to start, keeping every window full until the
+    /// reset. Negative when the week can no longer be used up.
+    pub slack_secs: i64,
+    /// When that last moment is.
+    pub start_by: DateTime<Utc>,
+    /// Percent of the week that can still be used by its reset, at most what is left.
+    pub reachable: f64,
+    /// Percent that will go unused even at full use: left minus reachable.
+    pub lost: f64,
+    /// Seconds until the current 5-hour window, when full, lets you back in.
+    pub locked_secs: Option<i64>,
+}
+
+impl Reach {
+    /// Percent of the week left that can still be used: none when it is all used.
+    pub fn left_to_use(&self) -> f64 {
+        self.reachable + self.lost
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "week_percent_per_5h_window": round1(self.per_window),
+            "measured": self.measured,
+            "windows_needed": self.windows_needed,
+            "start_by": self.start_by.with_timezone(&Local).to_rfc3339(),
+            "slack_hours": round1(self.slack_secs as f64 / 3600.0),
+            "reachable_percent": round1(self.reachable),
+            "lost_percent": round1(self.lost),
+            "locked_for_secs": self.locked_secs,
+        })
+    }
+}
+
+/// A 5-hour window's share of a week by plan, where it has not been measured: about a sixth
+/// on a Team seat (from our own seats), less on the bigger Max plans.
+fn assumed_week_per_5h(plan: Option<&str>) -> Option<f64> {
+    match plan? {
+        p if p.starts_with("Team") => Some(16.0),
+        "Max 20x" | "Max 5x" | "Max" => Some(10.0),
+        "Pro" => Some(15.0),
+        _ => None,
+    }
+}
+
+/// How much of a weekly plan can still be used before its reset, given its 5-hour windows.
+pub fn reach(week: &Window, five: Option<&Window>) -> Option<Reach> {
+    if week.window != "week" {
+        return None;
+    }
+    let (per_window, measured) = match week.week_per_5h {
+        Some(v) => (v, true),
+        None => (assumed_week_per_5h(week.plan.as_deref())?, false),
+    };
+    let to_reset = week.resets_in_secs.filter(|s| *s > 0)?;
+    let now = week.resets_at? - Duration::seconds(to_reset);
+    let left = (100.0 - week.used).max(0.0);
+    // The current 5-hour window: what it still allows and when it ends. With none running, the
+    // next starts with your next request.
+    let (current, current_end, locked_secs) = match five.and_then(|f| Some((f, f.resets_in_secs.filter(|s| *s > 0)?))) {
+        Some((f, end)) if f.used >= 99.5 => (0.0, end, Some(end)),
+        Some((f, end)) => (per_window * (100.0 - f.used).max(0.0) / 100.0, end, None),
+        None => (0.0, 0, None),
+    };
+    let rest = (left - current).max(0.0);
+    let windows_needed = (rest / per_window).ceil() as u32;
+    let slack_secs = to_reset - current_end - windows_needed as i64 * FIVE_HOURS;
+    let after_current = (to_reset - current_end).max(0) as f64 / FIVE_HOURS as f64;
+    let reachable = left.min(current.min(left) + per_window * after_current);
+    Some(Reach {
+        per_window,
+        measured,
+        windows_needed,
+        slack_secs,
+        start_by: now + Duration::seconds(slack_secs),
+        reachable,
+        lost: (left - reachable).max(0.0),
+        locked_secs,
+    })
 }
 
 impl Pick {
@@ -517,6 +618,9 @@ impl Pick {
         let Some(w) = &self.window else { return "-" };
         if !self.available {
             "WAIT"
+        } else if self.reach.is_some_and(|r| r.left_to_use() >= 1.0 && r.slack_secs < FIVE_HOURS) {
+            // Less than a 5-hour window to spare before part of the week is out of reach.
+            "USE NOW"
         } else if w.runs_out_in_secs().is_some() {
             "EASE OFF"
         } else if w.projected.is_none() {
@@ -538,9 +642,24 @@ impl Pick {
         if !self.available {
             return format!("{} full · back in {}", w.window, secs(w.resets_in_secs));
         }
+        let reach = self.reach.filter(|r| r.left_to_use() >= 1.0).map(|r| {
+            if r.lost >= 1.0 {
+                format!("only {:.0}% more usable by the reset · {:.0}% lost", r.reachable, r.lost)
+            } else {
+                format!(
+                    "start by {} · {} × 5h",
+                    r.start_by.with_timezone(&Local).format("%a %H:%M"),
+                    r.windows_needed
+                )
+            }
+        });
         if w.switch_login {
             // Not signed in: it sits unused unless you switch to it.
-            return format!("switch with /login · {:.0}% free", (100.0 - w.used).max(0.0));
+            let free = format!("switch with /login · {:.0}% free", (100.0 - w.used).max(0.0));
+            return reach.map_or(free.clone(), |r| format!("{free} · {r}"));
+        }
+        if let Some(r) = reach {
+            return r;
         }
         match (w.projected, w.runs_out_in_secs()) {
             (_, Some(out)) => format!("runs out in {}", human_secs(out)),
@@ -570,19 +689,31 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                     reason: format!("{} window {:.0}% used; back in {back}", full.window, full.used),
                     score: -1.0 - full.resets_in_secs.unwrap_or(0) as f64 / 86_400.0,
                     window: Some((*full).clone()),
+                    reach: own
+                        .iter()
+                        .find(|w| w.window == "week")
+                        .and_then(|week| reach(week, own.iter().find(|w| w.window == "5h").copied())),
                 };
             }
             // The plan's real allowance is its longest window (week or month); the 5-hour one
             // only gates when it can be used. Score: share expected to expire, per day left.
+            // With 5-hour caps the deadline is the last moment to start, not the reset: what
+            // would expire, per day of slack.
+            let five = own.iter().find(|w| w.window == "5h").copied();
             let best = own
                 .iter()
                 .max_by(|a, b| window_secs_label(a.window).total_cmp(&window_secs_label(b.window)))
                 .map(|w| {
-                    let days = (w.resets_in_secs.unwrap_or(0) as f64 / 86_400.0).max(1.0 / 24.0);
-                    (w, w.expiring() / days)
+                    let reach = reach(w, five);
+                    let (unused, secs) = match reach {
+                        Some(r) => (w.expiring().max(r.lost), r.slack_secs.max(0)),
+                        None => (w.expiring(), w.resets_in_secs.unwrap_or(0)),
+                    };
+                    let days = (secs as f64 / 86_400.0).max(1.0 / 24.0);
+                    (w, unused / days, reach)
                 });
             match best {
-                Some((w, score)) => {
+                Some((w, score, reach)) => {
                     let pace = match (w.projected, w.runs_out_in_secs()) {
                         (_, Some(out)) => format!("on pace to run out in {}", human_secs(out)),
                         (Some(p), None) => format!("on pace for {:.0}%", p.min(999.0)),
@@ -609,6 +740,13 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                             reason.push_str(&format!(" (≈ {} if all on one model)", list.join(" / ")));
                         }
                     }
+                    if let Some(r) = reach.filter(|r| r.left_to_use() >= 1.0) {
+                        reason.push_str(&if r.lost >= 1.0 {
+                            format!(". Its 5-hour windows ({:.0}% of the week each) leave only {:.0}% more usable by the reset: {:.0}% will be lost", r.per_window, r.reachable, r.lost)
+                        } else {
+                            format!(". Its 5-hour windows ({:.0}% of the week each): {} more needed, so start by {}", r.per_window, r.windows_needed, r.start_by.with_timezone(&Local).format("%a %H:%M"))
+                        });
+                    }
                     Pick {
                         tool: tool.to_string(),
                         account: w.account.clone(),
@@ -616,9 +754,10 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                         reason,
                         score,
                         window: Some((*w).clone()),
+                        reach,
                     }
                 }
-                None => Pick { tool: tool.to_string(), account: None, available: true, reason: "no window data".into(), score: 0.0, window: None },
+                None => Pick { tool: tool.to_string(), account: None, available: true, reason: "no window data".into(), score: 0.0, window: None, reach: None },
             }
         })
         .collect();
@@ -668,6 +807,7 @@ pub fn other_login_tools(stats: &[&crate::types::AgenticCodingToolStats], now: D
                 "name": format!("{} · {}", tool.analyzer_name, short_login(&other.account)),
                 "account": other.account,
                 "plan": other.plan,
+                "week_per_5h": crate::plan_limits::week_per_5h(&tool.analyzer_name, Some(&other.account)),
                 "tks": 0.0,
                 "cost_today": 0.0,
                 "switch": true,
@@ -717,6 +857,7 @@ pub fn quotas_answer(status: &Value, now: DateTime<Utc>) -> Value {
         "plans": plans_by_waste(&all).iter().map(|r| json!({
             "plan": r.plan.to_json(),
             "five_hour_now": r.five_hour.as_ref().map(Window::to_json),
+            "reach": reach(&r.plan, r.five_hour.as_ref()).map(|x| x.to_json()),
         })).collect::<Vec<_>>(),
         "windows": all.iter().map(Window::to_json).collect::<Vec<_>>(),
     })
@@ -731,6 +872,7 @@ pub fn where_to_spend_answer(status: &Value, now: DateTime<Utc>) -> Value {
         "how": "Each tool's plan is judged by its longest window (week or month): the share projected to go unused at that reset at the pace so far, per day until the reset. A 5-hour window only gates availability: any window at 95%+ makes the tool unavailable until it resets. Shares are of each plan's own allowance, so a large share of a small plan can rank above a smaller share of a large one. Tools without plan limits (pay-per-token, local) are not ranked.",
         "ranking": picks.iter().map(|p| json!({
             "tool": p.tool, "account": p.account, "available": p.available, "reason": p.reason, "score": round1(p.score),
+            "reach": p.reach.map(|r| r.to_json()),
         })).collect::<Vec<_>>(),
     })
 }
@@ -748,6 +890,59 @@ pub fn usage_answer(status: &Value, now: DateTime<Utc>) -> Value {
         })).collect::<Vec<_>>()),
         "machines": status.get("publishers"),
     })
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+
+    fn window(label: &'static str, used: f64, resets_in: i64, plan: Option<&str>, per: Option<f64>) -> Window {
+        let now = Utc::now();
+        Window {
+            tool: "Claude (v)".into(), account: None, window: label, used,
+            resets_at: Some(now + Duration::seconds(resets_in)), resets_in_secs: Some(resets_in),
+            projected: None, spend: None, now_tks: 0.0, switch_login: false,
+            plan: plan.map(str::to_string), week_per_5h: per,
+        }
+    }
+
+    #[test]
+    fn a_locked_seat_twenty_minutes_from_its_reset_loses_the_week() {
+        // The Oct 24 Team seat: 16% of the week used, 5-hour window full, week resets in 21m.
+        let week = window("week", 16.0, 21 * 60, Some("Team Std"), Some(16.0));
+        let five = window("5h", 100.0, 81 * 60, Some("Team Std"), Some(16.0));
+        let r = reach(&week, Some(&five)).unwrap();
+        assert_eq!(r.reachable, 0.0);
+        assert_eq!(r.lost, 84.0);
+        assert_eq!(r.locked_secs, Some(81 * 60));
+    }
+
+    #[test]
+    fn a_fresh_team_week_needs_six_windows_and_says_when_to_start() {
+        let week = window("week", 0.0, 3 * 86_400, Some("Team Std"), None);
+        let r = reach(&week, None).unwrap();
+        assert!(!r.measured);
+        assert_eq!(r.windows_needed, 7); // 100 / 16 = 6.25 -> 7
+        assert_eq!(r.slack_secs, 3 * 86_400 - 7 * FIVE_HOURS);
+        assert_eq!(r.lost, 0.0);
+        // A day out, 30 hours are not enough for 35 hours of windows.
+        let late = window("week", 0.0, 30 * 3600, Some("Team Std"), None);
+        let r = reach(&late, None).unwrap();
+        assert!(r.slack_secs < 0);
+        assert!((r.reachable - 96.0).abs() < 1e-9);
+        assert!((r.lost - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_current_window_counts_toward_the_week() {
+        let week = window("week", 50.0, 10 * 3600, None, Some(20.0));
+        let five = window("5h", 50.0, 2 * 3600, None, Some(20.0));
+        let r = reach(&week, Some(&five)).unwrap();
+        // 10% now, then 8h of windows at 20% each = 32%: 42% of the 50% left.
+        assert!((r.reachable - 42.0).abs() < 1e-9);
+        assert!((r.lost - 8.0).abs() < 1e-9);
+        assert_eq!(r.windows_needed, 2);
+    }
 }
 
 #[cfg(test)]
@@ -850,7 +1045,7 @@ mod tests {
         // 70% of the week cost $381 for 3.77M output tokens; 9.2 hours left.
         let w = Window {
             tool: "Claude (main)".into(), account: None, window: "week", used: 70.0, resets_at: None,
-            resets_in_secs: Some(33_120), projected: Some(74.0), now_tks: 140.0, switch_login: false, plan: None,
+            resets_in_secs: Some(33_120), projected: Some(74.0), now_tks: 140.0, switch_login: false, plan: None, week_per_5h: None,
             spend: Some(Spend { input: 9_764.0, output: 3_770_000.0, cache_write: 17_259_201.0,
                                 cache_read: 1_094_254_105.0, cost: 381.0 }),
         };
@@ -875,7 +1070,7 @@ mod tests {
         // 70% of a week used in 3.5 days: 20%/day, so the last 30% lasts 1.5 days.
         let w = Window {
             tool: "t".into(), account: None, window: "week", used: 70.0, resets_at: None,
-            resets_in_secs: Some(302_400), projected: Some(140.0), spend: None, now_tks: 0.0, switch_login: false, plan: None,
+            resets_in_secs: Some(302_400), projected: Some(140.0), spend: None, now_tks: 0.0, switch_login: false, plan: None, week_per_5h: None,
         };
         assert_eq!(w.runs_out_in_secs(), Some(129_600));
     }

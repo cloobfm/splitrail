@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.139] - 2026-10-25
+
+### Added
+- Where to spend next accounts for 5-hour caps (BZL-293). A week can only be spent a 5-hour
+  window at a time, each using a share of it (about 16% on a Team seat), so a week left mostly
+  unused needs a run of windows before its reset. For each weekly plan and Claude login:
+  windows still needed, the last moment to start them (**start by**), and what is still usable
+  by the reset (**reachable**) and so **lost**. The ranking goes by slack to that start-by
+  instead of the reset; the Why reads `start by Mon 19:20 · 6 × 5h` or `only 40% more usable by
+  the reset · 44% lost`; USE NOW once less than a window is to spare. The Plans timeline marks
+  the start-by on each bar with `◆` (red when past). `quotas` and `where_to_spend` (MCP) give
+  it as `reach`: `windows_needed`, `start_by`, `slack_hours`, `reachable_percent`,
+  `lost_percent`, `locked_for_secs`, for the dispatcher.
+- The Claude status line learns each login's share of the week per 5-hour window
+  (`week_per_5h`), from the week's movement while a 5-hour window fills 30+ points; until then
+  a plan default (Team 16%, Max 10%, Pro 15%).
+
 ## [2.0.0-dash-0.138] - 2026-10-24
 
 ### Fixed

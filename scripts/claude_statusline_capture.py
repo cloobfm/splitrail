@@ -274,6 +274,7 @@ def update_snapshot(previous, label, payload, login, now, login_name=None):
     key = login or "unknown"
     entry = logins.get(key) if isinstance(logins.get(key), dict) else {}
     if fresh:
+        old = entry
         entry = {
             "captured_at": now,
             "name": login_name or login_name_of(key),
@@ -286,6 +287,7 @@ def update_snapshot(previous, label, payload, login, now, login_name=None):
                 else merge_limits(entry.get("rate_limits"), reported)
             ),
         }
+        entry.update(learn_week_per_5h(old, entry["rate_limits"]))
         logins[key] = entry
     return {
         "account": label,
@@ -329,6 +331,39 @@ def login_by_reset(previous, reported, login):
     if login in candidates or len(candidates) != 1:
         return login
     return candidates[0]
+
+
+# A 5-hour window must move this much before its effect on the week is measured: the week is
+# reported in whole percents, so a small step would be mostly rounding.
+MIN_FIVE_STEP = 30
+
+
+def learn_week_per_5h(old, limits):
+    """How much of the week one full 5-hour window uses, learned from this login's own numbers:
+    while one 5-hour window fills (same reset) within one week, the week moves in step. Returns
+    the fields to keep on the login: `five_anchor` (where the current measurement started) and
+    `week_per_5h` (a running average, percent of the week per full 5-hour window)."""
+    old = old if isinstance(old, dict) else {}
+    kept = {k: old[k] for k in ("week_per_5h",) if isinstance(old.get(k), (int, float))}
+    five = (limits or {}).get("five_hour") if isinstance(limits, dict) else None
+    week = (limits or {}).get("seven_day") if isinstance(limits, dict) else None
+    if not (isinstance(five, dict) and isinstance(week, dict)):
+        return kept
+    here = {"five_reset": parse_reset(five.get("resets_at")), "week_reset": parse_reset(week.get("resets_at")),
+            "five": used_percent(five), "week": used_percent(week)}
+    if None in here.values():
+        return kept
+    anchor = old.get("five_anchor") if isinstance(old.get("five_anchor"), dict) else None
+    same = anchor is not None and anchor.get("five_reset") == here["five_reset"] and anchor.get("week_reset") == here["week_reset"]
+    if not same:
+        return {**kept, "five_anchor": here}
+    step = here["five"] - anchor["five"]
+    if step < MIN_FIVE_STEP:
+        return {**kept, "five_anchor": anchor}
+    sample = max(0.0, here["week"] - anchor["week"]) / step * 100
+    previous = kept.get("week_per_5h")
+    learned = sample if previous is None else 0.7 * previous + 0.3 * sample
+    return {"week_per_5h": round(learned, 2), "five_anchor": here}
 
 
 def save_snapshot(label, payload, login=None):

@@ -2188,6 +2188,20 @@ fn draw_plan_timeline(
         };
         let past = row_of(&past_dots, 0);
         let ahead = row_of(&ahead_dots, 0);
+        // ◆ the last moment to start, using the week a 5-hour window at a time: past it (red, at
+        // now) part of the week is out of reach.
+        let start_mark = pick.reach.filter(|r| r.left_to_use() >= 1.0 && pick.available).map(|r| {
+            let col = (r.slack_secs.max(0) as f64 / AHEAD_SECS * ahead_w as f64) as usize;
+            (col.min(filled.saturating_sub(1)), if r.slack_secs < 0 { Color::Red } else { Color::Yellow })
+        });
+        let (ahead_before, ahead_mark, ahead_after) = match start_mark {
+            Some((col, mark_color)) if col < ahead.chars().count() => (
+                ahead.chars().take(col).collect::<String>(),
+                Some(mark_color),
+                ahead.chars().skip(col + 1).collect::<String>(),
+            ),
+            _ => (ahead.clone(), None, String::new()),
+        };
         let rest: String = (past_w + 1 + filled + 1..past_w + 1 + ahead_w + 1)
             .map(|i| if marks.get(i) == Some(&'┊') { '┊' } else { ' ' })
             .collect();
@@ -2225,7 +2239,9 @@ fn draw_plan_timeline(
             Span::styled(format!("{:<PLAN_W$}", w.plan.as_deref().unwrap_or("")), Style::default().fg(Color::Magenta)),
             Span::styled(past, Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM)),
             Span::styled("┃", Style::default().fg(Color::Cyan)),
-            Span::styled(ahead, Style::default().fg(color)),
+            Span::styled(ahead_before, Style::default().fg(color)),
+            Span::styled(if ahead_mark.is_some() { "◆" } else { "" }, Style::default().fg(ahead_mark.unwrap_or(color)).add_modifier(Modifier::BOLD)),
+            Span::styled(ahead_after, Style::default().fg(color)),
             // Box drawing and » are one cell in every terminal font; ▏ was two in some.
             Span::styled(if beyond { "»" } else { "│" }, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
             Span::styled(rest, dim),
@@ -2252,7 +2268,7 @@ fn draw_plan_timeline(
     lines.push(Line::from(vec![
         Span::styled(format!("{:<w$}", "", w = NAME_W - 2 + PLAN_W), dim),
         Span::styled(
-            "height = $ left at API prices (tallest = most) · last day ┃ now · tapers to the reset at the pace that uses it all · │ reset · » after this week",
+            "height = $ left (tallest = most) · ┃ now · tapers at the pace that uses it all · ◆ start by (5h windows) · │ reset · » later",
             dim,
         ),
     ]));

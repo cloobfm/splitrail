@@ -707,6 +707,20 @@ pub fn account_for_analyzer(analyzer_name: &str) -> Option<String> {
     login_for_analyzer(analyzer_name)
 }
 
+/// How much of a login's week one full 5-hour window uses, in percent, as its status line has
+/// measured it (`week_per_5h`, learned while 5-hour windows fill). `login` is the full login
+/// key; `None` reads the signed-in one.
+pub fn week_per_5h(analyzer_name: &str, login: Option<&str>) -> Option<f64> {
+    if cfg!(test) {
+        return None;
+    }
+    let label = account_label(analyzer_name)?;
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?).ok()?;
+    let login = login.map(str::to_string).or_else(|| value.get("login")?.as_str().map(str::to_string))?;
+    value.get("logins")?.get(&login)?.get("week_per_5h")?.as_f64().filter(|v| *v > 0.0)
+}
+
 /// This machine's name without the domain (`Amberts-MacBook-Pro`), like `hostname -s`.
 fn short_hostname() -> Option<String> {
     static NAME: OnceLock<Option<String>> = OnceLock::new();
