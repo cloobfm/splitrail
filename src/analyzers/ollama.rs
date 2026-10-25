@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub struct OllamaAnalyzer {
+    /// The column: `Ollama`, or the engine behind its proxy (`vLLM`, `llama.cpp`).
+    name: &'static str,
     usage_files: Vec<std::path::PathBuf>,
     /// Electricity pricing from `[ollama]` in the config.
     power: OllamaConfig,
@@ -34,10 +36,34 @@ impl OllamaAnalyzer {
     pub fn new() -> Self {
         let power = crate::config::Config::load().ok().flatten().unwrap_or_default().ollama;
         Self {
+            name: "Ollama",
             cache: Default::default(),
             usage_files: Self::usage_files_for(&power),
             power,
         }
+    }
+
+    /// One analyzer per inference engine among the usage logs, so each is its own column: the
+    /// usage proxy fronts any OpenAI-compatible server, and where several run (gpu-1: Ollama,
+    /// llama.cpp and vLLM, each proxied into `/var/lib/splitrail/<engine>/usage.jsonl`) the log's
+    /// folder says which. Just `Ollama` when no log is named for another engine.
+    pub fn per_engine() -> Vec<Self> {
+        let power = crate::config::Config::load().ok().flatten().unwrap_or_default().ollama;
+        let mut groups: Vec<(&'static str, Vec<std::path::PathBuf>)> = Vec::new();
+        for path in Self::usage_files_for(&power) {
+            let name = engine_name(&path);
+            match groups.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, files)) => files.push(path),
+                None => groups.push((name, vec![path])),
+            }
+        }
+        if groups.is_empty() {
+            groups.push(("Ollama", Vec::new()));
+        }
+        groups
+            .into_iter()
+            .map(|(name, usage_files)| Self { name, cache: Default::default(), usage_files, power: power.clone() })
+            .collect()
     }
 
     /// The usage logs to read: `[ollama] usage_files` (with `~` expanded) when set, else the
@@ -59,6 +85,20 @@ impl OllamaAnalyzer {
             .collect()
     }
 }
+
+/// The engine a usage log is for, from its folder: `.../vllm/usage.jsonl` is vLLM.
+pub fn engine_name(path: &std::path::Path) -> &'static str {
+    let folder = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+    match folder.as_str() {
+        "vllm" => "vLLM",
+        "llama" | "llama.cpp" | "llamacpp" | "llama-cpp" | "llama-server" => "llama.cpp",
+        "sglang" => "SGLang",
+        _ => "Ollama",
+    }
+}
+
+/// Columns fed by the usage proxy: Ollama and the other engines it fronts.
+pub const ENGINE_COLUMNS: &[&str] = &["Ollama", "vLLM", "llama.cpp", "SGLang"];
 
 impl Default for OllamaAnalyzer {
     fn default() -> Self {
@@ -424,7 +464,7 @@ pub fn busy_samples(content: &str) -> Vec<crate::plan_limits::BusySample> {
 #[async_trait]
 impl Analyzer for OllamaAnalyzer {
     fn display_name(&self) -> &'static str {
-        "Ollama"
+        self.name
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
@@ -537,6 +577,15 @@ mod tests {
         let reply = messages.iter().find(|m| m.role == MessageRole::Assistant).unwrap();
         assert_eq!(reply.model.as_deref(), Some("qwen3-embedding:0.6b"));
         assert_eq!((reply.stats.input_tokens, reply.stats.output_tokens), (37, 0));
+    }
+
+    #[test]
+    fn a_usage_log_names_its_engine_by_folder() {
+        assert_eq!(engine_name(Path::new("/var/lib/splitrail/vllm/usage.jsonl")), "vLLM");
+        assert_eq!(engine_name(Path::new("/var/lib/splitrail/llama/usage.jsonl")), "llama.cpp");
+        assert_eq!(engine_name(Path::new("/var/lib/splitrail/ollama/usage.jsonl")), "Ollama");
+        assert_eq!(engine_name(Path::new("/Users/x/.config/splitrail/ollama/usage.jsonl")), "Ollama");
+        assert_eq!(engine_name(Path::new("usage.jsonl")), "Ollama");
     }
 
     #[test]

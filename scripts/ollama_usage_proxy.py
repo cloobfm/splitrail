@@ -366,6 +366,24 @@ def caller_info(client_port, own_pid=None):
     return info
 
 
+def header_caller(headers):
+    """What a client says about itself: `X-Caller: mediasrc` names the caller (its project), and
+    `X-GPU-Lane` the queue it runs in. A remote client is only an address to lsof, so this is
+    how its requests are told apart. Short, printable values only."""
+    def clean(value):
+        value = (value or "").strip()
+        return value[:64] if value and value.isprintable() else None
+
+    out = {}
+    caller = clean(headers.get("X-Caller"))
+    if caller:
+        out["caller"] = caller
+    lane = clean(headers.get("X-GPU-Lane"))
+    if lane:
+        out["lane"] = lane
+    return out
+
+
 class ModelSizes:
     """Parameter counts (`20.9B`) and base family (`qwen3_5`) per model, from the upstream
     `/api/tags`.
@@ -627,7 +645,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
         thread = getattr(self, "caller_thread", None)
         if thread is not None:
             thread.join(timeout=1)  # Rarely still running: lsof takes about 0.1 s.
-        return dict(getattr(self, "caller", {}) or {})
+        fields = dict(getattr(self, "caller", {}) or {})
+        stated = header_caller(self.headers)
+        if "caller" in stated:
+            fields.pop("cwd", None)  # The client's own name for itself beats its folder.
+        fields.update(stated)
+        return fields
 
     def _send_error(self, code, message):
         data = message.encode()

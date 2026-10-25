@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.143] - 2026-10-25
+
+### Added
+- A column per inference engine behind the usage proxy: gpu-1's `Ollama@gpu-1` was really vLLM
+  and llama.cpp traffic. Each usage log's folder names its engine (`…/vllm/usage.jsonl` →
+  **vLLM**, `…/llama/` → **llama.cpp**, anything else **Ollama**), so `[ollama] usage_files`
+  listing gpu-1's three logs gives vLLM@gpu-1, llama.cpp@gpu-1 and Ollama@gpu-1 with no proxy
+  change. They are server columns like Ollama's (Servers view, the machine as their account).
+- The usage proxy records what a client says about itself (BZL-298): `X-Caller: mediasrc` is the
+  request's caller, and so its project, over lsof's guess (a remote client is only an address);
+  `X-GPU-Lane` is kept as `lane`. mediasrc sends both.
+
 ## [2.0.0-dash-0.142] - 2026-10-25
 
 ### Added

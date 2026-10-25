@@ -15,7 +15,7 @@ use crate::types::{AgenticCodingToolStats, ConversationMessage, MessageRole};
 
 /// Whether a column is a local model server.
 pub fn is_server(stats: &AgenticCodingToolStats) -> bool {
-    !stats.analyzer_name.contains('@') && matches!(stats.analyzer_name.as_str(), "Ollama" | "MTPLX")
+    !stats.analyzer_name.contains('@') && (stats.analyzer_name == "MTPLX" || crate::analyzers::ollama::ENGINE_COLUMNS.contains(&stats.analyzer_name.as_str()))
 }
 
 /// The models a server has run: its own messages' and days'. Agents name a local model by the

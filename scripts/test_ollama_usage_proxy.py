@@ -326,6 +326,12 @@ class ParsingTests(unittest.TestCase):
 
 
 class CallerTests(unittest.TestCase):
+    def test_a_client_names_itself_and_its_lane_by_header(self):
+        headers = {"X-Caller": "mediasrc", "X-GPU-Lane": "mediasrc-indexer"}
+        self.assertEqual(proxy.header_caller(headers), {"caller": "mediasrc", "lane": "mediasrc-indexer"})
+        self.assertEqual(proxy.header_caller({}), {})
+        self.assertEqual(proxy.header_caller({"X-Caller": "bad\nvalue"}), {})
+
     def test_the_caller_and_its_folder_are_found_from_the_connection(self):
         import socket
         import subprocess

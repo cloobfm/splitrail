@@ -668,7 +668,7 @@ fn other_logins_in(content: &str, now: f64) -> Vec<OtherLogin> {
 /// `local` for Ollama, or the account a status line snapshot was last logged in to, as the email's local part with
 /// `·team` for a team organization (`support·team` for `support@virti.us` on a team plan). `None` for tools without snapshots or older snapshots.
 pub fn login_for_analyzer(analyzer_name: &str) -> Option<String> {
-    if analyzer_name == "Ollama" {
+    if crate::analyzers::ollama::ENGINE_COLUMNS.contains(&analyzer_name) {
         return short_hostname(); // Models on this machine; no account.
     }
     if let Some(content) = remote_column_snapshot(analyzer_name) {

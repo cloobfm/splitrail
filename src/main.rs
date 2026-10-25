@@ -405,7 +405,10 @@ fn create_analyzer_registry() -> AnalyzerRegistry {
     registry.register(WarpDevAnalyzer::new());
     registry.register(AntigravityAnalyzer::new()); // Fed by scripts/agy_statusline_capture.py
     registry.register(CursorAgentAnalyzer::new()); // Fed by scripts/cursor_hook_capture.py
-    registry.register(OllamaAnalyzer::new()); // Fed by scripts/ollama_usage_proxy.py
+    // Fed by scripts/ollama_usage_proxy.py: a column per engine it fronts (Ollama, vLLM, llama.cpp).
+    for analyzer in OllamaAnalyzer::per_engine() {
+        registry.register(analyzer);
+    }
     registry.register(CopilotCliAnalyzer::new());
     registry.register(PiAgentAnalyzer::new());
     registry.register(MtplxAnalyzer::new());
