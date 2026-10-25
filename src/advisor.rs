@@ -565,6 +565,40 @@ impl Reach {
     }
 }
 
+/// API dollars one percent of a window is worth: measured from its spend where it has enough
+/// (5%+ used), else by plan against the measured Max 20x week (`plan_values.json`), else a $20
+/// plan's.
+fn value_per_percent(w: &Window) -> f64 {
+    if w.used >= 5.0
+        && let Some(per) = w.dollars_per_percent()
+    {
+        return per;
+    }
+    let max_week = max_week_dollars();
+    let claude = w.tool.starts_with("Claude");
+    let week = match w.plan.as_deref() {
+        Some("Max 20x") if claude => max_week,
+        Some("Max 5x") | Some("Max") if claude => max_week * 0.25,
+        Some("Team Prem") if claude => max_week * 6.25 / 20.0,
+        Some(p) if claude && p.starts_with("Team") => max_week * 1.25 / 20.0,
+        Some("Pro") if claude => max_week / 20.0,
+        _ => 20.0 * if w.window == "month" { 1.0 } else { 7.0 / 30.44 },
+    };
+    week / 100.0
+}
+
+/// The measured Max 20x week in API dollars, as the dashboard last saved it.
+fn max_week_dollars() -> f64 {
+    if cfg!(test) {
+        return 2_000.0;
+    }
+    std::env::home_dir()
+        .and_then(|h| std::fs::read_to_string(h.join(".config/splitrail/plan_values.json")).ok())
+        .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+        .and_then(|v| v.get("max_week")?.as_f64())
+        .unwrap_or(2_000.0)
+}
+
 /// A 5-hour window's share of a week by plan, where it has not been measured: about a sixth
 /// on a Team seat (from our own seats), less on the bigger Max plans.
 fn assumed_week_per_5h(plan: Option<&str>) -> Option<f64> {
@@ -710,7 +744,8 @@ pub fn where_to_spend(windows: &[Window]) -> Vec<Pick> {
                         None => (w.expiring(), w.resets_in_secs.unwrap_or(0)),
                     };
                     let days = (secs as f64 / 86_400.0).max(1.0 / 24.0);
-                    (w, unused / days, reach)
+                    // In dollars, so a big plan's share outranks the same share of a small one.
+                    (w, unused * value_per_percent(w) / days, reach)
                 });
             match best {
                 Some((w, score, reach)) => {

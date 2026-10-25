@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.140] - 2026-10-25
+
+### Fixed
+- Where to spend next ranked by share unused per day, so a $20 Antigravity week left whole
+  outranked a Max 20x with $1,650 left and two days to start using it. It ranks by API dollars
+  at risk per day of slack: a window's own measured dollars per percent where 5%+ is used, else
+  its plan's (Max, Team and Pro against the measured Max 20x week; a $20 plan otherwise).
+
 ## [2.0.0-dash-0.139] - 2026-10-25
 
 ### Added
