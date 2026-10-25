@@ -42,13 +42,14 @@ import http.client
 import itertools
 import json
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 USAGE_FILE = os.path.expanduser(
     os.environ.get("OLLAMA_PROXY_USAGE_FILE", "~/.config/splitrail/ollama/usage.jsonl")
@@ -69,6 +70,26 @@ MAX_BODY_SCAN = 16 * 1024 * 1024
 # Transcript previews for the dashboard's Activity section: the caller's last message and the
 # start of the reply, cut to this many characters. Full conversations are never stored.
 PREVIEW_CHARS = int(os.environ.get("OLLAMA_PROXY_PREVIEW_CHARS", "500"))
+# Paths this proxy refuses with 403 instead of forwarding (comma-separated prefixes), so control routes
+# such as vLLM's dev-mode /sleep and /wake_up stay reachable only on the runtime's own localhost port.
+DENY_PATHS = tuple(p.strip() for p in os.environ.get("OLLAMA_PROXY_DENY_PATHS", "").split(",") if p.strip())
+
+
+def denied(raw_path, deny=None):
+    """True when the request path, normalized the way the upstream server will read it, starts with a
+    denied prefix. The raw request target is used (urlparse reads //sleep as a host), percent-escapes are
+    decoded until stable (uvicorn routes on the decoded path, so /%73leep is /sleep), and dot segments
+    and repeated slashes are collapsed (/./sleep, //sleep, /a/../sleep, /sleep/)."""
+    deny = DENY_PATHS if deny is None else deny
+    path = raw_path.split("?", 1)[0].split("#", 1)[0]
+    for _ in range(5):
+        decoded = unquote(path)
+        if decoded == path:
+            break
+        path = decoded
+    norm = posixpath.normpath("/" + path.replace("\\", "/"))
+    norm = "/" + norm.lstrip("/")
+    return any(norm == d.rstrip("/") or norm.startswith(d.rstrip("/") + "/") for d in deny)
 
 
 def write_usage(record, path=None):
@@ -532,6 +553,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.started = time.monotonic()
         self._caller()
         path = urlparse(self.path).path
+        if DENY_PATHS and denied(self.path):
+            self.close_connection = True  # the request body is left unread
+            self._send_error(403, "this route is not served through the proxy")
+            return
         body = self._read_request_body()
         logged = self.command == "POST" and (path in NATIVE or path in OPENAI or path in DECISION or path in EMBED)
         self.prompt = ""

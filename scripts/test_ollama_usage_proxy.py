@@ -325,6 +325,17 @@ class ParsingTests(unittest.TestCase):
 
 
 
+class DenyTests(unittest.TestCase):
+    def test_denied_routes_match_however_they_are_spelled(self):
+        deny = ("/sleep", "/wake_up", "/collective_rpc")
+        for path in ["/sleep", "/sleep/", "//sleep", "/./sleep", "/a/../sleep", "/%73leep", "/%2573leep",
+                     "/sleep?level=1", "/wake_up", "/collective_rpc/x"]:
+            self.assertTrue(proxy.denied(path, deny), path)
+        for path in ["/v1/chat/completions", "/sleeper", "/api/sleep", "/"]:
+            self.assertFalse(proxy.denied(path, deny), path)
+        self.assertFalse(proxy.denied("/sleep", ()))
+
+
 class CallerTests(unittest.TestCase):
     def test_a_client_names_itself_and_its_lane_by_header(self):
         headers = {"X-Caller": "mediasrc", "X-GPU-Lane": "mediasrc-indexer"}

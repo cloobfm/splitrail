@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.149] - 2026-10-25
+
+### Added
+- The usage proxy refuses the path prefixes in `OLLAMA_PROXY_DENY_PATHS` (comma-separated) with
+  a 403 before reading the body, so a runtime's control routes (vLLM dev mode's `/sleep`,
+  `/wake_up`, `/collective_rpc`) stay off the LAN. Matched on the raw request target after
+  decoding percent-escapes and collapsing dot segments and repeated slashes (`//sleep`,
+  `/%73leep`, `/a/../sleep`). Unset, nothing changes. From nas-devbox's copy (a639057, HLB
+  BZL-307), so the two do not drift.
+
 ## [2.0.0-dash-0.148] - 2026-10-25
 
 ### Added
