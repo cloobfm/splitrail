@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.151] - 2026-10-26
+
+### Fixed
+- gpu-1's publisher was killed for memory in a restart loop (its 1 GB cap): mediasrc's vLLM
+  pass had grown the usage log to 140,000 requests (115 MB), each read into a prompt and a reply
+  message carrying their previews. A headless publisher with `share_previews` off never shows
+  that text, so it keeps neither: one message per request, no text.
+
 ## [2.0.0-dash-0.150] - 2026-10-26
 
 ### Fixed

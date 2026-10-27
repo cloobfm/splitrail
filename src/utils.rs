@@ -126,6 +126,19 @@ pub fn log_error(message: impl AsRef<str>) {
 /// stray text stays until a resize forces a full redraw.
 static TUI_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+static KEEP_PREVIEWS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether analyzers keep message text. A headless publisher that does not share previews
+/// never shows it, and a busy usage proxy's log (140,000 requests a day on gpu-1) holds enough
+/// of it to exhaust the publisher's memory cap.
+pub fn set_keep_previews(keep: bool) {
+    KEEP_PREVIEWS.store(keep, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn keep_previews() -> bool {
+    KEEP_PREVIEWS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn set_tui_active(active: bool) {
     TUI_ACTIVE.store(active, std::sync::atomic::Ordering::Relaxed);
 }

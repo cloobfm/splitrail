@@ -398,7 +398,8 @@ pub fn parse_usage_log(
             let conversation_hash = hash_text(&format!("{}:{}:{}", source_str, line_no, event.ts));
             let project_hash = project_of(&event);
             let mut messages = Vec::with_capacity(2);
-            if !event.prompt_preview.is_empty() {
+            let keep_text = crate::utils::keep_previews();
+            if keep_text && !event.prompt_preview.is_empty() {
                 // Sent when the request started, which is wall time before it was logged.
                 let sent = date - chrono::Duration::milliseconds(event.wall_ms as i64);
                 messages.push(ConversationMessage {
@@ -434,7 +435,7 @@ pub fn parse_usage_log(
                     ..Default::default()
                 },
                 role: MessageRole::Assistant,
-                content: (!event.reply_preview.is_empty()).then(|| event.reply_preview.clone()),
+                content: (keep_text && !event.reply_preview.is_empty()).then(|| event.reply_preview.clone()),
             });
             messages
         })

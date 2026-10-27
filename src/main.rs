@@ -532,6 +532,8 @@ async fn run_mqtt(config: config::Config) {
         std::process::exit(1);
     };
     prepare_prices(config.pricing.feed_enabled).await;
+    // Text nobody here or on the broker will read is not kept in memory.
+    utils::set_keep_previews(config.mqtt.share_previews);
     let registry = create_analyzer_registry();
     let file_watcher = match watcher::FileWatcher::new(&registry) {
         Ok(watcher) => watcher,
