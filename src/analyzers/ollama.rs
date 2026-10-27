@@ -28,6 +28,14 @@ pub struct OllamaAnalyzer {
 struct CachedUsage {
     len: u64,
     modified: Option<std::time::SystemTime>,
+    /// Bytes read so far: up to the end of the last complete line, so a line still being written
+    /// is read whole next time.
+    parsed: u64,
+    /// Complete lines read so far, numbering the next ones.
+    lines: usize,
+    /// Model families and sizes seen so far, lent to later lines that lack them.
+    families: HashMap<String, String>,
+    sizes: HashMap<String, String>,
     messages: std::sync::Arc<Vec<ConversationMessage>>,
     busy: std::sync::Arc<Vec<crate::plan_limits::BusySample>>,
 }
@@ -336,28 +344,42 @@ fn street_price(model: &str, param_size: Option<&str>, family: Option<&str>) -> 
 /// message carrying the tokens. `cost` is the street price, what the same tokens cost from a
 /// hosted provider, as for every other tool (their subscriptions are not per-token either); the
 /// electricity actually used goes in `energy_wh` / `energy_cost`. Malformed lines are skipped.
+#[cfg(test)]
 pub fn parse_usage_log(
     content: &str,
     source: &Path,
     power: &OllamaConfig,
 ) -> Vec<ConversationMessage> {
+    parse_usage_lines(content, source, power, 0, &mut HashMap::new(), &mut HashMap::new())
+}
+
+/// `parse_usage_log` for lines read from `first_line` on, with the families and sizes of the
+/// lines before (extended with these).
+fn parse_usage_lines(
+    content: &str,
+    source: &Path,
+    power: &OllamaConfig,
+    first_line: usize,
+    families: &mut HashMap<String, String>,
+    sizes: &mut HashMap<String, String>,
+) -> Vec<ConversationMessage> {
     let source_str = source.to_string_lossy();
     let mut prices: HashMap<String, Option<ModelPrice>> = HashMap::new();
     // Lines written before the proxy recorded families or sizes (or whose model it missed, like
     // `qwen3.8-64k`, listed by Ollama as `qwen3.8-64k:latest`) borrow them from another line.
-    let families: HashMap<String, String> = content
-        .lines()
-        .filter_map(|line| serde_json::from_str::<UsageEvent>(line.trim()).ok())
-        .filter_map(|event| Some((event.model, event.family?)))
-        .collect();
-    let sizes: HashMap<String, String> = content
-        .lines()
-        .filter_map(|line| serde_json::from_str::<UsageEvent>(line.trim()).ok())
-        .filter_map(|event| Some((event.model, event.param_size?)))
-        .collect();
+    for event in content.lines().filter_map(|line| serde_json::from_str::<UsageEvent>(line.trim()).ok()) {
+        if let Some(family) = event.family {
+            families.insert(event.model.clone(), family);
+        }
+        if let Some(size) = event.param_size {
+            sizes.insert(event.model, size);
+        }
+    }
+    let (families, sizes) = (&*families, &*sizes);
     content
         .lines()
         .enumerate()
+        .map(|(i, line)| (first_line + i, line))
         .flat_map(|(line_no, line)| {
             let Ok(event) = serde_json::from_str::<UsageEvent>(line.trim()) else {
                 return Vec::new();
@@ -496,26 +518,48 @@ impl Analyzer for OllamaAnalyzer {
                 .unwrap_or((0, None));
 
             let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-            let entry = match cache.get(&source.path) {
-                Some(hit) if hit.len == len && hit.modified == modified => hit,
-                _ => {
-                    let content = std::fs::read_to_string(&source.path)?;
-                    cache.insert(
-                        source.path.clone(),
-                        CachedUsage {
-                            len,
-                            modified,
-                            messages: std::sync::Arc::new(parse_usage_log(
-                                &content,
-                                &source.path,
-                                &self.power,
-                            )),
-                            busy: std::sync::Arc::new(busy_samples(&content)),
-                        },
-                    );
-                    &cache[&source.path]
-                }
-            };
+            let fresh = !cache.get(&source.path).is_some_and(|hit| hit.len == len && hit.modified == modified);
+            if fresh {
+                // The log is append-only: read on from where the last read stopped, unless it
+                // shrank (rotated or rewritten), which starts over. Re-reading it whole on every
+                // request (140,000 a day on gpu-1) was a constant reparse of a 100 MB file.
+                let mut entry = match cache.remove(&source.path) {
+                    Some(hit) if len >= hit.parsed => hit,
+                    _ => CachedUsage {
+                        len: 0,
+                        modified: None,
+                        parsed: 0,
+                        lines: 0,
+                        families: HashMap::new(),
+                        sizes: HashMap::new(),
+                        messages: Default::default(),
+                        busy: Default::default(),
+                    },
+                };
+                let mut file = std::fs::File::open(&source.path)?;
+                std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(entry.parsed))?;
+                let mut tail = Vec::new();
+                std::io::Read::read_to_end(&mut file, &mut tail)?;
+                // Only complete lines; a line being written is read whole next time.
+                let complete = tail.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+                let text = String::from_utf8_lossy(&tail[..complete]);
+                let parsed = parse_usage_lines(
+                    &text,
+                    &source.path,
+                    &self.power,
+                    entry.lines,
+                    &mut entry.families,
+                    &mut entry.sizes,
+                );
+                std::sync::Arc::make_mut(&mut entry.messages).extend(parsed);
+                std::sync::Arc::make_mut(&mut entry.busy).extend(busy_samples(&text));
+                entry.lines += text.lines().count();
+                entry.parsed += complete as u64;
+                entry.len = len;
+                entry.modified = modified;
+                cache.insert(source.path.clone(), entry);
+            }
+            let entry = &cache[&source.path];
             messages.extend(entry.messages.iter().cloned());
             busy.extend(entry.busy.iter().cloned());
         }
@@ -578,6 +622,34 @@ mod tests {
         let reply = messages.iter().find(|m| m.role == MessageRole::Assistant).unwrap();
         assert_eq!(reply.model.as_deref(), Some("qwen3-embedding:0.6b"));
         assert_eq!((reply.stats.input_tokens, reply.stats.output_tokens), (37, 0));
+    }
+
+    #[tokio::test]
+    async fn a_growing_log_is_read_on_from_where_it_stopped() {
+        use crate::analyzer::Analyzer;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.jsonl");
+        let line = |ts: u64| format!(r#"{{"ts": {ts}, "model": "m", "endpoint": "/api/chat", "prompt_tokens": 1, "cached_tokens": 0, "completion_tokens": 2, "duration_ms": 1, "client": "127.0.0.1"}}"#);
+        std::fs::write(&path, format!("{}\n{}\n{{\"ts\": 179", line(1790880000), line(1790880001))).unwrap();
+        let analyzer = OllamaAnalyzer {
+            name: "Ollama",
+            usage_files: vec![path.clone()],
+            power: OllamaConfig::default(),
+            cache: Default::default(),
+        };
+        let source = || vec![crate::analyzer::DataSource { path: path.clone() }];
+        assert_eq!(analyzer.parse_conversations(source()).await.unwrap().len(), 2, "the half line waits");
+        // The half-written line is finished and another follows: three requests, none twice.
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.truncate(text.rfind('{').unwrap());
+        std::fs::write(&path, format!("{text}{}\n{}\n", line(1790880002), line(1790880003))).unwrap();
+        let messages = analyzer.parse_conversations(source()).await.unwrap();
+        assert_eq!(messages.len(), 4);
+        let hashes: std::collections::HashSet<_> = messages.iter().map(|m| m.global_hash.clone()).collect();
+        assert_eq!(hashes.len(), 4);
+        // Rewritten shorter: read again from the start.
+        std::fs::write(&path, format!("{}\n", line(1790880005))).unwrap();
+        assert_eq!(analyzer.parse_conversations(source()).await.unwrap().len(), 1);
     }
 
     #[test]

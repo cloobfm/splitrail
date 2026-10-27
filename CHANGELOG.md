@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.152] - 2026-10-26
+
+### Changed
+- A usage proxy's log is read on from where the last read stopped, not whole on every change.
+  On gpu-1 every request (16 at once, 140,000 a day) re-read and re-parsed a 115 MB file, with
+  its text and messages held twice over. Only complete lines are read (one being written is read
+  whole next time), line numbers and the models' families and sizes carry over between reads,
+  and a log that shrinks (rotated, rewritten) is read again from the start.
+
 ## [2.0.0-dash-0.151] - 2026-10-26
 
 ### Fixed
