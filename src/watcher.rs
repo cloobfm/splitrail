@@ -257,6 +257,13 @@ pub struct RealtimeStatsManager {
 }
 
 impl RealtimeStatsManager {
+    /// The least time between two reloads of one analyzer. The dashboard keeps it short to feel
+    /// live; a headless publisher, which sends its totals at most once a minute, can wait longer
+    /// rather than rebuild a busy server's 140,000 requests every two seconds.
+    pub fn set_reload_debounce(&mut self, debounce: Duration) {
+        self.reload_debounce = debounce;
+    }
+
     pub async fn new(registry: AnalyzerRegistry) -> Result<Self> {
         // Initial stats load using registry method
         let initial_stats = registry.load_all_stats().await?;

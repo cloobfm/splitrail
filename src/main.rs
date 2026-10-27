@@ -553,6 +553,7 @@ async fn run_mqtt(config: config::Config) {
             std::process::exit(1);
         }
     };
+    stats_manager.set_reload_debounce(std::time::Duration::from_secs(20));
     tokio::spawn(mqtt::run(config.mqtt.clone(), stats_manager.get_stats_receiver()));
     // On a Mac, keep the menu bar's status file current too, other machines included. Linux
     // publishers have no menu bar and skip the roll-up subscription it needs.

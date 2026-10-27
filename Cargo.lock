@@ -2170,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "splitrail-dashboard"
-version = "2.0.0-dash-0.152"
+version = "2.0.0-dash-0.153"
 dependencies = [
  "ahash",
  "anyhow",

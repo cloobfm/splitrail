@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.153] - 2026-10-26
+
+### Changed
+- A headless publisher (`splitrail-dashboard mqtt`) reloads a tool at most every 20 seconds
+  instead of every 2: it sends its totals at most once a minute, and gpu-1, rebuilding a busy
+  vLLM's statistics on every request, sat at 18% CPU. Changes in between are kept and applied
+  at the next reload, never dropped. The dashboard stays at 2 seconds.
+
 ## [2.0.0-dash-0.152] - 2026-10-26
 
 ### Changed
