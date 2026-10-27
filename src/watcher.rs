@@ -81,6 +81,26 @@ impl FileWatcher {
 
         // Get directory to analyzer mapping from registry
         let dir_to_analyzer = registry.get_directory_to_analyzer_mapping();
+        // A tool installed after this starts (agy's ~/.gemini created on its first run) has
+        // nothing to watch now, and its folder sits directly in the home directory, which is
+        // never watched. Check once a minute; once the folder exists, poll that tool each minute
+        // (its parse is cached, so an unchanged poll is cheap).
+        let unwatched = registry.unwatched_patterns();
+        if !unwatched.is_empty() {
+            let tx = event_tx.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                let mut notified = HashSet::new();
+                for (analyzer, pattern) in &unwatched {
+                    if crate::analyzer::pattern_has_dir(pattern)
+                        && notified.insert(analyzer.clone())
+                        && tx.send(WatcherEvent::DataChanged(analyzer.clone())).is_err()
+                    {
+                        return; // The watcher is gone.
+                    }
+                }
+            });
+        }
         let debug_config = WatchDebugConfig::from_env();
         if let Some(config) = &debug_config {
             eprintln!(

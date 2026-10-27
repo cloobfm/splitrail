@@ -248,6 +248,27 @@ impl AnalyzerRegistry {
 
         dir_to_analyzer
     }
+
+    /// Patterns with nothing to watch yet: a tool installed later, whose folder (and every
+    /// ancestor short of the home directory) does not exist. `(analyzer, pattern)`.
+    pub fn unwatched_patterns(&self) -> Vec<(String, String)> {
+        self.analyzers
+            .iter()
+            .flat_map(|analyzer| {
+                let name = analyzer.display_name().to_string();
+                analyzer
+                    .get_data_glob_patterns()
+                    .into_iter()
+                    .filter(|pattern| extract_watch_and_match_dirs(pattern).is_none())
+                    .map(move |pattern| (name.clone(), pattern))
+            })
+            .collect()
+    }
+}
+
+/// Whether a pattern written by `unwatched_patterns` now has a folder to read.
+pub fn pattern_has_dir(pattern: &str) -> bool {
+    extract_watch_and_match_dirs(pattern).is_some()
 }
 
 #[cfg(test)]

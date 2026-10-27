@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.150] - 2026-10-26
+
+### Fixed
+- A tool first run after the dashboard or a publisher started was not seen until a restart:
+  agy on devbox-b created `~/.gemini` at 12:47, and with no folder of its own to watch the
+  watcher falls back to the nearest existing one, here the home directory, which is never
+  watched. Folders missing at startup are checked once a minute; once one exists, its tool is
+  re-read each minute (cached, so an unchanged re-read is cheap).
+
 ## [2.0.0-dash-0.149] - 2026-10-25
 
 ### Added
