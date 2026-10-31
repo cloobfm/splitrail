@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.158] - 2026-10-31
+
+### Fixed
+- "start by Sat 00:59" when it was already past 04:30 and nothing would be lost: the start-by
+  counted whole 5-hour windows (21% left at 20% a window: two, ten hours) while what is usable
+  counted the part window (5¼ hours). Both count the part now.
+
 ## [2.0.0-dash-0.157] - 2026-10-31
 
 ### Fixed

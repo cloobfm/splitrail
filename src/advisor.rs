@@ -632,7 +632,10 @@ pub fn reach(week: &Window, five: Option<&Window>) -> Option<Reach> {
     };
     let rest = (left - current).max(0.0);
     let windows_needed = (rest / per_window).ceil() as u32;
-    let slack_secs = to_reset - current_end - windows_needed as i64 * FIVE_HOURS;
+    // The time those windows take at full use, the last one only as long as what is left of it
+    // needs (21% at 20% a window is 5¼ hours, not two whole windows), as `reachable` counts it.
+    let needed_secs = (rest / per_window * FIVE_HOURS as f64).round() as i64;
+    let slack_secs = to_reset - current_end - needed_secs;
     let after_current = (to_reset - current_end).max(0) as f64 / FIVE_HOURS as f64;
     let reachable = left.min(current.min(left) + per_window * after_current);
     Some(Reach {
@@ -961,7 +964,7 @@ mod reach_tests {
         let r = reach(&week, None).unwrap();
         assert!(!r.measured);
         assert_eq!(r.windows_needed, 6); // 100 / 16.67 = 6.0 -> 6
-        assert_eq!(r.slack_secs, 3 * 86_400 - 6 * FIVE_HOURS);
+        assert!((r.slack_secs - (3 * 86_400 - 6 * FIVE_HOURS)).abs() < 60);
         assert_eq!(r.lost, 0.0);
         // 25 hours are not enough for 30 hours of windows: five of them, 83% of the week.
         let late = window("week", 0.0, 25 * 3600, Some("Team Std"), None);
@@ -969,6 +972,16 @@ mod reach_tests {
         assert!(r.slack_secs < 0);
         assert!((r.reachable - 83.35).abs() < 1e-9);
         assert!((r.lost - 16.65).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_part_window_needs_only_part_of_five_hours() {
+        // Claude (main) on Oct 31: 21% left, 20% a window, 6h22m to the reset, no window running.
+        let week = window("week", 79.0, 6 * 3600 + 22 * 60, Some("Max 20x"), None);
+        let r = reach(&week, None).unwrap();
+        assert_eq!(r.windows_needed, 2);
+        assert!(r.slack_secs > 3600, "5h15m of windows fit in 6h22m: {}", r.slack_secs);
+        assert_eq!(r.lost, 0.0);
     }
 
     #[test]
