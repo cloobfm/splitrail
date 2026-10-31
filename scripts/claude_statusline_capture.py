@@ -336,6 +336,8 @@ def login_by_reset(previous, reported, login):
 # A 5-hour window must move this much before its effect on the week is measured: the week is
 # reported in whole percents, so a small step would be mostly rounding.
 MIN_FIVE_STEP = 30
+# Reset times within this are one window (as `SAME_WINDOW_TOLERANCE_SECS` in plan_limits.rs).
+SAME_WINDOW_SECS = 30 * 60
 
 
 def learn_week_per_5h(old, limits):
@@ -354,16 +356,33 @@ def learn_week_per_5h(old, limits):
     if None in here.values():
         return kept
     anchor = old.get("five_anchor") if isinstance(old.get("five_anchor"), dict) else None
-    same = anchor is not None and anchor.get("five_reset") == here["five_reset"] and anchor.get("week_reset") == here["week_reset"]
-    if not same:
+
+    # Reports of one window differ in their reset time by seconds to minutes (on Max plans every
+    # report did, so an exact match never learned anything there).
+    def same_window(a, b):
+        return (abs(a["five_reset"] - b["five_reset"]) < SAME_WINDOW_SECS
+                and abs(a["week_reset"] - b["week_reset"]) < SAME_WINDOW_SECS)
+
+    def learned_from(start, end):
+        step = end["five"] - start["five"]
+        if step < MIN_FIVE_STEP:
+            return None
+        sample = max(0.0, end["week"] - start["week"]) / step * 100
+        previous = kept.get("week_per_5h")
+        return round(sample if previous is None else 0.7 * previous + 0.3 * sample, 2)
+
+    if anchor is None or not all(isinstance(anchor.get(k), (int, float)) for k in here):
         return {**kept, "five_anchor": here}
-    step = here["five"] - anchor["five"]
-    if step < MIN_FIVE_STEP:
-        return {**kept, "five_anchor": anchor}
-    sample = max(0.0, here["week"] - anchor["week"]) / step * 100
-    previous = kept.get("week_per_5h")
-    learned = sample if previous is None else 0.7 * previous + 0.3 * sample
-    return {"week_per_5h": round(learned, 2), "five_anchor": here}
+    if not same_window(anchor, here):
+        # A new window: what the last one reached, from its last report, is a sample too.
+        last = old.get("five_last") if isinstance(old.get("five_last"), dict) else None
+        if last and same_window(anchor, last) and (value := learned_from(anchor, last)) is not None:
+            kept["week_per_5h"] = value
+        return {**kept, "five_anchor": here, "five_last": here}
+    value = learned_from(anchor, here)
+    if value is None:
+        return {**kept, "five_anchor": anchor, "five_last": here}
+    return {"week_per_5h": value, "five_anchor": here, "five_last": here}
 
 
 def save_snapshot(label, payload, login=None):

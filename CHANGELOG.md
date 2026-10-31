@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.157] - 2026-10-31
+
+### Fixed
+- Where to spend said Claude (main) would lose 9% of its week ("only 13% more usable by the
+  reset") while it ran at 249 tk/s against the 116 needed: its 5-hour share of the week was
+  assumed (10% for Max), never measured. The status line compared each report's 5-hour reset
+  time exactly, and on Max plans it differs slightly every report, so every report started a
+  new measurement. Reports within 30 minutes are one window, and a window's progress is
+  measured when the next begins too. Until measured, Max assumes 20% (a Max 20x week went 53%
+  to 78% in about one window) and Team 16.67% (measured on two seats); the Why marks assumed
+  figures with `~`.
+
 ## [2.0.0-dash-0.156] - 2026-10-31
 
 ### Fixed

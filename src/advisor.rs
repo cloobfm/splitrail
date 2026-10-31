@@ -599,12 +599,13 @@ fn max_week_dollars() -> f64 {
         .unwrap_or(2_000.0)
 }
 
-/// A 5-hour window's share of a week by plan, where it has not been measured: about a sixth
-/// on a Team seat (from our own seats), less on the bigger Max plans.
+/// A 5-hour window's share of a week by plan, where it has not been measured: a sixth on a Team
+/// seat (16.67% measured on two seats), about a fifth on Max (a Max 20x week went 53% to 78% in
+/// about one window; 10% made a week that was being used up look 9% lost).
 fn assumed_week_per_5h(plan: Option<&str>) -> Option<f64> {
     match plan? {
-        p if p.starts_with("Team") => Some(16.0),
-        "Max 20x" | "Max 5x" | "Max" => Some(10.0),
+        p if p.starts_with("Team") => Some(16.67),
+        "Max 20x" | "Max 5x" | "Max" => Some(20.0),
         "Pro" => Some(15.0),
         _ => None,
     }
@@ -676,12 +677,14 @@ impl Pick {
         if !self.available {
             return format!("{} full · back in {}", w.window, secs(w.resets_in_secs));
         }
+        // `~` where a 5-hour window's share of the week is assumed from the plan, not measured.
         let reach = self.reach.filter(|r| r.left_to_use() >= 1.0).map(|r| {
+            let guess = if r.measured { "" } else { "~" };
             if r.lost >= 1.0 {
-                format!("only {:.0}% more usable by the reset · {:.0}% lost", r.reachable, r.lost)
+                format!("{guess}only {:.0}% more usable by the reset · {guess}{:.0}% lost", r.reachable, r.lost)
             } else {
                 format!(
-                    "start by {} · {} × 5h",
+                    "{guess}start by {} · {} × 5h",
                     r.start_by.with_timezone(&Local).format("%a %H:%M"),
                     r.windows_needed
                 )
@@ -957,15 +960,15 @@ mod reach_tests {
         let week = window("week", 0.0, 3 * 86_400, Some("Team Std"), None);
         let r = reach(&week, None).unwrap();
         assert!(!r.measured);
-        assert_eq!(r.windows_needed, 7); // 100 / 16 = 6.25 -> 7
-        assert_eq!(r.slack_secs, 3 * 86_400 - 7 * FIVE_HOURS);
+        assert_eq!(r.windows_needed, 6); // 100 / 16.67 = 6.0 -> 6
+        assert_eq!(r.slack_secs, 3 * 86_400 - 6 * FIVE_HOURS);
         assert_eq!(r.lost, 0.0);
-        // A day out, 30 hours are not enough for 35 hours of windows.
-        let late = window("week", 0.0, 30 * 3600, Some("Team Std"), None);
+        // 25 hours are not enough for 30 hours of windows: five of them, 83% of the week.
+        let late = window("week", 0.0, 25 * 3600, Some("Team Std"), None);
         let r = reach(&late, None).unwrap();
         assert!(r.slack_secs < 0);
-        assert!((r.reachable - 96.0).abs() < 1e-9);
-        assert!((r.lost - 4.0).abs() < 1e-9);
+        assert!((r.reachable - 83.35).abs() < 1e-9);
+        assert!((r.lost - 16.65).abs() < 1e-9);
     }
 
     #[test]

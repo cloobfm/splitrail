@@ -182,6 +182,25 @@ class WeekPer5hTests(unittest.TestCase):
         self.assertEqual(entry["week_per_5h"], 16.0)
         self.assertEqual(entry["five_anchor"]["five"], 5)
 
+    def test_reset_times_that_drift_are_one_window_and_a_finished_window_counts(self):
+        # Max plans report each window's reset a little differently every time.
+        entry = learn_week_per_5h({}, self.limits(0, 53))
+        entry = learn_week_per_5h(entry, self.limits(20, 58, NOW + 3600 + 40))
+        entry = learn_week_per_5h(entry, self.limits(25, 59, NOW + 3600 - 30))  # Still under 30 points.
+        self.assertNotIn("week_per_5h", entry)
+        # The window ends and a new one starts: its 25 points are too few, but the next one's are.
+        entry = learn_week_per_5h(entry, self.limits(2, 60, NOW + 6 * 3600))
+        entry = learn_week_per_5h(entry, self.limits(52, 70, NOW + 6 * 3600 + 90))
+        self.assertEqual(entry["week_per_5h"], 20.0)
+
+    def test_a_window_learned_from_its_last_report_when_the_next_begins(self):
+        entry = learn_week_per_5h({}, self.limits(0, 40))
+        entry = learn_week_per_5h(entry, self.limits(28, 45))
+        entry["five_anchor"]["five"] = 0  # As if this report began the measurement.
+        entry["five_last"] = {**entry["five_anchor"], "five": 50, "week": 50}
+        entry = learn_week_per_5h(entry, self.limits(1, 50, NOW + 6 * 3600))
+        self.assertEqual(entry["week_per_5h"], 20.0)
+
     def test_missing_windows_keep_what_was_learned(self):
         self.assertEqual(learn_week_per_5h({"week_per_5h": 12.0}, {"seven_day": w(5, WEEK)}), {"week_per_5h": 12.0})
 
