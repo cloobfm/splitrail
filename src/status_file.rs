@@ -120,10 +120,35 @@ pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
     })
 }
 
+/// Whether this process writes the status file: the first dashboard to start holds a lock on
+/// `status.lock` for as long as it runs, and any other one (a second window) leaves the file to
+/// it, taking over when it exits. Two writers counting different columns made the menu bar and
+/// the header's tk/s flip between their numbers every second.
+fn owns_status_file(dir: &std::path::Path) -> bool {
+    static LOCK: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
+    let Ok(mut held) = LOCK.lock() else { return false };
+    if held.is_some() {
+        return true;
+    }
+    let Ok(file) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("status.lock")) else {
+        return true; // No lock to be had: write as before.
+    };
+    match file.try_lock() {
+        Ok(()) => {
+            *held = Some(file);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 fn write(payload: &Value) -> std::io::Result<()> {
     let Some(path) = path() else { return Ok(()) };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
+        if !owns_status_file(dir) {
+            return Ok(());
+        }
     }
     // Write-then-rename so the menu bar never reads a half-written file.
     let tmp = path.with_extension("json.tmp");

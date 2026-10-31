@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.154] - 2026-10-31
+
+### Fixed
+- The header's ⚡ tk/s (and the menu bar's) flipped every second between two numbers (712 and
+  38): two dashboards were running (the tmux one and a second window) and both rewrote
+  `status.json`, each with its own count. The first to start holds `status.lock` and writes it;
+  another leaves it alone, taking over when the first exits.
+
 ## [2.0.0-dash-0.153] - 2026-10-26
 
 ### Changed
