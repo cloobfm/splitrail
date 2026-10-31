@@ -42,9 +42,10 @@ ExecStart=%h/.local/bin/splitrail-dashboard mqtt
 Restart=always
 RestartSec=30
 Nice=10
-IOSchedulingClass=idle
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 CPUQuota=25%
-MemoryMax=1G
+MemoryMax=3G
 
 [Install]
 WantedBy=default.target

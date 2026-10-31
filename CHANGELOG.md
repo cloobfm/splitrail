@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.156] - 2026-10-31
+
+### Fixed
+- dev-a's publisher never came up ("dev-a off"): with 1.6 GB of Claude transcripts it sat at
+  its 1 GB memory cap, swapping, and with `IOSchedulingClass=idle` it got no disk time at all
+  while other work kept dev-a's disk busy (I/O pressure 60-80%): 2 seconds of CPU in 5 minutes.
+  `scripts/install_mqtt_publisher.sh` sets `MemoryMax=3G` and `IOSchedulingClass=best-effort`
+  with `IOSchedulingPriority=7`, the lowest that still makes progress. Re-running it (or `U`)
+  applies it to a publisher.
+
 ## [2.0.0-dash-0.155] - 2026-10-31
 
 ### Fixed
