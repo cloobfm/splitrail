@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.155] - 2026-10-31
+
+### Fixed
+- The dashboard lost the other machines (no MQTT: "No route to host" to the LAN broker) while
+  Python and nc reached it: macOS grants local network access per program, and every unsigned
+  build has a new identity (`splitrail_dashboard-<hash>`). `U` now signs each build ad hoc with a
+  fixed identifier, `com.splitrail.dashboard`, so the grant holds across rebuilds. A manual
+  build can do the same: `codesign -s - -f --identifier com.splitrail.dashboard
+  target/release/splitrail-dashboard`.
+
 ## [2.0.0-dash-0.154] - 2026-10-31
 
 ### Fixed

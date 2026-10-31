@@ -270,12 +270,32 @@ pub fn start() {
         command.current_dir(source_dir());
         let log = log_path().and_then(|p| std::fs::File::create(p).ok());
         if run_tracked(command, log, LOCAL) {
+            sign_with_stable_identity();
             set(State::Ready(version));
             RESTART.store(true, Ordering::Relaxed);
         } else {
             set(State::Failed(version));
         }
     });
+}
+
+/// macOS grants local network access (the LAN MQTT broker) per program, and an unsigned build
+/// gets a new identity each time (`splitrail_dashboard-<hash>`): a rebuild started at "No route to
+/// host" for the broker while Python and nc reached it. An ad-hoc signature with a fixed
+/// identifier keeps one identity across builds.
+pub fn sign_with_stable_identity() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let binary = source_dir().join("target").join(profile).join(BINARY);
+    let signed = std::process::Command::new("codesign")
+        .args(["-s", "-", "-f", "--identifier", "com.splitrail.dashboard"])
+        .arg(&binary)
+        .output();
+    if !signed.is_ok_and(|o| o.status.success()) {
+        crate::utils::log_error(format!("Update: could not sign {}", binary.display()));
+    }
 }
 
 /// Publishers that are behind and online, not already being updated.
