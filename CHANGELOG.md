@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.159] - 2026-11-02
+
+### Fixed
+- A Pi session on gpu-1's vLLM counted twice in the total tk/s (Pi Agent 25 + vLLM@gpu-1 24):
+  Pi counted its requests and gpu-1's publisher counted the same ones from its proxy log, and
+  gpu-1 can't see the Mac's Pi sessions to match them by id the way mtplx does locally. Pi now
+  tags its requests to gpu-1 with `X-Caller: pi` (a provider header in `~/.pi/agent/models.json`)
+  and server columns leave requests from that caller to Pi.
+
 ## [2.0.0-dash-0.158] - 2026-10-31
 
 ### Fixed

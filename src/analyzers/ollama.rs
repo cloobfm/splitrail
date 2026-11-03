@@ -355,6 +355,15 @@ pub fn parse_usage_log(
 
 /// `parse_usage_log` for lines read from `first_line` on, with the families and sizes of the
 /// lines before (extended with these).
+/// A request from an agent whose own column already counts it, with its transcript: Pi tags
+/// its requests to a server on another machine with `X-Caller: pi` (a provider header in
+/// `~/.pi/agent/models.json`), and that machine's publisher can't see Pi's sessions to match
+/// them up the way mtplx does locally. Counted on both sides, a Pi session on gpu-1's vLLM showed
+/// twice in the total.
+fn counted_by_agent(caller: &str) -> bool {
+    matches!(caller.trim().to_ascii_lowercase().as_str(), "pi" | "pi-agent" | "pi agent")
+}
+
 fn parse_usage_lines(
     content: &str,
     source: &Path,
@@ -384,6 +393,9 @@ fn parse_usage_lines(
             let Ok(event) = serde_json::from_str::<UsageEvent>(line.trim()) else {
                 return Vec::new();
             };
+            if event.caller.as_deref().is_some_and(counted_by_agent) {
+                return Vec::new();
+            }
             let date = DateTime::<Utc>::from_timestamp_millis((event.ts * 1000.0) as i64)
                 .unwrap_or_else(Utc::now);
             let model = normalize_model(&event.model);
@@ -680,6 +692,17 @@ mod tests {
         assert_eq!(messages[0].project_hash, "mediasrc");
         assert_eq!(messages[1].project_hash, "opencode");
         assert_eq!(messages[1].local_hash.as_deref(), Some("chatcmpl-9"));
+    }
+
+    #[test]
+    fn requests_pi_counts_itself_are_left_to_pi() {
+        let log = concat!(
+            r#"{"ts": 1790880000, "model": "m", "endpoint": "/v1/chat/completions", "prompt_tokens": 63502, "cached_tokens": 0, "completion_tokens": 319, "duration_ms": 0, "client": "192.168.163.188", "caller": "pi", "response_id": "chatcmpl-a"}"#, "\n",
+            r#"{"ts": 1790880001, "model": "m", "endpoint": "/v1/chat/completions", "prompt_tokens": 1, "cached_tokens": 0, "completion_tokens": 1, "duration_ms": 1, "client": "192.168.163.188", "caller": "mediasrc", "response_id": "chatcmpl-b"}"#, "\n",
+        );
+        let messages = parse_usage_log(log, Path::new("/test.jsonl"), &OllamaConfig::default());
+        assert_eq!(messages.iter().filter(|m| m.role == MessageRole::Assistant).count(), 1);
+        assert_eq!(messages.iter().map(|m| m.stats.output_tokens).sum::<u64>(), 1);
     }
 
     #[test]
