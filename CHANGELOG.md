@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.160] - 2026-11-04
+
+### Fixed
+- The Mac's Ollama went untracked after a reboot: Ollama.app, a login item, started before
+  `com.splitrail.ollama-env` set `OLLAMA_HOST=127.0.0.1:11435`, took 11434 itself, and the usage
+  proxy exited with "Address already in use". The env job now runs `scripts/ollama_env.sh`, which
+  restarts an Ollama that took 11434 and then starts the proxy.
+
 ## [2.0.0-dash-0.159] - 2026-11-02
 
 ### Fixed

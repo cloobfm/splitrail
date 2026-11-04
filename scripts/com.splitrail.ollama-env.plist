@@ -2,16 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <!-- Moves Ollama.app's server to 127.0.0.1:11435 so the usage proxy can own 11434.
-     `launchctl setenv` does not survive a reboot, so this re-applies it at every login. -->
+     `launchctl setenv` does not survive a reboot, so this re-applies it at every login, and
+     restarts an Ollama.app that started first and took 11434 (scripts/ollama_env.sh). -->
 <dict>
     <key>Label</key>
     <string>com.splitrail.ollama-env</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/launchctl</string>
-        <string>setenv</string>
-        <string>OLLAMA_HOST</string>
-        <string>127.0.0.1:11435</string>
+        <string>/bin/sh</string>
+        <string>/Users/bzl/Projects/splitrail/scripts/ollama_env.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
