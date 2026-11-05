@@ -15,7 +15,10 @@ taken_by_ollama() {
 # Give a login item that is still starting a moment to bind.
 sleep 20
 if taken_by_ollama; then
-    /usr/bin/osascript -e 'quit app "Ollama"' 2>/dev/null
+    # Not `osascript -e 'quit app "Ollama"'`: Ollama answers it with "User canceled" (-128) and
+    # keeps running. SIGTERM ends the menu bar app and its server cleanly.
+    /usr/bin/pkill -TERM -x Ollama
+    /usr/bin/pkill -TERM -f 'Ollama.app/Contents/Resources/ollama serve'
     i=0
     while taken_by_ollama && [ $i -lt 30 ]; do sleep 1; i=$((i + 1)); done
     /usr/bin/open -a Ollama
