@@ -267,7 +267,9 @@ impl Topics {
         let mut config = json!({
             "name": sensor.name,
             "unique_id": format!("splitrail_{}_{}", self.host_slug, sensor.key),
-            "object_id": format!("splitrail_{}_{}", self.host_slug, sensor.key),
+            // Not `object_id`: Home Assistant deprecated it in 2025.10 for this, and said it
+            // would stop working in 2026.4.
+            "default_entity_id": format!("sensor.splitrail_{}_{}", self.host_slug, sensor.key),
             "state_topic": self.state(),
             "value_template": format!("{{{{ {} }}}}", sensor.path),
             "availability_topic": self.status(),
@@ -605,6 +607,8 @@ mod tests {
         assert_eq!(payload["value_template"], "{{ value_json.tks }}");
         assert_eq!(payload["availability_topic"], "splitrail/amberts_macbook_pro/status");
         assert_eq!(payload["unit_of_measurement"], "tk/s");
+        assert_eq!(payload["default_entity_id"], "sensor.splitrail_amberts_macbook_pro_tks");
+        assert!(payload.get("object_id").is_none());
     }
 
     #[test]

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.162] - 2026-11-05
+
+### Fixed
+- Home Assistant discovery sends `default_entity_id` (`sensor.splitrail_<host>_<key>`) instead of
+  `object_id`, which Home Assistant deprecated in 2025.10 and said would stop working in 2026.4.
+
 ## [2.0.0-dash-0.161] - 2026-11-04
 
 ### Fixed
