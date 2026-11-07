@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.164] - 2026-11-06
+
+### Fixed
+- Claude@dev-b's allowance read 9.7M for a Max 20x account (Claude (main): 21.9M). Remote
+  columns had no plan (publishers did not send it), so the row was not sized as Max 20x but
+  extrapolated from the spend seen on dev-b and dev-d alone. Publishers now send the signed-in
+  login's plan, a remote column takes its login's plan from any record of it, and Claude's plans
+  convert dollars to tokens at the one shared rate, so one plan shows one size.
+
 ## [2.0.0-dash-0.163] - 2026-11-06
 
 ### Fixed

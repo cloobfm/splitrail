@@ -2003,7 +2003,10 @@ fn plan_value(w: &crate::advisor::Window, (max_week, max_tpd): (f64, Option<f64>
         _ => crate::plan_limits::plan_value_dollars(tool_base(&w.tool)).unwrap_or(20.0),
     };
     let estimated = !(w.plan.as_deref() == Some("Max 20x") && (allowance - w.dollars_per_percent().unwrap_or(0.0) * 100.0).abs() < 1.0);
-    PlanValue { allowance, left: allowance * left_share, tokens_per_dollar: measured_tpd.or(max_tpd), estimated }
+    // One rate for Claude's plans, so one plan shows one size: converted at each login's own
+    // mix, the same Max 20x read 21.9M on one account and 9.7M on a Fable-heavy one.
+    let tokens_per_dollar = if claude_plan { max_tpd.or(measured_tpd) } else { measured_tpd.or(max_tpd) };
+    PlanValue { allowance, left: allowance * left_share, tokens_per_dollar, estimated }
 }
 
 /// API dollars spent on a plan's own usage (a Claude login's slices) between `since` and `now`,

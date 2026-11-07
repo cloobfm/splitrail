@@ -608,6 +608,12 @@ pub fn plan_for_analyzer(analyzer_name: &str) -> Option<String> {
     if let Some(name) = plan_config(analyzer_name).and_then(|p| p.name.clone()) {
         return Some(name);
     }
+    // A remote Claude column (`Claude@dev-b`): its login's plan as any record of it says. With
+    // none, the row was not taken for Max 20x, and its allowance came from extrapolating that
+    // one machine's spend (9.7M for a Max 20x account mostly used elsewhere).
+    if let Some(content) = remote_column_snapshot(analyzer_name) {
+        return serde_json::from_str::<File>(&content).ok().and_then(|f| f.plan?.label);
+    }
     let label = account_label(analyzer_name)?;
     let content = std::fs::read_to_string(limits_dir()?.join(format!("{label}.json"))).ok()?;
     if let Some(plan) = serde_json::from_str::<File>(&content).ok().and_then(|f| f.plan?.label) {

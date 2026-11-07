@@ -364,6 +364,10 @@ pub fn reduce_snapshot(raw: &Value, now: f64) -> Option<Value> {
     if let Some(name) = name.filter(|n| !n.is_empty()) {
         out.insert("login_name".into(), name.into());
     }
+    // The signed-in login's plan (`Max 20x`): it sizes the account's allowance on dashboards.
+    if let Some(label) = raw.pointer("/plan/label").filter(|v| !v.is_null()) {
+        out.insert("plan".into(), serde_json::json!({ "label": label }));
+    }
     // The other logins this machine's status line has seen, each as its own small snapshot: a
     // devbox signed in to `team@` still knows `a@`'s week from when it last ran there, and the
     // Mac's copy of it may be days older (it showed 0% for a seat devbox-d had at 49%).
@@ -1069,6 +1073,9 @@ mod tests {
         assert_eq!(reduced["login_hash"], login_hash("me@x.com"));
         assert!(reduced.get("login").is_none() && reduced.get("sessions").is_none());
         assert_eq!(reduced["login_name"], "me");
+        assert!(reduced.get("plan").is_none());
+        let planned = serde_json::json!({"captured_at": 1000.0, "login": "a@x.com", "plan": {"label": "Max 20x", "tier": "t"}});
+        assert_eq!(reduce_snapshot(&planned, 2000.0).unwrap()["plan"], serde_json::json!({"label": "Max 20x"}));
         let unnamed = serde_json::json!({"captured_at": 1000.0, "login": "someone@x.com"});
         assert_eq!(reduce_snapshot(&unnamed, 2000.0).unwrap()["login_name"], "someone");
         assert!(reduce_snapshot(&raw, 1000.0 + LIMITS_MAX_AGE_SECS + 1.0).is_none());
