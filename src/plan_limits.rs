@@ -452,7 +452,56 @@ fn merge_snapshots(snapshots: Vec<serde_json::Value>) -> Option<serde_json::Valu
     if !windows.is_empty() {
         merged["rate_limits"] = serde_json::Value::Object(windows);
     }
+    // The newest may be another machine's record of this login among its other logins, which
+    // carries no name: keep the identity from whichever snapshot has it.
+    for key in ["login", "login_name", "login_hash", "plan"] {
+        if merged.get(key).is_none_or(|v| v.is_null())
+            && let Some(value) = snapshots.iter().filter_map(|s| s.get(key)).find(|v| !v.is_null())
+        {
+            merged[key] = value.clone();
+        }
+    }
     Some(merged)
+}
+
+/// Every snapshot of one login from other machines: one signed in to it, and any machine's
+/// record of it among the other logins its status line has seen (`rollup::reduce_snapshot`).
+fn remote_snapshots_of(hash: &str) -> Vec<serde_json::Value> {
+    let Some(all) = REMOTE_SNAPSHOTS.get().and_then(|m| m.lock().ok()) else { return Vec::new() };
+    let is = |s: &serde_json::Value| s.get("login_hash").and_then(|h| h.as_str()) == Some(hash);
+    let mut out = Vec::new();
+    for snapshot in all.values().flatten() {
+        if is(snapshot) {
+            out.push(snapshot.clone());
+        }
+        let others = snapshot.get("logins").and_then(|l| l.as_array()).into_iter().flatten();
+        out.extend(others.filter(|e| is(e)).cloned());
+    }
+    out
+}
+
+/// This machine's snapshots of one login: a limits file signed in to it, and any file's record
+/// of it among its other logins (named, so a merge that picks it keeps the login).
+fn local_snapshots_of(hash: &str) -> Vec<serde_json::Value> {
+    let Some(entries) = limits_dir().and_then(|dir| std::fs::read_dir(dir).ok()) else { return Vec::new() };
+    let mut out = Vec::new();
+    for path in entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")) {
+        let Some(file) = std::fs::read_to_string(&path).ok().and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok()) else {
+            continue;
+        };
+        let top = file.get("login").and_then(|l| l.as_str()).map(str::to_string);
+        if top.as_deref().map(crate::rollup::login_hash).as_deref() == Some(hash) {
+            out.push(file.clone());
+        }
+        for (login, entry) in file.get("logins").and_then(|l| l.as_object()).into_iter().flatten() {
+            if Some(login) != top.as_ref() && crate::rollup::login_hash(login) == hash {
+                let mut entry = entry.clone();
+                entry["login"] = login.clone().into();
+                out.push(entry);
+            }
+        }
+    }
+    out
 }
 
 /// `local` merged with other machines' snapshots for the same login (`merge_snapshots`): the
@@ -460,18 +509,11 @@ fn merge_snapshots(snapshots: Vec<serde_json::Value>) -> Option<serde_json::Valu
 fn with_remote_snapshots(local: &str) -> Option<String> {
     let local: serde_json::Value = serde_json::from_str(local).ok()?;
     let hash = crate::rollup::login_hash(local.get("login")?.as_str()?);
-    let mut snapshots: Vec<serde_json::Value> = REMOTE_SNAPSHOTS
-        .get()?
-        .lock()
-        .ok()?
-        .values()
-        .flatten()
-        .filter(|s| s.get("login_hash").and_then(|h| h.as_str()) == Some(hash.as_str()))
-        .cloned()
-        .collect();
+    let mut snapshots = remote_snapshots_of(&hash);
     if snapshots.is_empty() {
         return None;
     }
+    snapshots.extend(local_snapshots_of(&hash));
     snapshots.push(local);
     merge_snapshots(snapshots).map(|s| s.to_string())
 }
@@ -487,36 +529,21 @@ fn remote_column_snapshot(column: &str) -> Option<String> {
     let hash_of = |s: &serde_json::Value| {
         s.get("login_hash").and_then(|h| h.as_str()).map(str::to_string)
     };
-    let mut candidates: Vec<serde_json::Value> = Vec::new();
-    {
+    let own = {
         let all = REMOTE_SNAPSHOTS.get()?.lock().ok()?;
-        let own = all
-            .get(&slug)?
+        all.get(&slug)?
             .iter()
             .filter_map(|s| Some((captured(s)?, s)))
             .max_by(|a, b| a.0.total_cmp(&b.0))?
             .1
-            .clone();
-        if let Some(hash) = hash_of(&own) {
-            candidates.extend(all.values().flatten().filter(|s| hash_of(s).as_ref() == Some(&hash)).cloned());
-        }
-        candidates.push(own);
+            .clone()
+    };
+    let mut candidates: Vec<serde_json::Value> = Vec::new();
+    if let Some(hash) = hash_of(&own) {
+        candidates.extend(remote_snapshots_of(&hash));
+        candidates.extend(local_snapshots_of(&hash));
     }
-    let hash = candidates.last().and_then(hash_of);
-    if let (Some(hash), Some(dir)) = (hash, limits_dir())
-        && let Ok(entries) = std::fs::read_dir(dir)
-    {
-        for path in entries.flatten().map(|e| e.path()) {
-            if path.extension().is_some_and(|e| e == "json")
-                && let Ok(content) = std::fs::read_to_string(&path)
-                && let Ok(local) = serde_json::from_str::<serde_json::Value>(&content)
-                && local.get("login").and_then(|l| l.as_str()).map(crate::rollup::login_hash).as_ref()
-                    == Some(&hash)
-            {
-                candidates.push(local);
-            }
-        }
-    }
+    candidates.push(own);
     merge_snapshots(candidates).map(|s| s.to_string())
 }
 
@@ -694,7 +721,32 @@ pub fn other_logins(analyzer_name: &str) -> Vec<OtherLogin> {
     else {
         return Vec::new();
     };
-    other_logins_in(&content, now)
+    other_logins_in(&with_other_records(&content), now)
+}
+
+/// `content` with each of its other logins merged with every other record of that login, here
+/// and on other machines: the status line only updates a login while it is signed in, so this
+/// file's copy can be days behind a devbox that uses it.
+fn with_other_records(content: &str) -> String {
+    let Ok(mut file) = serde_json::from_str::<serde_json::Value>(content) else { return content.to_string() };
+    let Some(logins) = file.get_mut("logins").and_then(|l| l.as_object_mut()) else { return content.to_string() };
+    for (login, entry) in logins.iter_mut() {
+        let hash = crate::rollup::login_hash(login);
+        let mut records = remote_snapshots_of(&hash);
+        if records.is_empty() {
+            continue;
+        }
+        records.extend(local_snapshots_of(&hash));
+        records.push(entry.clone());
+        if let Some(merged) = merge_snapshots(records) {
+            for key in ["rate_limits", "captured_at"] {
+                if let Some(value) = merged.get(key) {
+                    entry[key] = value.clone();
+                }
+            }
+        }
+    }
+    file.to_string()
 }
 
 fn other_logins_in(content: &str, now: f64) -> Vec<OtherLogin> {
@@ -852,6 +904,33 @@ mod tests {
     use super::*;
 
     const NOW: f64 = 1_790_519_606.0;
+
+    #[test]
+    fn another_machines_newer_record_of_a_login_beats_this_ones_stale_copy() {
+        // This Mac last saw the seat 12 days ago (17%, a week long gone: rolled to 0%); a devbox
+        // signed in to another seat has it at 49% this week, among its other logins.
+        let login = "seat-under-test@example.invalid (Test)";
+        let reset = NOW + 100_000.0;
+        let local = format!(
+            r#"{{"login":"me@example.invalid (Test)","logins":{{"{login}":{{"captured_at":{},"rate_limits":{{"seven_day":{{"used_percentage":17,"resets_at":{}}}}}}}}}}}"#,
+            NOW - 12.0 * 86_400.0,
+            reset - 14.0 * 86_400.0,
+        );
+        set_remote_snapshots(
+            "devbox-test",
+            vec![serde_json::json!({
+                "login_hash": "someone-else", "captured_at": NOW - 60.0,
+                "logins": [{"login_hash": crate::rollup::login_hash(login), "captured_at": NOW - 7_200.0,
+                            "rate_limits": {"seven_day": {"used_percentage": 49, "resets_at": reset}}}],
+            })],
+        );
+        let stale = other_logins_in(&local, NOW);
+        assert_eq!(stale[0].seven_day.used_percentage, 0.0);
+        let merged = other_logins_in(&with_other_records(&local), NOW);
+        set_remote_snapshots("devbox-test", Vec::new());
+        assert_eq!(merged[0].seven_day.used_percentage, 49.0);
+        assert_eq!(merged[0].seven_day.resets_in_secs, Some(100_000));
+    }
 
     fn snapshot(captured_at: f64, five_used: f64, five_reset: f64) -> String {
         format!(

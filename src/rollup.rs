@@ -364,6 +364,34 @@ pub fn reduce_snapshot(raw: &Value, now: f64) -> Option<Value> {
     if let Some(name) = name.filter(|n| !n.is_empty()) {
         out.insert("login_name".into(), name.into());
     }
+    // The other logins this machine's status line has seen, each as its own small snapshot: a
+    // devbox signed in to `team@` still knows `a@`'s week from when it last ran there, and the
+    // Mac's copy of it may be days older (it showed 0% for a seat devbox-d had at 49%).
+    let top = raw.get("login").and_then(Value::as_str);
+    let logins: Vec<Value> = raw
+        .get("logins")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(login, _)| Some(login.as_str()) != top)
+        .filter_map(|(login, entry)| {
+            let captured_at = entry.get("captured_at")?.as_f64()?;
+            if now - captured_at > LIMITS_MAX_AGE_SECS {
+                return None;
+            }
+            let mut one = serde_json::Map::new();
+            one.insert("login_hash".into(), login_hash(login).into());
+            one.insert("captured_at".into(), captured_at.into());
+            one.insert("rate_limits".into(), entry.get("rate_limits").filter(|v| !v.is_null())?.clone());
+            if let Some(label) = entry.pointer("/plan/label").filter(|v| !v.is_null()) {
+                one.insert("plan".into(), serde_json::json!({ "label": label }));
+            }
+            Some(Value::Object(one))
+        })
+        .collect();
+    if !logins.is_empty() {
+        out.insert("logins".into(), logins.into());
+    }
     Some(Value::Object(out))
 }
 
@@ -1044,5 +1072,25 @@ mod tests {
         let unnamed = serde_json::json!({"captured_at": 1000.0, "login": "someone@x.com"});
         assert_eq!(reduce_snapshot(&unnamed, 2000.0).unwrap()["login_name"], "someone");
         assert!(reduce_snapshot(&raw, 1000.0 + LIMITS_MAX_AGE_SECS + 1.0).is_none());
+    }
+
+    #[test]
+    fn other_logins_are_sent_by_hash_without_their_address() {
+        let raw = serde_json::json!({
+            "captured_at": 1000.0, "login": "me@x.com (T)",
+            "logins": {
+                "me@x.com (T)": {"captured_at": 1000.0, "rate_limits": {}},
+                "seat@x.com (T)": {"captured_at": 900.0, "plan": {"label": "Team Std", "tier": "t"},
+                                   "rate_limits": {"seven_day": {"used_percentage": 49.0, "resets_at": 9000.0}}},
+                "old@x.com (T)": {"captured_at": 900.0 - LIMITS_MAX_AGE_SECS, "rate_limits": {}},
+            },
+        });
+        let reduced = reduce_snapshot(&raw, 2000.0).unwrap();
+        let logins = reduced["logins"].as_array().unwrap();
+        assert_eq!(logins.len(), 1);
+        assert_eq!(logins[0]["login_hash"], login_hash("seat@x.com (T)"));
+        assert_eq!(logins[0]["rate_limits"]["seven_day"]["used_percentage"], 49.0);
+        assert_eq!(logins[0]["plan"], serde_json::json!({"label": "Team Std"}));
+        assert!(!reduced.to_string().contains("seat@"));
     }
 }

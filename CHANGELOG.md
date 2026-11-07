@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.163] - 2026-11-06
+
+### Fixed
+- Plan quotas showed logins at 0% that other machines knew were half used (`team@Virtius` 0%
+  beside Claude@dev-d's 51%, `a@Virtius` 0% while devbox-d had it at 49%, Claude@dev-b 0% for the
+  a@virti.us Max seat at 25%): rows merged other machines' data only by the signed-in login, so
+  the Mac's 12-day-old copies of its other logins rolled forward to an empty week. Publishers
+  now send their other logins too (by hash, never the address), and every record of a login,
+  signed in or not, here or elsewhere, is merged; the same login on two machines then shows as
+  one row (`Claude (v) · team@Virtius, dev-d`).
+
 ## [2.0.0-dash-0.162] - 2026-11-05
 
 ### Fixed
