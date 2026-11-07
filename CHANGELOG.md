@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.166] - 2026-11-07
+
+### Fixed
+- Moving right through the tabs ran the selected tab off the screen, leaving a table with no
+  name (Ollama@gpu-1's looked like it could be vLLM's). The tab bar now shows a run of tabs that
+  includes the selected one, with `‹n` and `n›` counting the tabs cut off on either side.
+
 ## [2.0.0-dash-0.165] - 2026-11-07
 
 ### Fixed

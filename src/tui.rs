@@ -2299,6 +2299,32 @@ fn overall_tks() -> Option<f64> {
 
 /// The analyzer behind a timeline row: `Claude (v) · a@virti.us` and `Claude (main), dev-a`
 /// are `Claude (v)` and `Claude (main)`.
+/// The first and last tab to draw in `room` columns so that `selected` is among them: from the
+/// start when it fits, else ending at it, then as many more after it as fit. Leaves room for
+/// the `‹n` / `n›` markers of tabs cut off.
+fn visible_tabs(widths: &[usize], selected: usize, room: usize) -> (usize, usize) {
+    const DIVIDER: usize = 3;
+    const MARKER: usize = 6;
+    let span = |a: usize, b: usize| widths[a..=b].iter().sum::<usize>() + DIVIDER * (b - a);
+    if widths.is_empty() {
+        return (0, 0);
+    }
+    let selected = selected.min(widths.len() - 1);
+    let mut first = 0;
+    while first < selected && span(first, selected) + if first > 0 { MARKER } else { 0 } + MARKER > room {
+        first += 1;
+    }
+    let mut last = selected;
+    while last + 1 < widths.len() {
+        let more = if last + 2 < widths.len() { MARKER } else { 0 };
+        if span(first, last + 1) + if first > 0 { MARKER } else { 0 } + more > room {
+            break;
+        }
+        last += 1;
+    }
+    (first, last)
+}
+
 fn tool_base(tool: &str) -> &str {
     tool.split(" · ").next().unwrap_or(tool).split(", ").next().unwrap_or(tool)
 }
@@ -2408,8 +2434,20 @@ fn draw_ui(
             ))
         }));
 
+        // Thirty-odd tabs are wider than the screen, and the selected one ran off the right edge
+        // (an Ollama@gpu-1 table with no way to tell whose it was). Show a run of tabs that
+        // includes the selected one, marking the ones cut off on either side.
+        let selected = tui_state.selected_tab.min(tab_titles.len().saturating_sub(1));
+        let (first, last) = visible_tabs(&tab_titles.iter().map(Line::width).collect::<Vec<_>>(), selected, chunks[1].width as usize);
+        let mut tab_titles: Vec<Line> = tab_titles.drain(first..=last).collect();
+        if first > 0 {
+            tab_titles.insert(0, Line::styled(format!(" ‹{first} "), Style::new().dark_gray()));
+        }
+        if last + 1 < filtered_stats.len() + 1 {
+            tab_titles.push(Line::styled(format!(" {}› ", filtered_stats.len() - last), Style::new().dark_gray()));
+        }
         let tabs = Tabs::new(tab_titles)
-            .select(tui_state.selected_tab)
+            .select(selected - first + usize::from(first > 0))
             // .style(Style::default().add_modifier(Modifier::DIM))
             .highlight_style(Style::new().black().on_light_green())
             .padding("", "")
@@ -3523,6 +3561,20 @@ pub fn show_upload_error(error: &str) {
 #[cfg(test)]
 mod period_tests {
     use super::*;
+
+    #[test]
+    fn the_selected_tab_is_always_drawn() {
+        let widths = vec![12; 30]; // thirty tabs of 12, 15 apiece with the divider
+        assert_eq!(visible_tabs(&widths, 0, 100).0, 0);
+        for selected in 0..30 {
+            let (first, last) = visible_tabs(&widths, selected, 100);
+            assert!(first <= selected && selected <= last, "tab {selected} drawn");
+            let used = (last - first + 1) * 12 + (last - first) * 3 + if first > 0 { 6 } else { 0 } + if last < 29 { 6 } else { 0 };
+            assert!(used <= 100, "tab {selected}: {used} columns");
+        }
+        assert_eq!(visible_tabs(&widths, 29, 100).1, 29);
+        assert_eq!(visible_tabs(&[10, 10], 1, 100), (0, 1));
+    }
 
     #[test]
     fn days_group_into_iso_weeks_and_months_keeping_every_total() {
