@@ -532,13 +532,18 @@ fn load_plans() -> Vec<PlanWindow> {
 /// kept, a new window added, old ones trimmed. Returns the windows that have now reset and were
 /// not announced yet (marking them announced).
 pub fn fold_plans(plans: &mut Vec<PlanWindow>, seen: &[(String, String, &str, f64, i64)], now: i64) -> Vec<PlanWindow> {
-    let round = |t: i64| (t + RESET_ROUNDING_SECS / 2).div_euclid(RESET_ROUNDING_SECS);
+    merge_drifted(plans);
     for (account, tool, window, used, resets_at) in seen {
         match plans
             .iter_mut()
-            .find(|p| &p.account == account && p.window == *window && round(p.resets_at) == round(*resets_at))
+            .filter(|p| &p.account == account && p.window == *window && same_window(window, p.resets_at, *resets_at))
+            .max_by_key(|p| p.resets_at)
         {
-            Some(p) => p.peak = p.peak.max(*used),
+            // The reset as last reported: one that drifts (Antigravity's) closes when it ends.
+            Some(p) => {
+                p.peak = p.peak.max(*used);
+                p.resets_at = *resets_at;
+            }
             None => plans.push(PlanWindow {
                 account: account.clone(),
                 tool: tool.clone(),
@@ -564,6 +569,37 @@ pub fn fold_plans(plans: &mut Vec<PlanWindow>, seen: &[(String, String, &str, f6
         closed.push(p.clone());
     }
     closed
+}
+
+/// Whether two reports' resets are one window's. Claude's drift by seconds; Antigravity's slides
+/// by minutes with every capture (an unused model's week is "seven days from now"), which logged
+/// a dozen 0% "closes" a day. Consecutive windows are a whole window apart, so anything within
+/// half of one is the same window.
+fn same_window(window: &str, a: i64, b: i64) -> bool {
+    let half = match window {
+        "week" => 7 * 86_400 / 2,
+        "month" => 14 * 86_400,
+        _ => RESET_ROUNDING_SECS,
+    };
+    (a - b).abs() < half
+}
+
+/// Windows recorded apart that `same_window` makes one (from before it, or a drifting reset):
+/// one entry, with the highest figure and the latest reset.
+fn merge_drifted(plans: &mut Vec<PlanWindow>) {
+    plans.sort_by(|a, b| (&a.account, &a.window, a.resets_at).cmp(&(&b.account, &b.window, b.resets_at)));
+    let mut merged: Vec<PlanWindow> = Vec::new();
+    for p in plans.drain(..) {
+        match merged.last_mut() {
+            Some(last) if last.account == p.account && last.window == p.window && same_window(&p.window, last.resets_at, p.resets_at) => {
+                last.peak = last.peak.max(p.peak);
+                last.resets_at = p.resets_at;
+                last.announced = p.announced;
+            }
+            _ => merged.push(p),
+        }
+    }
+    *plans = merged;
 }
 
 static PLANS_CHECKED: Mutex<Option<Instant>> = Mutex::new(None);
@@ -810,6 +846,29 @@ mod tests {
         assert_eq!(closed[0].peak, 93.0);
         assert!(fold_plans(&mut plans, &[], 10_200).is_empty());
         assert_eq!(plans.len(), 2);
+    }
+
+    #[test]
+    fn a_reset_that_slides_with_every_report_is_one_window_not_a_close_each_time() {
+        // Antigravity: an unused model's week resets "seven days from now", later every capture.
+        let mut plans = Vec::new();
+        let seen = |used: f64, resets_at: i64| vec![("me@x.com".to_string(), "Antigravity".to_string(), "week", used, resets_at)];
+        let start = 1_000_000;
+        fold_plans(&mut plans, &seen(8.0, start + 7 * 86_400), start);
+        for step in 1..20 {
+            let now = start + step * 1_200;
+            assert!(fold_plans(&mut plans, &seen(0.0, now + 7 * 86_400), now).is_empty());
+        }
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].peak, 8.0);
+        // Fragments from before are merged into one, keeping the highest figure.
+        let mut old: Vec<PlanWindow> = (0..5)
+            .map(|i| PlanWindow { account: "me@x.com".into(), tool: "Antigravity".into(), window: "week".into(),
+                                  resets_at: start + i * 1_200, peak: if i == 0 { 8.14 } else { 0.0 }, announced: true })
+            .collect();
+        fold_plans(&mut old, &[], start);
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0].peak, 8.14);
     }
 
     use chrono::TimeZone;

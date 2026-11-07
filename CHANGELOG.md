@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.165] - 2026-11-07
+
+### Fixed
+- Plan closes logged Antigravity's week about 25 times, all at 0%: an unused model's week resets
+  "seven days from now", so its reset slid later with every capture, and each report with a
+  reset more than 15 minutes off was taken for a new week (the old one then "closed"). Reports
+  within half a window of each other are now one window, keeping the latest reset and the highest
+  figure, and fragments already in `plan_closes.json` are merged.
+
 ## [2.0.0-dash-0.164] - 2026-11-06
 
 ### Fixed
