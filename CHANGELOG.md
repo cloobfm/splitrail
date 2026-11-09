@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.167] - 2026-11-09
+
+### Fixed
+- Claude Fable 5.2 (already running on devbox-d) had no price, so its usage was costed at $0.
+  Fable 5.2 and Mythos 5.2 are now priced at $8 in / $40 out / $10 cache write / $0.20 cache
+  read per 1M tokens, the bare `fable` and `mythos` names mean 5.2, and the quota advisor's
+  "if all on one model" figures use Fable 5.2 instead of 5.1.
+
 ## [2.0.0-dash-0.166] - 2026-11-07
 
 ### Fixed

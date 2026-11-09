@@ -511,7 +511,27 @@ static MODEL_INDEX: phf::Map<&'static str, ModelInfo> = phf_map! {
         },
     },
 
-    // Anthropic 2026 models (Claude 4.6 through Fable 5.1). Cache write = 5m rate (1.25x).
+    // Anthropic 2026 models (Claude 4.6 through Fable 5.2). Cache write = 5m rate (1.25x).
+    "claude-fable-5-2" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 8.0,
+            output_per_1m: 40.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 10.0,
+            cache_read_per_1m: 0.2,
+        },
+    },
+    "claude-mythos-5-2" => ModelInfo {
+        pricing: PricingStructure::Flat {
+            input_per_1m: 8.0,
+            output_per_1m: 40.0,
+        },
+        caching: CachingSupport::Anthropic {
+            cache_write_per_1m: 10.0,
+            cache_read_per_1m: 0.2,
+        },
+    },
     "claude-fable-5-1" => ModelInfo {
         pricing: PricingStructure::Flat {
             input_per_1m: 10.0,
@@ -1655,12 +1675,16 @@ static MODEL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "claude-3-haiku" => "claude-3-haiku",
     "claude-3-haiku-20240307" => "claude-3-haiku",
 
+    "claude-fable-5-2" => "claude-fable-5-2",
+    "claude-fable-5.2" => "claude-fable-5-2",
+    "claude-mythos-5-2" => "claude-mythos-5-2",
+    "claude-mythos-5.2" => "claude-mythos-5-2",
     "claude-fable-5-1" => "claude-fable-5-1",
     "claude-fable-5.1" => "claude-fable-5-1",
-    "fable" => "claude-fable-5-1",
+    "fable" => "claude-fable-5-2",
     "claude-mythos-5-1" => "claude-mythos-5-1",
     "claude-mythos-5.1" => "claude-mythos-5-1",
-    "mythos" => "claude-mythos-5-1",
+    "mythos" => "claude-mythos-5-2",
     "claude-fable-5" => "claude-fable-5",
     "claude-mythos-5" => "claude-mythos-5",
     "claude-opus-5-5" => "claude-opus-5-5",
@@ -2204,6 +2228,9 @@ mod tests {
     fn frontier_2026_models_resolve() {
         for name in [
             // Anthropic
+            "claude-fable-5-2",
+            "claude-fable-5.2",
+            "claude-mythos-5-2",
             "claude-fable-5-1",
             "claude-fable-5",
             "claude-opus-5-5",
@@ -2256,6 +2283,16 @@ mod tests {
                 "{name} should resolve to a priced model"
             );
         }
+    }
+
+    #[test]
+    fn fable_5_2_is_priced_below_fable_5_1() {
+        // $8 in / $40 out / $0.20 cache read per 1M on Fable 5.2 (and Mythos 5.2).
+        assert!((calculate_input_cost("claude-fable-5-2", 1_000_000) - 8.0).abs() < 1e-9);
+        assert!((calculate_output_cost("claude-fable-5-2", 1_000_000) - 40.0).abs() < 1e-9);
+        assert!((calculate_cache_cost("claude-fable-5-2", 0, 1_000_000) - 0.2).abs() < 1e-9);
+        assert!((calculate_cache_cost("claude-fable-5-2", 1_000_000, 0) - 10.0).abs() < 1e-9);
+        assert!((calculate_output_cost("claude-mythos-5.2", 1_000_000) - 40.0).abs() < 1e-9);
     }
 
     #[test]
