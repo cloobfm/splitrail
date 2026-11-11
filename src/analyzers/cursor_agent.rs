@@ -30,6 +30,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::cursor_transcripts;
 use crate::analyzer::{Analyzer, DataSource};
 use crate::cursor_limits::Charge;
 use crate::models::calculate_total_cost;
@@ -79,6 +80,7 @@ struct HookLine {
     cache_read_tokens: u64,
     #[serde(default)]
     cache_write_tokens: u64,
+    duration_ms: Option<f64>,
 }
 
 fn model_name(model: Option<&str>) -> String {
@@ -91,12 +93,194 @@ fn model_name(model: Option<&str>) -> String {
     }
 }
 
+/// A turn as the hooks saw it: its conversation, when it started and, once over, when it ended.
+#[derive(Debug, Clone)]
+pub struct TurnWindow {
+    pub conversation: String,
+    pub started: f64,
+    pub ended: Option<f64>,
+    pub cwd: Option<String>,
+    pub model: String,
+}
+
+/// Every turn in a hook log, oldest first.
+pub fn turn_windows(content: &str) -> Vec<TurnWindow> {
+    let mut by_key: HashMap<String, TurnWindow> = HashMap::new();
+    let mut order = Vec::new();
+    for line in content.lines() {
+        let Ok(event) = serde_json::from_str::<HookLine>(line) else { continue };
+        let (Some(key), Some(conversation)) = (event.generation_id.clone(), event.conversation_id.clone()) else {
+            continue;
+        };
+        let prompt = event.hook_event_name.as_deref() == Some("beforeSubmitPrompt");
+        // Print mode logs one line when the run is over, with how long it took.
+        let started = event.ts - event.duration_ms.map_or(0.0, |ms| ms / 1000.0);
+        let window = by_key.entry(key.clone()).or_insert_with(|| {
+            order.push(key);
+            TurnWindow { conversation, started, ended: None, cwd: None, model: AUTO_MODEL.to_string() }
+        });
+        window.started = window.started.min(started);
+        if window.cwd.is_none() {
+            window.cwd = event.cwd;
+        }
+        if !prompt {
+            window.ended = Some(window.ended.map_or(event.ts, |e| e.max(event.ts)));
+            if event.model.is_some() {
+                window.model = model_name(event.model.as_deref());
+            }
+        }
+    }
+    let mut windows: Vec<TurnWindow> = order.into_iter().filter_map(|k| by_key.remove(&k)).collect();
+    windows.sort_by(|a, b| a.started.total_cmp(&b.started));
+    windows
+}
+
+/// How long after its parent turn ends a subagent may still start and count as that turn's.
+const SUBAGENT_SLACK_SECS: f64 = 5.0;
+
+/// Which hooked conversation each subagent transcript belongs to: one in the same project folder
+/// whose turn was running when the subagent started.
+pub fn link_subagents(
+    windows: &[TurnWindow],
+    transcripts: &[cursor_transcripts::Transcript],
+) -> HashMap<String, String> {
+    let hooked: std::collections::HashSet<&str> = windows.iter().map(|w| w.conversation.as_str()).collect();
+    // A conversation's folder: its own transcript's, else the one its working directory names.
+    let mut slug_of: HashMap<&str, String> = HashMap::new();
+    for t in transcripts.iter().filter(|t| hooked.contains(t.conversation_id.as_str())) {
+        slug_of.insert(t.conversation_id.as_str(), t.project_slug.clone());
+    }
+    let mut links = HashMap::new();
+    for t in transcripts.iter().filter(|t| !hooked.contains(t.conversation_id.as_str())) {
+        let parent = windows
+            .iter()
+            .filter(|w| {
+                let slug = slug_of
+                    .get(w.conversation.as_str())
+                    .cloned()
+                    .or_else(|| w.cwd.as_deref().map(cursor_transcripts::project_slug));
+                slug.as_deref() == Some(t.project_slug.as_str())
+                    && w.started - SUBAGENT_SLACK_SECS <= t.started
+                    && w.ended.is_none_or(|end| t.started <= end + SUBAGENT_SLACK_SECS)
+            })
+            .max_by(|a, b| a.started.total_cmp(&b.started));
+        if let Some(parent) = parent {
+            links.insert(t.conversation_id.clone(), parent.conversation.clone());
+        }
+    }
+    links
+}
+
+/// The charges with each subagent's billed under its parent conversation, so they count in the
+/// turn that started them instead of being left out as another client's.
+pub fn charges_with_subagents(mut charges: ChargeIndex, links: &HashMap<String, String>) -> ChargeIndex {
+    for (child, parent) in links {
+        if let Some(moved) = charges.remove(child) {
+            let list = charges.entry(parent.clone()).or_default();
+            list.extend(moved);
+            list.sort_by_key(|c| c.ts);
+        }
+    }
+    charges
+}
+
+/// `Read ×3 · Grep`: tool calls in a row, by name in the order first used.
+fn tools_summary(names: &[String]) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for name in names {
+        match counts.iter_mut().find(|(n, _)| *n == name.as_str()) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((name.as_str(), 1)),
+        }
+    }
+    let parts: Vec<String> = counts
+        .into_iter()
+        .map(|(name, count)| if count > 1 { format!("{name} ×{count}") } else { name.to_string() })
+        .collect();
+    format!("tools: {}", parts.join(" · "))
+}
+
+/// The transcript feed: one assistant message per note or run of tool calls, with no tokens
+/// (those stay on the turn's own message). A hooked conversation's prompts are already the hook
+/// log's; a subagent's request is shown as a note under its parent.
+pub fn transcript_messages(
+    transcripts: &[cursor_transcripts::Transcript],
+    windows: &[TurnWindow],
+    links: &HashMap<String, String>,
+    charges: &ChargeIndex,
+) -> Vec<ConversationMessage> {
+    let latest: HashMap<&str, &TurnWindow> = windows.iter().map(|w| (w.conversation.as_str(), w)).collect();
+    let mut messages = Vec::new();
+    for t in transcripts {
+        let subagent = links.get(&t.conversation_id);
+        let conversation = subagent.unwrap_or(&t.conversation_id);
+        let Some(window) = latest.get(conversation.as_str()) else { continue };
+        // A subagent billed under a named model says which; otherwise its parent's.
+        let model = charges
+            .get(&t.conversation_id)
+            .and_then(|events| events.first())
+            .map(|c| model_name(Some(&c.model)))
+            .filter(|m| m != AUTO_MODEL && subagent.is_some())
+            .unwrap_or_else(|| window.model.clone());
+        for (index, (at, item)) in t.items.iter().enumerate() {
+            let content = match item {
+                cursor_transcripts::Item::Prompt(_) if subagent.is_none() => continue,
+                cursor_transcripts::Item::Prompt(text) => {
+                    let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                    format!("↳ subagent: {}", first.chars().take(200).collect::<String>())
+                }
+                cursor_transcripts::Item::Text(text) => text.clone(),
+                cursor_transcripts::Item::Tools(names) => tools_summary(names),
+            };
+            let Some(date) = DateTime::<Utc>::from_timestamp_millis((at * 1000.0) as i64) else { continue };
+            let tool_calls = match item {
+                cursor_transcripts::Item::Tools(names) => names.len() as u32,
+                _ => 0,
+            };
+            messages.push(ConversationMessage {
+                application: Application::CursorAgent,
+                date,
+                project_hash: project_name(window.cwd.as_deref()),
+                conversation_hash: hash_text(conversation),
+                local_hash: None,
+                global_hash: hash_text(&format!("cursor-agent:transcript:{}:{index}", t.conversation_id)),
+                model: Some(model.clone()),
+                stats: Stats { tool_calls, ..Default::default() },
+                role: MessageRole::Assistant,
+                content: Some(content),
+            });
+        }
+    }
+    messages
+}
+
+/// Whether the newest turn in a hook log started within `max_age_secs` of `now` and has not
+/// ended, so billing is worth fetching more often.
+pub fn turn_open(content: &str, now: f64, max_age_secs: f64) -> bool {
+    turn_windows(content)
+        .last()
+        .is_some_and(|w| w.ended.is_none() && now - w.started <= max_age_secs)
+}
+
 /// Parse a hook log into one assistant message per generation. Malformed lines (a torn write)
 /// are skipped. The newest login seen is recorded for the dashboard's Login row.
+#[cfg(test)]
 pub fn parse_usage_log(
     content: &str,
     source: &Path,
     charges: &ChargeIndex,
+) -> Vec<ConversationMessage> {
+    parse_usage_log_with(content, source, charges, &std::collections::HashSet::new())
+}
+
+/// [`parse_usage_log`], leaving the reply text off turns of the conversations in `transcribed`,
+/// whose transcript already shows it. A turn still running gets a message of what has been
+/// billed for it so far, so its tokens show before it ends.
+pub fn parse_usage_log_with(
+    content: &str,
+    source: &Path,
+    charges: &ChargeIndex,
+    transcribed: &std::collections::HashSet<String>,
 ) -> Vec<ConversationMessage> {
     // generation key -> merged line; the two hooks of one turn carry the same totals, so the
     // larger of each counter is kept in case one of them fired before usage was final.
@@ -211,8 +395,11 @@ pub fn parse_usage_log(
                     model: None,
                     stats: Stats::default(),
                     role: MessageRole::User,
-                    content: prompt.prompt_preview,
+                    content: prompt.prompt_preview.clone(),
                 });
+                if turn.is_none() {
+                    messages.extend(running_turn(&prompt, &key, &conversation, cwd, charges));
+                }
             }
         }
         if let Some(msg) = turns.remove(&key).and_then(|mut turn| {
@@ -243,6 +430,9 @@ pub fn parse_usage_log(
                 )
             };
             let project = project_name(turn.cwd.as_deref());
+            if turn.conversation_id.as_ref().is_some_and(|c| transcribed.contains(c)) {
+                turn.reply_preview = None; // The transcript has it, at the time it was written.
+            }
             Some(ConversationMessage {
                 application: Application::CursorAgent,
                 date,
@@ -270,6 +460,43 @@ pub fn parse_usage_log(
     messages
 }
 
+/// What has been billed so far for a turn that has not ended: one message at the newest charge,
+/// replaced by the turn's own message once its `stop` hook fires.
+fn running_turn(
+    prompt: &HookLine,
+    key: &str,
+    conversation: &str,
+    cwd: Option<&str>,
+    charges: &ChargeIndex,
+) -> Option<ConversationMessage> {
+    let since = (prompt.ts * 1000.0) as i64 - CHARGE_GRACE_MS;
+    let events: Vec<&Charge> = charges.get(conversation)?.iter().filter(|c| c.ts >= since).collect();
+    let last = events.iter().map(|c| c.ts).max()?;
+    let model = model_name(Some(&events[0].model));
+    let model = if events.iter().all(|c| c.model == events[0].model) { model } else { AUTO_MODEL.to_string() };
+    let tokens = |f: fn(&Charge) -> u64| events.iter().map(|c| f(c)).sum::<u64>();
+    Some(ConversationMessage {
+        application: Application::CursorAgent,
+        date: DateTime::<Utc>::from_timestamp_millis(last)?,
+        project_hash: project_name(cwd),
+        conversation_hash: hash_text(conversation),
+        local_hash: None,
+        global_hash: hash_text(&format!("cursor-agent:{key}")),
+        model: Some(model),
+        stats: Stats {
+            input_tokens: tokens(|c| c.input_tokens),
+            output_tokens: tokens(|c| c.output_tokens),
+            cache_read_tokens: tokens(|c| c.cache_read_tokens),
+            cache_creation_tokens: tokens(|c| c.cache_write_tokens),
+            cached_tokens: tokens(|c| c.cache_read_tokens),
+            cost: events.iter().map(|c| c.cents).sum::<f64>() / 100.0,
+            ..Default::default()
+        },
+        role: MessageRole::Assistant,
+        content: None,
+    })
+}
+
 /// The project's folder name, as Claude's columns show it.
 fn project_name(cwd: Option<&str>) -> String {
     cwd.map(|cwd| {
@@ -285,10 +512,10 @@ fn project_name(cwd: Option<&str>) -> String {
 pub struct CursorAgentAnalyzer {
     usage_file: Option<PathBuf>,
     charges_file: Option<PathBuf>,
-    /// Per-file parse cache (BZL-74). Each usage log is stamped together with the charges file,
-    /// because a message's cost comes from the charges index: when that moves, every entry has to
-    /// be priced again.
-    cache: crate::stamp_cache::StampCache,
+    /// Cursor's own transcripts, read again only when a file changed. The hook log (tens of KB)
+    /// and the charges index are re-read on every pass: a turn's messages depend on both and on
+    /// the transcripts, so caching any one alone would serve stale links.
+    transcripts: cursor_transcripts::TranscriptReader,
 }
 
 impl CursorAgentAnalyzer {
@@ -301,7 +528,7 @@ impl CursorAgentAnalyzer {
                     .join("usage.jsonl")
             }),
             charges_file: crate::cursor_limits::charges_file(),
-            cache: crate::stamp_cache::StampCache::new(),
+            transcripts: cursor_transcripts::TranscriptReader::for_home(),
         }
     }
 }
@@ -319,11 +546,13 @@ impl Analyzer for CursorAgentAnalyzer {
     }
 
     fn get_data_glob_patterns(&self) -> Vec<String> {
-        // The charges file is watched too, so fetched costs show up without a new turn.
+        // The charges file is watched too, so fetched costs show up without a new turn, and the
+        // transcripts so the feed moves while a turn runs.
         self.usage_file
             .iter()
             .chain(self.charges_file.iter())
             .map(|path| path.to_string_lossy().into_owned())
+            .chain(self.transcripts.glob_pattern())
             .collect()
     }
 
@@ -350,20 +579,31 @@ impl Analyzer for CursorAgentAnalyzer {
         // The charges file is a source of prices, not of messages.
         let logs: Vec<DataSource> = sources
             .into_iter()
-            .filter(|s| Some(&s.path) != self.charges_file.as_ref())
+            .filter(|s| Some(&s.path) == self.usage_file.as_ref())
             .collect();
 
-        // Only logs whose own file, or the charges file they are priced against, moved are
-        // re-parsed (BZL-74).
-        let charges_path = self.charges_file.clone();
-        let (messages, _report) = self.cache.parse_all_stamping(
-            &logs,
-            |_| charges_path.iter().cloned().collect(),
-            |path| {
-                let content = std::fs::read_to_string(path)?;
-                Ok(parse_usage_log(&content, path, &charges))
-            },
-        );
+        let mut messages = Vec::new();
+        for log in logs {
+            let Ok(content) = std::fs::read_to_string(&log.path) else { continue };
+            let windows = turn_windows(&content);
+            let hooked: std::collections::HashSet<String> =
+                windows.iter().map(|w| w.conversation.clone()).collect();
+            let mut folders = self.transcripts.folders_of(&hooked);
+            folders.extend(windows.iter().filter_map(|w| w.cwd.as_deref().map(cursor_transcripts::project_slug)));
+            let transcripts = self
+                .transcripts
+                .read(|slug, conversation| hooked.contains(conversation) || folders.contains(slug));
+            let links = link_subagents(&windows, &transcripts);
+            let transcribed: std::collections::HashSet<String> = transcripts
+                .iter()
+                .filter(|t| hooked.contains(&t.conversation_id))
+                .map(|t| t.conversation_id.clone())
+                .collect();
+            let feed = transcript_messages(&transcripts, &windows, &links, &charges);
+            let charges = charges_with_subagents(charges.clone(), &links);
+            messages.extend(parse_usage_log_with(&content, &log.path, &charges, &transcribed));
+            messages.extend(feed);
+        }
         Ok(messages)
     }
 
@@ -485,6 +725,76 @@ mod charge_tests {
 }
 
 #[cfg(test)]
+mod transcript_tests {
+    use super::*;
+    use cursor_transcripts::{Item, Transcript};
+
+    fn charge(conversation: &str, ts: i64, output: u64, model: &str) -> String {
+        format!(
+            r#"{{"conversation_id":"{conversation}","ts":{ts},"model":"{model}","input_tokens":100,"output_tokens":{output},"cache_read_tokens":0,"cache_write_tokens":0,"cents":1.0}}"#
+        )
+    }
+
+    #[test]
+    fn a_running_turn_shows_its_transcript_subagents_and_billed_tokens() {
+        // The prompt went in at 1000 s; no stop hook yet.
+        let log = r#"{"ts":1000.0,"hook_event_name":"beforeSubmitPrompt","conversation_id":"main","generation_id":"g1","model":"default","prompt_preview":"review this","cwd":"/Users/x/proj"}"#;
+        let windows = turn_windows(log);
+        assert!(turn_open(log, 1600.0, 7200.0));
+        assert!(!turn_open(log, 1000.0 + 3.0 * 3600.0, 7200.0)); // Abandoned long ago.
+
+        let transcripts = vec![
+            Transcript {
+                conversation_id: "main".into(),
+                project_slug: "Users-x-proj".into(),
+                started: 1000.0,
+                items: vec![(1000.5, Item::Prompt("review this".into())), (1010.0, Item::Tools(vec!["Read".into(), "Read".into(), "Grep".into()]))],
+            },
+            Transcript {
+                conversation_id: "sub".into(),
+                project_slug: "Users-x-proj".into(),
+                started: 1020.0,
+                items: vec![(1020.0, Item::Prompt("Perform a security review\nof everything".into())), (1100.0, Item::Text("Summary: fine".into()))],
+            },
+            // Another folder, and a conversation from before the turn: not this turn's.
+            Transcript { conversation_id: "other".into(), project_slug: "Users-x-else".into(), started: 1020.0, items: vec![(1020.0, Item::Text("x".into()))] },
+            Transcript { conversation_id: "old".into(), project_slug: "Users-x-proj".into(), started: 500.0, items: vec![(500.0, Item::Text("y".into()))] },
+        ];
+        let links = link_subagents(&windows, &transcripts);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links.get("sub").map(String::as_str), Some("main"));
+
+        let charges = index_charges(&[charge("main", 1_005_000, 40, "default"), charge("sub", 1_030_000, 60, "composer-2.5-fast")].join("\n"));
+        let feed = transcript_messages(&transcripts, &windows, &links, &charges);
+        let lines: Vec<&str> = feed.iter().filter_map(|m| m.content.as_deref()).collect();
+        // The main prompt is the hook's; the subagent's request is a note under it.
+        assert_eq!(lines, vec!["tools: Read ×2 · Grep", "↳ subagent: Perform a security review", "Summary: fine"]);
+        assert_eq!(feed[0].stats.tool_calls, 3);
+        assert!(feed.iter().all(|m| m.stats.output_tokens == 0 && m.conversation_hash == hash_text("main")));
+        assert_eq!(feed[2].model.as_deref(), Some("composer-2.5-fast"));
+
+        // Billing so far, the subagent's included, shows as the running turn's tokens.
+        let charges = charges_with_subagents(charges, &links);
+        let transcribed = std::collections::HashSet::from(["main".to_string()]);
+        let messages = parse_usage_log_with(log, Path::new("/u.jsonl"), &charges, &transcribed);
+        let [prompt, running] = &messages[..] else { panic!("{messages:?}") };
+        assert_eq!(prompt.role, MessageRole::User);
+        assert_eq!(running.stats.output_tokens, 100);
+        assert_eq!(running.date.timestamp(), 1030);
+        assert!((running.stats.cost - 0.02).abs() < 1e-9);
+
+        // Once the turn ends, its own message replaces the running one, without the reply text
+        // the transcript already shows.
+        let ended = format!("{log}\n{}", r#"{"ts":1200.0,"hook_event_name":"stop","conversation_id":"main","generation_id":"g1","model":"default","output_tokens":40,"reply_preview":"Summary: fine"}"#);
+        let messages = parse_usage_log_with(&ended, Path::new("/u.jsonl"), &charges, &transcribed);
+        let [_, turn] = &messages[..] else { panic!("{messages:?}") };
+        assert_eq!(turn.global_hash, running.global_hash);
+        assert_eq!(turn.stats.output_tokens, 100);
+        assert_eq!(turn.content, None);
+    }
+}
+
+#[cfg(test)]
 mod live {
     /// Reads the real hook log: `cargo test cursor_live -- --ignored --nocapture`.
     #[tokio::test]
@@ -493,7 +803,7 @@ mod live {
         use crate::analyzer::Analyzer;
         let stats = super::CursorAgentAnalyzer::new().get_stats().await.unwrap();
         for m in &stats.messages {
-            println!("{} {:?} in {} out {} cache {} cost {}", m.date, m.model, m.stats.input_tokens, m.stats.output_tokens, m.stats.cache_read_tokens, m.stats.cost);
+            println!("{} {:?} in {} out {} cache {} cost {} {:?}", m.date, m.model, m.stats.input_tokens, m.stats.output_tokens, m.stats.cache_read_tokens, m.stats.cost, m.content.as_deref().map(|c| c.chars().take(70).collect::<String>()));
         }
         println!("conversations {} days {:?}", stats.num_conversations, stats.daily_stats.keys().collect::<Vec<_>>());
         assert!(!stats.messages.is_empty());

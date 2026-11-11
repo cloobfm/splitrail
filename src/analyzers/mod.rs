@@ -2,6 +2,7 @@ pub mod amazon_q;
 pub mod antigravity;
 pub mod antigravity_store;
 pub mod cursor_agent;
+pub mod cursor_transcripts;
 pub mod claude_code;
 pub mod cline;
 pub mod codex_cli;

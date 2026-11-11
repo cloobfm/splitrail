@@ -246,8 +246,25 @@ pub async fn run() {
             }
             Err(_) => {}
         }
-        tokio::time::sleep(POLL_INTERVAL).await;
+        tokio::time::sleep(next_poll()).await;
     }
+}
+
+/// While a Cursor turn is running, billing is fetched every minute so its tokens show as it
+/// works; otherwise every few minutes.
+const OPEN_TURN_POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// A turn with no end older than this was abandoned (Ctrl-C, a crash), not still running.
+const OPEN_TURN_MAX_AGE_SECS: f64 = 2.0 * 3600.0;
+
+fn next_poll() -> Duration {
+    let open = config_dir()
+        .map(|dir| dir.join("cursor").join("usage.jsonl"))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .is_some_and(|content| {
+            let now = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
+            crate::analyzers::cursor_agent::turn_open(&content, now, OPEN_TURN_MAX_AGE_SECS)
+        });
+    if open { OPEN_TURN_POLL_INTERVAL } else { POLL_INTERVAL }
 }
 
 #[cfg(test)]

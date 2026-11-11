@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.168] - 2026-11-11
+
+### Fixed
+- Cursor Agent showed nothing while a turn was running: its hooks fire only when a prompt is sent
+  and when the turn ends, so an 18-minute review appeared all at once. Splitrail now also reads
+  Cursor's own live transcripts (`~/.cursor/projects/*/agent-transcripts`): the agent's notes and
+  its tool calls (grouped, e.g. `tools: Read ×3 · Grep`) appear in the feed as they are written,
+  each stamped with when it was first seen (kept in `cursor/transcript_times.json`).
+- Subagents a Cursor turn starts (a security review, a search) write their own conversations.
+  They now show under the prompt that started them (`↳ subagent: …`), and their billed tokens and
+  cost count in that turn; before, they were left out as another client's.
+- A turn still running now shows what Cursor has billed for it so far, and billing is fetched
+  every minute instead of every five while a turn is open, so tokens and tk/s move as it works.
+
 ## [2.0.0-dash-0.167] - 2026-11-09
 
 ### Fixed
