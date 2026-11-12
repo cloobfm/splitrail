@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.169] - 2026-11-12
+
+### Added
+- `docs/RESTORE.md`: what splitrail keeps where on a Mac and the steps to bring it all back on a
+  new one, after the move to a new Mac came up with no machines in the top bar and one account in
+  Plans. `scripts/restore_state.py` merges an old `~/.config/splitrail` (e.g. from Time Machine)
+  into the new one: copies what is missing, keeps the highest plan-close peaks and records, adds
+  old log lines, and never overwrites newer files or copies secrets.
+
 ## [2.0.0-dash-0.168] - 2026-11-11
 
 ### Fixed
