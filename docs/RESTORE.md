@@ -21,6 +21,8 @@ list top to bottom on the new Mac, then the checks at the end.
 | Ollama proxy | `~/Library/LaunchAgents/com.splitrail.ollama-{proxy,env}.plist` | Proxy on 11434, Ollama.app on 11435. Copies in `scripts/`. |
 | Pi | `~/.pi/agent/models.json` | `r4k` provider sends `X-Caller: pi`, so vLLM requests are not counted twice. |
 | Tool transcripts | `~/.claude/projects`, `~/.claude-v/projects`, `~/.codex/sessions`, `~/.pi/agent/sessions`, `~/.cursor/projects/*/agent-transcripts`, `~/.gemini/antigravity-cli/conversations`, `~/.factory/sessions`, `~/.qwen`, `~/.copilot/history-session-state`, `~/.mtplx/logs` | The tools' own logs, which splitrail reads. Migration Assistant brought all but `~/.mtplx/logs` (local MLX request logs) in Nov 2026; step 5 finds any gaps. |
+| Publisher updates (`U`) | `zig` (Homebrew), `cargo-zigbuild` (`~/.cargo/bin`), rustup target `x86_64-unknown-linux-musl` | `U` cross-builds the Linux publishers on the Mac. Missing on a new Mac: every update fails with `no such command: zigbuild`. |
+| SSH to publishers | `~/.ssh/config` host entries for `gpu-1` (192.168.163.158), `ts677` (192.168.163.101), `VRig`, plus devbox-a..d (in `~/.ssh/nas-devbox.conf`) | `U` updates over ssh by these names. Without them: "Host key verification failed" / "Could not resolve hostname". |
 | Binary | `/opt/homebrew/bin/splitrail-dashboard` (+ `splitrail` link) | Built from this repo, then `codesign -s - -f --identifier com.splitrail.dashboard`. |
 
 Other machines (devbox-a/c/d, gpu-1, ts677) publish to the broker on their own; nothing on the Mac
@@ -30,11 +32,14 @@ needs restoring for them to reappear, only a dashboard that has the `[mqtt]` con
 
 1. **Build and install** the dashboard from this repo (`cargo build --release`, codesign as above,
    link it into `/opt/homebrew/bin`).
-2. **Check the config and secrets** came across: `~/.splitrail.toml` has `[mqtt]`, and
+2. **Publisher toolchain and ssh**: `brew install zig`, `cargo install cargo-zigbuild`,
+   `rustup target add x86_64-unknown-linux-musl`; restore the non-devbox `Host` entries from the
+   old `~/.ssh/config`; then `ssh -o BatchMode=yes <host> true` works for devbox-a/c/d, gpu-1, ts677.
+3. **Check the config and secrets** came across: `~/.splitrail.toml` has `[mqtt]`, and
    `~/.config/splitrail/mqtt_password` exists. Set any that are missing.
-3. **Quit the dashboard** if it is running. It rewrites the state files from memory and would
+4. **Quit the dashboard** if it is running. It rewrites the state files from memory and would
    overwrite what you restore.
-4. **Restore the state folder** from the old Mac's Time Machine backup (or the old Mac itself):
+5. **Restore the state folder** from the old Mac's Time Machine backup (or the old Mac itself):
 
    ```sh
    OLD="/Volumes/Backups of …/<latest>.previous/Data/Users/bzl/.config/splitrail"
@@ -46,7 +51,7 @@ needs restoring for them to reappear, only a dashboard that has the `[mqtt]` con
    It copies what is missing, merges `plan_closes` / `plan_history` / `records` (highest figure
    wins) and the line logs (old lines kept, new ones added), and keeps the new Mac's copy of
    anything else. Secrets, prices and the status file are skipped.
-5. **Transcripts**: list what the backup has that this Mac does not, per folder in the table,
+6. **Transcripts**: list what the backup has that this Mac does not, per folder in the table,
    and copy back anything that is a log (not `.DS_Store`, locks or credentials):
 
    ```sh
@@ -56,16 +61,17 @@ needs restoring for them to reappear, only a dashboard that has the `[mqtt]` con
    done
    cp -pn "$OLDHOME/.mtplx/logs/"*.jsonl ~/.mtplx/logs/   # e.g.
    ```
-6. **Status lines, hooks, wrappers, menu bar**: confirm each row of the table above exists. Start a
+7. **Status lines, hooks, wrappers, menu bar**: confirm each row of the table above exists. Start a
    Claude session under each config dir (`claude` and `CLAUDE_CONFIG_DIR=~/.claude-v claude`) once,
    so both status lines write fresh limits.
-7. **Launch agents** (Ollama proxy): copy both plists from `scripts/` to `~/Library/LaunchAgents/`,
+8. **Launch agents** (Ollama proxy): copy both plists from `scripts/` to `~/Library/LaunchAgents/`,
    then `launchctl bootstrap gui/$(id -u)` each one.
-8. **Start the dashboard** (only now, so it starts with the config and password in place), then
+9. **Start the dashboard** (only now, so it starts with the config and password in place), then
    press `U` to bring every publisher to the same version.
 
 ## 3. Checks
 
+- `U` reports each publisher updated; `~/.config/splitrail/update.log` has no `zigbuild` or ssh errors.
 - Top bar lists the publishers (devbox-a, devbox-c, devbox-d, gpu-1, ts677), each online.
 - Plans shows every account: Claude Max ×2, the three Virtius Team seats, Codex, Cursor, Droid,
   Kiro, Warp, Antigravity.
