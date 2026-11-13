@@ -14,6 +14,7 @@ mod analyzer;
 mod analyzers;
 mod config;
 mod incremental;
+mod parse_store;
 mod stamp_cache;
 mod models;
 mod mqtt;
@@ -538,6 +539,10 @@ async fn run_mqtt(config: config::Config) {
     utils::set_source_max_age(std::time::Duration::from_secs(
         (rollup::DAILY_DAYS as u64 + 2) * 24 * 3600,
     ));
+    // Keep what has been parsed on disk, so the next start reads only what changed since.
+    if let Some(dir) = parse_store::default_dir() {
+        parse_store::enable(dir);
+    }
     prepare_prices(config.pricing.feed_enabled).await;
     // Text nobody here or on the broker will read is not kept in memory.
     utils::set_keep_previews(config.mqtt.share_previews);

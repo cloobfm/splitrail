@@ -89,13 +89,50 @@ pub struct CodexCliAnalyzer {
     /// reload; re-parsing every session on disk each time pinned several cores. Only files
     /// whose size or mtime changed are parsed again.
     cache: Mutex<HashMap<PathBuf, CachedFile>>,
+    /// The publisher's saved parse (`parse_store`): loaded once, saved as files change.
+    store_loaded: std::sync::Once,
+    saves: crate::parse_store::SaveSchedule,
 }
 
 impl CodexCliAnalyzer {
     pub fn new() -> Self {
         Self {
             cache: Mutex::new(HashMap::new()),
+            store_loaded: std::sync::Once::new(),
+            saves: Default::default(),
         }
+    }
+
+    /// Start from the files an earlier run saved; ones whose size and mtime still match are
+    /// not read again.
+    fn load_store(&self) {
+        let stored = crate::parse_store::load::<()>(CODEX_ANALYZER_NAME);
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        for (path, file) in stored {
+            cache.entry(path).or_insert(CachedFile {
+                len: file.len,
+                modified: file.modified,
+                messages: Arc::new(file.messages),
+            });
+        }
+    }
+
+    fn save_store(&self) {
+        let files = self
+            .cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(path, f)| crate::parse_store::StoredFile {
+                path: path.clone(),
+                len: f.len,
+                modified: f.modified,
+                parsed_bytes: f.len,
+                state: (),
+                messages: f.messages.as_ref().clone(),
+            })
+            .collect();
+        crate::parse_store::save(CODEX_ANALYZER_NAME, files);
     }
 }
 
@@ -176,6 +213,10 @@ impl Analyzer for CodexCliAnalyzer {
                 .map(|meta| (meta.len(), meta.modified().ok()))
                 .ok()
         };
+        let stored = crate::parse_store::enabled();
+        if stored {
+            self.store_loaded.call_once(|| self.load_store());
+        }
         let live: HashSet<PathBuf> = sources.iter().map(|s| s.path.clone()).collect();
         let mut cached = Vec::with_capacity(sources.len());
         let mut stale = Vec::new();
@@ -204,8 +245,11 @@ impl Analyzer for CodexCliAnalyzer {
                 })
                 .collect::<Result<_>>()?;
 
+        let changed = !parsed.is_empty();
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        let before = cache.len();
         cache.retain(|path, _| live.contains(path)); // Forget deleted sessions.
+        let changed = changed || cache.len() != before;
         let mut messages: Vec<ConversationMessage> =
             cached.iter().flat_map(|m| m.iter().cloned()).collect();
         for (path, current, parsed) in parsed {
@@ -221,6 +265,10 @@ impl Analyzer for CodexCliAnalyzer {
                     },
                 );
             }
+        }
+        drop(cache);
+        if stored && self.saves.due(changed) {
+            self.save_store();
         }
         // Each session is separate, so there is nothing to deduplicate across files.
         Ok(messages)

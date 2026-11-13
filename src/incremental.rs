@@ -27,6 +27,8 @@ use std::time::SystemTime;
 use rayon::prelude::*;
 
 use crate::analyzer::DataSource;
+use crate::parse_store::StoredFile;
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::types::ConversationMessage;
 
 /// What a chunk parser returns: the messages it produced and the number of bytes it consumed
@@ -44,6 +46,9 @@ struct CachedFile<S> {
     parsed_bytes: u64,
     /// Parser state carried across appends (e.g. a project label learned from the first line).
     state: S,
+    /// Everything parsed from the file, kept only while the parse store is on (see
+    /// [`IncrementalJsonlCache::keep_messages`]).
+    messages: Vec<ConversationMessage>,
 }
 
 /// Counts of what a refresh had to do. Useful for logging and for tests that want to prove the
@@ -74,19 +79,61 @@ enum Outcome {
 
 pub struct IncrementalJsonlCache<S> {
     files: Mutex<HashMap<PathBuf, CachedFile<S>>>,
+    /// Files as saved by an earlier run (`parse_store`), used in place of reading a file the
+    /// first time it is seen.
+    seeded: Mutex<HashMap<PathBuf, StoredFile<S>>>,
+    keep_messages: AtomicBool,
 }
 
 impl<S> Default for IncrementalJsonlCache<S> {
     fn default() -> Self {
         Self {
             files: Mutex::new(HashMap::new()),
+            seeded: Mutex::new(HashMap::new()),
+            keep_messages: AtomicBool::new(false),
         }
     }
 }
 
-impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
+impl<S: Default + Clone + Send + 'static> IncrementalJsonlCache<S> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Keep each file's messages, for [`Self::snapshot`] and [`Self::all_messages`], and start
+    /// from files an earlier run saved: one whose size and mtime still match is not read, and
+    /// one that has grown is read from where that run stopped.
+    pub fn keep_messages(&self, seed: HashMap<PathBuf, StoredFile<S>>) {
+        self.keep_messages.store(true, Ordering::Relaxed);
+        *self.seeded.lock().unwrap_or_else(|e| e.into_inner()) = seed;
+    }
+
+    fn keeping(&self) -> bool {
+        self.keep_messages.load(Ordering::Relaxed)
+    }
+
+    /// Every file's cursor, state and messages, for `parse_store::save`.
+    pub fn snapshot(&self) -> Vec<StoredFile<S>> {
+        self.lock()
+            .iter()
+            .map(|(path, f)| StoredFile {
+                path: path.clone(),
+                len: f.len,
+                modified: f.modified,
+                parsed_bytes: f.parsed_bytes,
+                state: f.state.clone(),
+                messages: f.messages.clone(),
+            })
+            .collect()
+    }
+
+    /// Every message the cache holds, one chunk per file (empty unless keeping messages).
+    pub fn all_messages(&self) -> Vec<MessageChunk> {
+        self.lock()
+            .values()
+            .filter(|f| !f.messages.is_empty())
+            .map(|f| Arc::new(f.messages.clone()))
+            .collect()
     }
 
     /// Bring the cache up to date with `sources` and return every file's messages as a shared
@@ -197,8 +244,18 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
                 entry.parsed_bytes += consumed;
                 entry.len = len;
                 entry.modified = modified;
+                if self.keeping() {
+                    entry.messages.extend(new_messages.iter().cloned());
+                }
                 self.lock().insert(path.to_path_buf(), entry);
                 (Arc::new(new_messages), Outcome::Appended(consumed))
+            }
+            None if self.keeping() => {
+                let seeded = self.seeded.lock().unwrap_or_else(|e| e.into_inner()).remove(path);
+                match seeded {
+                    Some(stored) => self.resume(path, len, modified, stored, parse),
+                    None => self.reparse(path, len, modified, parse, false),
+                }
             }
             existing => {
                 let was_known = existing.is_some();
@@ -211,6 +268,47 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
     /// state has been invalidated (see [`RefreshReport::needs_rebuild`]).
     pub fn clear(&self) {
         self.lock().clear();
+    }
+
+    /// A file first seen this run that an earlier run saved: hand back what it parsed, plus
+    /// anything appended since, without reading the part it already read.
+    fn resume<F>(
+        &self,
+        path: &Path,
+        len: u64,
+        modified: Option<SystemTime>,
+        stored: StoredFile<S>,
+        parse: &F,
+    ) -> (MessageChunk, Outcome)
+    where
+        F: Fn(&Path, &mut BufReader<File>, &mut S) -> ChunkResult,
+    {
+        let mut entry = CachedFile {
+            len,
+            modified,
+            parsed_bytes: stored.parsed_bytes,
+            state: stored.state,
+            messages: stored.messages,
+        };
+        let mut consumed = 0;
+        if stored.len != len || stored.modified != modified {
+            if len < stored.parsed_bytes {
+                return self.reparse(path, len, modified, parse, false);
+            }
+            let Ok(mut file) = File::open(path) else {
+                return (MessageChunk::default(), Outcome::Missing);
+            };
+            if file.seek(SeekFrom::Start(stored.parsed_bytes)).is_err() {
+                return self.reparse(path, len, modified, parse, false);
+            }
+            let (new_messages, n) = parse(path, &mut BufReader::new(file), &mut entry.state);
+            entry.parsed_bytes += n;
+            entry.messages.extend(new_messages);
+            consumed = n;
+        }
+        let chunk = Arc::new(entry.messages.clone());
+        self.lock().insert(path.to_path_buf(), entry);
+        (chunk, Outcome::FirstParse(consumed))
     }
 
     fn reparse<F>(
@@ -237,6 +335,7 @@ impl<S: Default + Send + 'static> IncrementalJsonlCache<S> {
                 modified,
                 parsed_bytes: consumed,
                 state,
+                messages: if self.keeping() { messages.clone() } else { Vec::new() },
             },
         );
         let outcome = if was_known {
@@ -316,6 +415,38 @@ mod tests {
     /// The cache's job is to avoid re-*reading* unchanged files. Retaining every message it has
     /// ever parsed so it can hand them back each refresh is a different thing, and it is what kept
     /// the whole corpus resident (BZL-14). It must remember cursors, not contents.
+    /// A publisher restart: the next run starts from what the last one saved, reads nothing from
+    /// an unchanged file and only the appended lines of a grown one, with state carried.
+    #[test]
+    fn a_saved_cache_resumes_without_rereading() {
+        let dir = tempfile::tempdir().unwrap();
+        let same = dir.path().join("same.jsonl");
+        let grown = dir.path().join("grown.jsonl");
+        fs::write(&same, "a\nb\n").unwrap();
+        fs::write(&grown, "x\n").unwrap();
+        let sources = vec![DataSource { path: same.clone() }, DataSource { path: grown.clone() }];
+
+        let calls = AtomicUsize::new(0);
+        let first: IncrementalJsonlCache<usize> = IncrementalJsonlCache::new();
+        first.keep_messages(HashMap::new());
+        first.refresh(&sources, line_parser(&calls));
+        let saved: HashMap<PathBuf, StoredFile<usize>> =
+            first.snapshot().into_iter().map(|f| (f.path.clone(), f)).collect();
+        append(&grown, "y\n");
+
+        let calls = AtomicUsize::new(0);
+        let next: IncrementalJsonlCache<usize> = IncrementalJsonlCache::new();
+        next.keep_messages(saved);
+        let (chunks, report) = next.refresh(&sources, line_parser(&calls));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "only the grown file is read");
+        assert_eq!(report.bytes_parsed, 2, "and only its new line");
+        assert!(!report.needs_rebuild);
+        let mut got = contents(&chunks);
+        got.sort();
+        assert_eq!(got, ["1:a", "1:x", "2:b", "2:y"]);
+        assert_eq!(next.all_messages().iter().map(|c| c.len()).sum::<usize>(), 4);
+    }
+
     #[test]
     fn unchanged_files_yield_nothing_because_the_cache_holds_no_messages() {
         let dir = tempfile::tempdir().unwrap();

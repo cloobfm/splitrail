@@ -25,6 +25,9 @@ pub struct ClaudeCodeAnalyzer {
     /// Everything parsed so far, folded into per-day aggregates. Grows with days and distinct
     /// messages, never with the size of the corpus (BZL-14).
     accum: std::sync::Mutex<Accumulator>,
+    /// The publisher's saved parse (`parse_store`): loaded once, saved as files change.
+    store_loaded: std::sync::Once,
+    saves: crate::parse_store::SaveSchedule,
 }
 
 /// The models this Mac's Ollama has served, from its usage proxy's log, re-read only when the
@@ -367,6 +370,8 @@ impl ClaudeCodeAnalyzer {
             name: "Claude Code",
             cache: IncrementalJsonlCache::new(),
             accum: std::sync::Mutex::new(Accumulator::default()),
+            store_loaded: std::sync::Once::new(),
+            saves: Default::default(),
         }
     }
 
@@ -384,6 +389,8 @@ impl ClaudeCodeAnalyzer {
             },
             cache: IncrementalJsonlCache::new(),
             accum: std::sync::Mutex::new(Accumulator::default()),
+            store_loaded: std::sync::Once::new(),
+            saves: Default::default(),
         }
     }
 
@@ -402,12 +409,22 @@ impl ClaudeCodeAnalyzer {
             parse_jsonl_chunk(path, reader, state, false)
         }
 
+        let stored = crate::parse_store::enabled();
+        if stored {
+            self.store_loaded
+                .call_once(|| self.cache.keep_messages(crate::parse_store::load(self.name)));
+        }
         let (mut chunks, mut report) = self.cache.refresh(sources, parse_chunk);
         let mut accum = self.accum.lock().unwrap_or_else(|e| e.into_inner());
 
         // A rewritten, shrunk, or vanished file invalidates what we folded from it, and a fold
-        // cannot be undone selectively. Start over from a clean cache.
-        if report.needs_rebuild {
+        // cannot be undone selectively. Start over: from the messages the cache holds when it
+        // keeps them (a publisher, whose files also drop out as they age past its window),
+        // otherwise from a clean cache.
+        if report.needs_rebuild && stored {
+            accum.clear();
+            chunks = self.cache.all_messages();
+        } else if report.needs_rebuild {
             accum.clear();
             self.cache.clear();
             let (fresh, fresh_report) = self.cache.refresh(sources, parse_chunk);
@@ -431,6 +448,9 @@ impl ClaudeCodeAnalyzer {
             }
         }
         accum.trim_recent(crate::utils::current_live_window_cutoff());
+        if stored && self.saves.due(report.bytes_parsed > 0 || report.needs_rebuild) {
+            crate::parse_store::save(self.name, self.cache.snapshot());
+        }
         (accum.live_messages(), report)
     }
 
@@ -902,7 +922,7 @@ fn clean_message_text(text: &str) -> String {
 }
 
 /// Per-file parser state that must survive across incremental chunks of the same file.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct JsonlParseState {
     /// Project label learned from the first entry's `cwd`; applied to every later message in
     /// the file, so it has to carry over when we resume parsing appended lines.

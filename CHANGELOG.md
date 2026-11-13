@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.171] - 2026-11-13
+
+### Fixed
+- The MQTT publisher saves what it has parsed (Claude Code and Codex files, without message
+  text) to `~/.cache/splitrail/parsed/`, at start-up and then at most every 10 minutes while
+  files change. A restart reads that save instead of every transcript, and only the lines
+  written since. 0.170's age cut barely helped on devbox-a, where almost all of its 4 GB of
+  logs is from the last month. A missing or unreadable save means a full read, as before.
+- A Claude transcript that ages out of the publisher's window no longer makes it re-read every
+  file: it rebuilds from the messages it already holds.
+
 ## [2.0.0-dash-0.170] - 2026-11-13
 
 ### Fixed
