@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.170] - 2026-11-13
+
+### Fixed
+- The headless MQTT publisher (`splitrail-dashboard mqtt`) no longer reads every old transcript at
+  start-up. It skips Claude, Codex, Pi and Copilot CLI session files last written more than 32 days
+  ago (the published window is 30), and parses with one thread instead of all cores. After a NAS
+  reboot on devbox-a, start-up read 2.3 GB of small random reads over ~40 min and slowed the
+  trading engine on the same disk 50×.
+- `scripts/install_mqtt_publisher.sh` runs the publisher at `IOSchedulingClass=idle`, so it only
+  uses the disk when nothing else does. `U` reinstalls with the new unit.
+
 ## [2.0.0-dash-0.169] - 2026-11-12
 
 ### Added

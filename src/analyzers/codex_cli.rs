@@ -156,7 +156,7 @@ impl Analyzer for CodexCliAnalyzer {
             let historical_pattern = format!("{home_str}/sessions/**/*.jsonl");
             for entry in glob::glob(&historical_pattern)? {
                 let path = entry?;
-                if path.is_file() {
+                if path.is_file() && crate::utils::source_in_window(&path) {
                     sources.push(DataSource { path });
                 }
             }

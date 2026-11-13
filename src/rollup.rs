@@ -29,7 +29,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 /// Days of daily totals published.
-const DAILY_DAYS: i64 = 30;
+pub const DAILY_DAYS: i64 = 30;
 /// Messages this recent are published in full (numbers only).
 const RECENT_SECS: i64 = 3600;
 const PREVIEW_CHARS: usize = 120;

@@ -531,6 +531,13 @@ async fn run_mqtt(config: config::Config) {
         eprintln!("No MQTT broker configured. Add to ~/.splitrail.toml:\n\n[mqtt]\nhost = \"<broker>\"\nusername = \"<user>\"\n\nwith the password in ~/.config/splitrail/mqtt_password");
         std::process::exit(1);
     };
+    // A publisher shares a host with other work (devbox-a runs a trading engine on NAS-backed
+    // disk): read with one thread, so start-up IO is a slow sequential trickle, not a burst of
+    // parallel random reads, and skip transcripts last written before the published window.
+    let _ = rayon::ThreadPoolBuilder::new().num_threads(1).build_global();
+    utils::set_source_max_age(std::time::Duration::from_secs(
+        (rollup::DAILY_DAYS as u64 + 2) * 24 * 3600,
+    ));
     prepare_prices(config.pricing.feed_enabled).await;
     // Text nobody here or on the broker will read is not kept in memory.
     utils::set_keep_previews(config.mqtt.share_previews);

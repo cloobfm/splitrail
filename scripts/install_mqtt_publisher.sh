@@ -42,8 +42,9 @@ ExecStart=%h/.local/bin/splitrail-dashboard mqtt
 Restart=always
 RestartSec=30
 Nice=10
-IOSchedulingClass=best-effort
-IOSchedulingPriority=7
+# idle: the disk only when nothing else wants it (honoured by bfq/cfq; devbox-a's VM disk
+# sits on NAS hard drives next to a live trading engine).
+IOSchedulingClass=idle
 CPUQuota=25%
 MemoryMax=3G
 

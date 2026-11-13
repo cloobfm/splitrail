@@ -139,6 +139,29 @@ pub fn keep_previews() -> bool {
     KEEP_PREVIEWS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Oldest source file worth reading, in seconds since its last write; 0 means no limit.
+static SOURCE_MAX_AGE_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A headless publisher only sends the last few weeks, so it skips transcripts nobody has
+/// written to since: a file last written before the window cannot hold a message inside it.
+/// On a devbox that is most of several GB of logs, read on every restart otherwise.
+pub fn set_source_max_age(age: std::time::Duration) {
+    SOURCE_MAX_AGE_SECS.store(age.as_secs(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether a source file is recent enough to read (always true when no limit is set).
+pub fn source_in_window(path: &std::path::Path) -> bool {
+    let max = SOURCE_MAX_AGE_SECS.load(std::sync::atomic::Ordering::Relaxed);
+    max == 0 || modified_within(path, std::time::Duration::from_secs(max))
+}
+
+fn modified_within(path: &std::path::Path, age: std::time::Duration) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map(|modified| modified.elapsed().map_or(true, |elapsed| elapsed <= age))
+        .unwrap_or(true)
+}
+
 pub fn set_tui_active(active: bool) {
     TUI_ACTIVE.store(active, std::sync::atomic::Ordering::Relaxed);
 }
@@ -892,5 +915,26 @@ pub fn get_health_color(health: f64) -> &'static str {
         h if h >= 0.4 => "orange",
         h if h >= 0.2 => "red",
         _ => "red",
+    }
+}
+
+#[cfg(test)]
+mod source_age_tests {
+    use super::modified_within;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn files_last_written_before_the_window_are_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.jsonl");
+        let stale = dir.path().join("stale.jsonl");
+        std::fs::write(&fresh, "{}\n").unwrap();
+        std::fs::write(&stale, "{}\n").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(40 * 24 * 3600);
+        std::fs::File::options().write(true).open(&stale).unwrap().set_modified(old).unwrap();
+        let window = Duration::from_secs(32 * 24 * 3600);
+        assert!(modified_within(&fresh, window));
+        assert!(!modified_within(&stale, window));
+        assert!(modified_within(&dir.path().join("missing"), window), "unknown age is read");
     }
 }

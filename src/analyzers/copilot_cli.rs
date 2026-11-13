@@ -150,7 +150,7 @@ impl Analyzer for CopilotCliAnalyzer {
     fn discover_data_sources(&self) -> Result<Vec<DataSource>> {
         let mut sources = Vec::new();
         for pattern in self.get_data_glob_patterns() {
-            for path in glob::glob(&pattern)?.flatten().filter(|p| p.is_file()) {
+            for path in glob::glob(&pattern)?.flatten().filter(|p| p.is_file() && crate::utils::source_in_window(p)) {
                 sources.push(DataSource { path });
             }
         }
