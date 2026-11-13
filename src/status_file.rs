@@ -97,24 +97,29 @@ pub fn payload(stats: &MultiAnalyzerStats, goal_tks: f64) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "tks": round(tools.iter().map(|t| t.tks).sum(), 1),
         "cost_today": round(tools.iter().map(|t| t.cost_today).sum(), 2),
-        "tools": tools.iter().map(|t| json!({
-            "name": t.name,
-            "account": crate::plan_limits::account_for_analyzer(&t.name),
-            "tks": round(t.tks, 1),
-            "cost_today": round(t.cost_today, 2),
-            // With each window's spend so far, for the quota advisor.
-            "limits": stats
+        "tools": tools.iter().map(|t| {
+            // With each window's spend so far, the plan and its 5-hour share, for the quota
+            // advisor: without the plan, a signed-in Max account was sized from its spend alone
+            // and its 5-hour windows were never planned around.
+            let advisor = stats
                 .analyzer_stats
                 .iter()
                 .find(|s| s.analyzer_name == t.name)
-                .and_then(|s| crate::advisor::tool_json(s, now))
-                .map(|j| j["limits"].clone())
-                .unwrap_or_else(|| json!({
+                .and_then(|s| crate::advisor::tool_json(s, now));
+            json!({
+                "name": t.name,
+                "account": crate::plan_limits::account_for_analyzer(&t.name),
+                "plan": advisor.as_ref().map_or(Value::Null, |j| j["plan"].clone()),
+                "week_per_5h": advisor.as_ref().map_or(Value::Null, |j| j["week_per_5h"].clone()),
+                "tks": round(t.tks, 1),
+                "cost_today": round(t.cost_today, 2),
+                "limits": advisor.as_ref().map(|j| j["limits"].clone()).unwrap_or_else(|| json!({
                     "five_hour": window(t.limits.and_then(|l| l.five_hour)),
                     "seven_day": window(t.limits.and_then(|l| l.seven_day)),
                     "monthly": window(t.limits.and_then(|l| l.monthly)),
                 })),
-        })).chain(other_logins).collect::<Vec<_>>(),
+            })
+        }).chain(other_logins).collect::<Vec<_>>(),
         "publishers": publishers,
         "month": month_pace(stats, now.with_timezone(&Local), goal_tks),
     })
@@ -171,7 +176,10 @@ pub async fn run(mut stats_rx: watch::Receiver<MultiAnalyzerStats>, goal_tks: f6
             // Keeps records.json current (and announces new records) even with the view closed.
             let tools: Vec<&crate::types::AgenticCodingToolStats> = stats.analyzer_stats.iter().map(|s| s.as_ref()).collect();
             crate::records::board(&tools, goal_tks);
-            payload(&stats, goal_tks)
+            let payload = payload(&stats, goal_tks);
+            // Tell the user when to switch accounts (at most one check a minute).
+            crate::spend_plan::watch(&payload);
+            payload
         };
         wait = INTERVAL.max(started.elapsed() * MAX_SHARE);
         if let Err(e) = tokio::task::spawn_blocking(move || write(&payload)).await.unwrap_or(Ok(())) {

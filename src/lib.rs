@@ -13,6 +13,7 @@ pub mod self_update;
 pub mod status_file;
 pub mod incremental;
 pub mod parse_store;
+pub mod spend_plan;
 pub mod stamp_cache;
 pub mod models;
 pub mod mqtt;

@@ -366,7 +366,7 @@ fn notify(kind: Kind, new: &Record, old: &Record) {
     notify_text("🏆 New record", &body);
 }
 
-fn notify_text(title: &str, body: &str) {
+pub fn notify_text(title: &str, body: &str) {
     let Some((program, args)) = platform_notifier().command(title, body) else {
         return;
     };

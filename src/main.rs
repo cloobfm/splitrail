@@ -15,6 +15,7 @@ mod analyzers;
 mod config;
 mod incremental;
 mod parse_store;
+mod spend_plan;
 mod stamp_cache;
 mod models;
 mod mqtt;
@@ -92,6 +93,14 @@ enum Commands {
     #[command(about = "Show every plan quota, when it resets and where to spend next")]
     Quotas {
         /// Print the answers as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// The token plan as a prompt for a lead agent: which account to work in, until when, and
+    /// where to hand subagent work
+    #[command(about = "Token plan for a lead agent: account to work in, when to switch, where to hand off")]
+    Brief {
+        /// Print the whole plan (stack, driver, drains) as JSON
         #[arg(long)]
         json: bool,
     },
@@ -201,6 +210,7 @@ async fn main() {
         Some(Commands::Mqtt { forget: None }) => run_mqtt(config).await,
         Some(Commands::Mcp) => mcp_server::run(),
         Some(Commands::Quotas { json }) => print_quotas(json),
+        Some(Commands::Brief { json }) => print_brief(json),
         Some(Commands::Upload) => match run_upload().await.context("Failed to run upload") {
             Ok(_) => {}
             Err(e) => {
@@ -221,6 +231,22 @@ async fn main() {
 }
 
 /// `quotas`: every window and the spending ranking, as a table or JSON.
+fn print_brief(as_json: bool) {
+    let status = match advisor::read_status() {
+        Ok(status) => status,
+        Err(e) => {
+            eprintln!("{e:#}");
+            std::process::exit(1);
+        }
+    };
+    let answer = spend_plan::answer(&status, chrono::Utc::now());
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&answer).unwrap_or_default());
+    } else {
+        print!("{}", answer["brief"].as_str().unwrap_or_default());
+    }
+}
+
 fn print_quotas(as_json: bool) {
     let status = match advisor::read_status() {
         Ok(status) => status,

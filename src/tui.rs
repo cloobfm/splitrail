@@ -1600,8 +1600,16 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
         .collect();
     let table_height = (rows.len() as u16 + 4).min(area.height.saturating_sub(5).max(3));
     // A blank line under the tabs, as the other views have.
-    let [_, table_area, picks_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(table_height), Constraint::Min(3)]).areas(area);
+    let [_, table_area, plan_area, picks_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(table_height),
+        Constraint::Length(if area.height > table_height + 14 { 6 } else { 0 }),
+        Constraint::Min(3),
+    ])
+    .areas(area);
+    if plan_area.height > 0 {
+        draw_token_plan(frame, plan_area, &crate::spend_plan::plan(&windows, now));
+    }
     let table = Table::new(
         rows,
         [
@@ -1715,6 +1723,54 @@ fn draw_quotas_view(frame: &mut Frame, area: Rect, filtered_stats: &[&AgenticCod
     if pool_area.height >= 8 {
         draw_pool_chart(frame, pool_area, &picks, filtered_stats, yardstick, now);
     }
+}
+
+/// The token stack as an order: the account to work in and until when, then where subagent work
+/// should go, earliest-expiring first (`splitrail-dashboard brief` for the full prompt).
+fn draw_token_plan(frame: &mut Frame, area: Rect, plan: &crate::spend_plan::SpendPlan) {
+    use crate::advisor::human_secs;
+    let dim = Style::default().fg(Color::DarkGray);
+    let at = |t: chrono::DateTime<chrono::Utc>| {
+        format!("{} (in {})", t.with_timezone(&chrono::Local).format("%a %H:%M"), human_secs((t - plan.now).num_seconds()))
+    };
+    let mut lines = Vec::new();
+    match plan.driver() {
+        Some(d) => {
+            let login = if d.switch_login { " after /login" } else { "" };
+            let mut spans = vec![
+                Span::styled("▶ Work in ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(d.tool.clone(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(login),
+            ];
+            if let Some(s) = &plan.switch {
+                spans.push(Span::raw(format!("  until {}", at(s.at))));
+                spans.push(Span::styled(format!(" · {}", s.why), dim));
+            }
+            lines.push(Line::from(spans));
+            if let Some(n) = plan.next() {
+                lines.push(Line::from(vec![Span::raw("  then "), Span::styled(n.tool.clone(), Style::default().fg(Color::Cyan))]));
+            }
+        }
+        None => lines.push(Line::styled("No Claude account has quota to plan around.", dim)),
+    }
+    let drains: Vec<String> = plan
+        .drains()
+        .filter(|p| crate::spend_plan::drain_command(&p.tool).is_some())
+        .take(4)
+        .map(|p| match p.deadline {
+            Some(d) => format!("{} ({})", p.tool, human_secs((d - plan.now).num_seconds())),
+            None => p.tool.clone(),
+        })
+        .collect();
+    if !drains.is_empty() {
+        lines.push(Line::from(vec![Span::raw("  hand subagents to: "), Span::styled(drains.join(" → "), Style::default().fg(Color::Yellow))]));
+    }
+    let avoid: Vec<String> = plan.avoid().map(|p| p.tool.clone()).collect();
+    if !avoid.is_empty() {
+        lines.push(Line::from(vec![Span::raw("  avoid: "), Span::styled(avoid.join(", "), Style::default().fg(Color::Red))]));
+    }
+    let block = Block::default().borders(Borders::ALL).title(" Token plan · earliest expiry first · `splitrail brief` for agents ");
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// Every plan's allowance as one pool, like a stock chart: the API dollars left across all plans

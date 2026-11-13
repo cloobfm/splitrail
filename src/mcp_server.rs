@@ -24,6 +24,11 @@ fn tools() -> Value {
             "inputSchema": empty,
         },
         {
+            "name": "spend_brief",
+            "description": "The token plan for a lead agent: which Claude account to work in now and exactly when to switch (its 5-hour window filling at the current rate, its plan running out, or the next account's last moment to start), plus where to hand subagent work, earliest-expiring quota first, each with the headless command to run it (agy-run, codex exec, cursor-run, droid exec, warp-run...) and the work it suits. `brief` is a ready-to-follow prompt.",
+            "inputSchema": empty,
+        },
+        {
             "name": "usage",
             "description": "Current output tokens per second and today's cost per tool across all machines, plus the month's average tk/s against the monthly goal and the rate the rest of the month needs.",
             "inputSchema": empty,
@@ -38,6 +43,7 @@ fn call(name: &str) -> Result<Value, String> {
         "quotas" => Ok(crate::advisor::quotas_answer(&status, now)),
         "where_to_spend" => Ok(crate::advisor::where_to_spend_answer(&status, now)),
         "usage" => Ok(crate::advisor::usage_answer(&status, now)),
+        "spend_brief" => Ok(crate::spend_plan::answer(&status, now)),
         other => Err(format!("unknown tool {other}")),
     }
 }
@@ -104,7 +110,7 @@ mod tests {
         assert!(handle(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none());
         let list = handle(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).unwrap();
         let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["quotas", "where_to_spend", "usage"]);
+        assert_eq!(names, ["quotas", "where_to_spend", "spend_brief", "usage"]);
         let missing = handle(&json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"})).unwrap();
         assert_eq!(missing["error"]["code"], -32601);
     }

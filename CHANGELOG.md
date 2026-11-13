@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0-dash-0.172] - 2026-11-13
+
+### Added
+- Token plan: every plan as a pile of tokens with an expiry, drained earliest first
+  (`src/spend_plan.rs`). It names the Claude account to work in now and exactly when to switch
+  off it: when its 5-hour window fills at the current rate, its plan runs out, the next
+  account's last moment to start, or its reset. It also lists where to hand subagent work,
+  earliest-expiring first, with the headless command for each (`agy-run`, `codex exec`,
+  `cursor-run`, `droid exec`, `warp-run`, `kiro-cli`, `claude -p`) and the work it suits; which
+  plans to avoid (on pace to run out); and what will be lost whatever happens.
+- `splitrail-dashboard brief` prints it as a prompt for a lead agent (`--json` for the whole
+  stack), and the MCP tool `spend_brief` returns the same, so a dispatcher can hand each lane
+  its plan.
+- Quotas view (`p`): a Token plan panel above Where to spend next.
+- macOS notifications when the account to work in changes, and ten minutes before a switch.
+
+### Fixed
+- `status.json` now carries each signed-in account's plan and 5-hour share. Without them, a
+  signed-in Max 20x account was sized from its spend alone and its 5-hour windows were never
+  planned around; only other logins had a plan.
+
 ## [2.0.0-dash-0.171] - 2026-11-13
 
 ### Fixed
